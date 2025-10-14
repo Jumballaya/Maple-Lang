@@ -60,21 +60,17 @@ export type Token = Pos &
     // Logical
     | LogicalAndToken
     | LogicalOrToken
-    | LogicalNotToken
     | NotEqualsToken
     | LessThanEqualsToken
     | GreaterThanEqualsToken
+    | EqualsToken
 
     // Bitwise
     | LeftShiftToken
     | RightShiftToken
-    | BitwiseAndAssignToken
-    | BitwiseXorAssignToken
-    | BitwiseOrAssignToken
 
-    // Assigmnet
+    // Assigment
     | AssignToken
-    | EqualsToken
     | AddAssignToken
     | MinusAssignToken
     | MulAssignToken
@@ -82,6 +78,9 @@ export type Token = Pos &
     | ModuloAssignToken
     | LeftShiftAssignToken
     | RightShiftAssignToken
+    | BitwiseAndAssignToken
+    | BitwiseXorAssignToken
+    | BitwiseOrAssignToken
 
     // struct member access
     | ArrowToken
@@ -346,11 +345,6 @@ export type LogicalAndToken = {
 export type LogicalOrToken = {
   type: "LogicalOr";
   literal: "||";
-};
-
-export type LogicalNotToken = {
-  type: "LogicalNot";
-  literal: "!";
 };
 
 export type NotEqualsToken = {
