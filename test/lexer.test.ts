@@ -48,6 +48,9 @@ describe("Lexer", () => {
       `'\\x41'`, // 'A'
       `'\\''`, // single quote char
       `'\\\\'`, // backslash char
+      "'\\x4'", // various hex
+      "'\\x04'", // various hex
+      "'\\x41'", // various hex
     ];
     for (const source of sources) {
       const lexer = new Lexer(source);

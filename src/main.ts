@@ -1,5 +1,6 @@
 import { Lexer } from "./lexer/Lexer.js";
 import type { StringToken } from "./lexer/token.types.js";
+import { Parser, Tokenizer } from "./parser/Parser.js";
 
 const decoder = new TextDecoder();
 function decodeStringToken(token: StringToken): string {
@@ -25,9 +26,7 @@ fn main(): void {
 `;
 
 async function main() {
-  const lexer = new Lexer(`'\\x41'`);
-  const tokens = lexer.getTokens();
-
-  console.log(tokens);
+  const parser = new Parser(example);
+  console.log(parser.parse());
 }
 main();

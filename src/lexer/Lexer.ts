@@ -642,22 +642,18 @@ export class Lexer {
     this.readChar(); // consume opening "
 
     const bytes: number[] = [];
-    const push = (code: number) => {
-      bytes.push(code & 0xff);
-    };
-
     // naive UTF-8 encoder for BMP code points (sufficient for MVP); upgrade later if needed
     const pushUtf8 = (ch: string) => {
       const code = ch.codePointAt(0)!;
       if (code <= 0x7f) {
-        push(code);
+        bytes.push(code & 0xff);
       } else if (code <= 0x7ff) {
-        push(0xc0 | (code >> 6));
-        push(0x80 | (code & 0x3f));
+        bytes.push((0xc0 | (code >> 6)) & 0xff);
+        bytes.push((0x80 | (code & 0x3f)) & 0xff);
       } else {
-        push(0xe0 | (code >> 12));
-        push(0x80 | ((code >> 6) & 0x3f));
-        push(0x80 | (code & 0x3f));
+        bytes.push((0xe0 | (code >> 12)) & 0xff);
+        bytes.push((0x80 | ((code >> 6) & 0x3f)) & 0xff);
+        bytes.push((0x80 | (code & 0x3f)) & 0xff);
       }
     };
 
@@ -667,31 +663,31 @@ export class Lexer {
         switch (this.char) {
           case "n":
             this.readChar();
-            push(0x0a);
+            bytes.push(0x0a);
             break;
           case "r":
             this.readChar();
-            push(0x0d);
+            bytes.push(0x0d);
             break;
           case "t":
             this.readChar();
-            push(0x09);
+            bytes.push(0x09);
             break;
           case "0":
             this.readChar();
-            push(0x00);
+            bytes.push(0x00);
             break;
           case '"':
             this.readChar();
-            push(0x22);
+            bytes.push(0x22);
             break;
           case "'":
             this.readChar();
-            push(0x27);
+            bytes.push(0x27);
             break;
           case "\\":
             this.readChar();
-            push(0x5c);
+            bytes.push(0x5c);
             break;
           case "x": {
             // \xNN — exactly 2 hex digits
@@ -703,7 +699,7 @@ export class Lexer {
               v2 = this.hexVal(h2);
             if (v1 < 0 || v2 < 0)
               throw new Error("Invalid \\x escape (need two hex digits)");
-            push((v1 << 4) | v2);
+            bytes.push((v1 << 4) | v2);
             break;
           }
           default: {
