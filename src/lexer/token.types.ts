@@ -37,6 +37,7 @@ export type Token = Pos &
     | U64TypeToken
     | F64TypeToken
     | BoolTypeToken
+    | VoidToken
 
     // Operators
     | StarToken
@@ -500,4 +501,9 @@ export type DecrementToken = {
 export type EOFToken = {
   type: "EOF";
   literal: "\0";
+};
+
+export type VoidToken = {
+  type: "Void";
+  literal: "void";
 };

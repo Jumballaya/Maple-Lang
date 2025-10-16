@@ -19,6 +19,7 @@ export const KEYWORDS = new Map<string, Token["type"]>([
   ["false", "False"],
   ["null", "Null"],
   ["as", "As"],
+  ["void", "Void"],
 ]);
 
 export const TYPE_KEYWORDS = new Map<string, Token["type"]>([

@@ -1,4 +1,6 @@
-import type { MinusToken, Pos, Token } from "./token.types.js";
+import { KEYWORDS, TYPE_KEYWORDS } from "./lexer.constants.js";
+import { isLetter } from "./lexer.utils.js";
+import type { Pos, Token } from "./token.types.js";
 
 export class Lexer {
   private text: string;
@@ -472,279 +474,21 @@ export class Lexer {
         return tok;
       }
 
-      /// Keywords
-
-      case "a": {
-        if (this.testValue("as")) {
-          this.consumeValue("as");
-          return {
-            ...mark,
-            type: "As",
-            literal: "as",
-          };
+      default: {
+        // run function to test against all keywords instead of having them as cases
+        const keywordToken = this.parseKeyword(mark);
+        if (keywordToken) {
+          return keywordToken;
         }
-      }
-
-      case "b": {
-        if (this.testValue("bool")) {
-          this.consumeValue("bool");
-          return {
-            ...mark,
-            type: "Boolean",
-            literal: "bool",
-          };
+        // then check for int literal, float literal, string literal and char literals
+        const literalToken = this.parseLiteral(mark);
+        if (literalToken) {
+          return literalToken;
         }
-        if (this.testValue("break")) {
-          this.consumeValue("break");
-          return {
-            ...mark,
-            type: "Break",
-            literal: "break",
-          };
-        }
-      }
-
-      case "c": {
-        if (this.testValue("case")) {
-          this.consumeValue("case");
-          return {
-            ...mark,
-            type: "Case",
-            literal: "case",
-          };
-        }
-        if (this.testValue("const")) {
-          this.consumeValue("const");
-          return {
-            ...mark,
-            type: "Const",
-            literal: "const",
-          };
-        }
-        if (this.testValue("continue")) {
-          this.consumeValue("continue");
-          return {
-            ...mark,
-            type: "Continue",
-            literal: "continue",
-          };
-        }
-      }
-
-      case "d": {
-        if (this.testValue("default")) {
-          this.consumeValue("default");
-          return {
-            ...mark,
-            type: "Default",
-            literal: "default",
-          };
-        }
-      }
-
-      case "e": {
-        if (this.testValue("else")) {
-          this.consumeValue("else");
-          return {
-            ...mark,
-            type: "Else",
-            literal: "else",
-          };
-        }
-      }
-
-      case "f": {
-        if (this.testValue("fn")) {
-          this.consumeValue("fn");
-          return {
-            ...mark,
-            type: "Func",
-            literal: "fn",
-          };
-        }
-        if (this.testValue("f32")) {
-          this.consumeValue("f32");
-          return {
-            ...mark,
-            type: "f32",
-            literal: "f32",
-          };
-        }
-        if (this.testValue("f64")) {
-          this.consumeValue("f64");
-          return {
-            ...mark,
-            type: "f64",
-            literal: "f64",
-          };
-        }
-        if (this.testValue("for")) {
-          this.consumeValue("for");
-          return {
-            ...mark,
-            type: "For",
-            literal: "for",
-          };
-        }
-        if (this.testValue("false")) {
-          this.consumeValue("false");
-          return {
-            ...mark,
-            type: "False",
-            literal: "false",
-          };
-        }
-      }
-
-      case "l": {
-        if (this.testValue("let")) {
-          this.consumeValue("let");
-          return {
-            ...mark,
-            type: "Let",
-            literal: "let",
-          };
-        }
-      }
-
-      case "n": {
-        if (this.testValue("null")) {
-          this.consumeValue("null");
-          return {
-            ...mark,
-            type: "Null",
-            literal: "null",
-          };
-        }
-      }
-
-      case "r": {
-        if (this.testValue("return")) {
-          this.consumeValue("return");
-          return {
-            ...mark,
-            type: "Return",
-            literal: "return",
-          };
-        }
-      }
-
-      case "s": {
-        if (this.testValue("struct")) {
-          this.consumeValue("struct");
-          return {
-            ...mark,
-            type: "Struct",
-            literal: "struct",
-          };
-        }
-        if (this.testValue("switch")) {
-          this.consumeValue("switch");
-          return {
-            ...mark,
-            type: "Switch",
-            literal: "switch",
-          };
-        }
-      }
-
-      case "t": {
-        if (this.testValue("true")) {
-          this.consumeValue("true");
-          return {
-            ...mark,
-            type: "True",
-            literal: "true",
-          };
-        }
-      }
-
-      case "w": {
-        if (this.testValue("while")) {
-          this.consumeValue("while");
-          return {
-            ...mark,
-            type: "While",
-            literal: "while",
-          };
-        }
-      }
-
-      case "i": {
-        if (this.testValue("if")) {
-          this.consumeValue("if");
-          return {
-            ...mark,
-            type: "If",
-            literal: "if",
-          };
-        }
-        if (this.testValue("i8")) {
-          this.consumeValue("i8");
-          return {
-            ...mark,
-            type: "i8",
-            literal: "i8",
-          };
-        }
-        if (this.testValue("i16")) {
-          this.consumeValue("i16");
-          return {
-            ...mark,
-            type: "i16",
-            literal: "i16",
-          };
-        }
-        if (this.testValue("i32")) {
-          this.consumeValue("i32");
-          return {
-            ...mark,
-            type: "i32",
-            literal: "i32",
-          };
-        }
-        if (this.testValue("i64")) {
-          this.consumeValue("i64");
-          return {
-            ...mark,
-            type: "i64",
-            literal: "i64",
-          };
-        }
-      }
-
-      case "u": {
-        if (this.testValue("u8")) {
-          this.consumeValue("u8");
-          return {
-            ...mark,
-            type: "u8",
-            literal: "u8",
-          };
-        }
-        if (this.testValue("u16")) {
-          this.consumeValue("u16");
-          return {
-            ...mark,
-            type: "u16",
-            literal: "u16",
-          };
-        }
-        if (this.testValue("u32")) {
-          this.consumeValue("u32");
-          return {
-            ...mark,
-            type: "u32",
-            literal: "u32",
-          };
-        }
-        if (this.testValue("u64")) {
-          this.consumeValue("u64");
-          return {
-            ...mark,
-            type: "u64",
-            literal: "u64",
-          };
+        // then check for identifiers
+        const identToken = this.parseIdentifier(mark);
+        if (identToken) {
+          return identToken;
         }
       }
     }
@@ -833,5 +577,56 @@ export class Lexer {
     for (let i = 0; i < len; i++) {
       this.readChar();
     }
+  }
+
+  private parseKeyword(mark: Pos): Token | undefined {
+    for (const [keyword, type] of KEYWORDS) {
+      if (this.char !== keyword[0]) {
+        continue;
+      }
+      if (this.testValue(keyword)) {
+        this.consumeValue(keyword);
+        return {
+          ...mark,
+          type,
+          literal: keyword,
+        } as Token;
+      }
+    }
+    for (const [keyword, type] of TYPE_KEYWORDS) {
+      if (this.char !== keyword[0]) {
+        continue;
+      }
+      if (this.testValue(keyword)) {
+        this.consumeValue(keyword);
+        return {
+          ...mark,
+          type,
+          literal: keyword,
+        } as Token;
+      }
+    }
+    return undefined;
+  }
+
+  private parseLiteral(mark: Pos): Token | undefined {
+    return undefined;
+  }
+
+  private parseIdentifier(mark: Pos): Token | undefined {
+    const start = this.pos;
+    if (isLetter(this.char)) {
+      while (isLetter(this.char)) {
+        this.readChar();
+      }
+      const end = this.pos;
+      const ident = this.text.slice(start, end);
+      return {
+        ...mark,
+        type: "Identifier",
+        literal: ident,
+      };
+    }
+    return undefined;
   }
 }
