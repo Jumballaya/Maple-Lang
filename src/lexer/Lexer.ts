@@ -1,5 +1,5 @@
 import { KEYWORDS, TYPE_KEYWORDS } from "./lexer.constants.js";
-import { isLetter } from "./lexer.utils.js";
+import { isDigit, isLetter } from "./lexer.utils.js";
 import type { Pos, Token } from "./token.types.js";
 
 export class Lexer {
@@ -585,12 +585,21 @@ export class Lexer {
         continue;
       }
       if (this.testValue(keyword)) {
-        this.consumeValue(keyword);
-        return {
-          ...mark,
-          type,
-          literal: keyword,
-        } as Token;
+        const atEnd = this.pos + keyword.length >= this.text.length;
+        const spaceAfter =
+          this.text.slice(
+            this.pos + keyword.length,
+            this.pos + keyword.length + 1
+          ) === " ";
+        if (atEnd || spaceAfter) {
+          // make sure the next char is a space or eof
+          this.consumeValue(keyword);
+          return {
+            ...mark,
+            type,
+            literal: keyword,
+          } as Token;
+        }
       }
     }
     for (const [keyword, type] of TYPE_KEYWORDS) {
@@ -610,13 +619,26 @@ export class Lexer {
   }
 
   private parseLiteral(mark: Pos): Token | undefined {
-    return undefined;
+    const start = this.pos;
+
+    // String literal
+    if (this.char === '"') {
+      return this.parseStringLiteral(mark, start);
+    }
+
+    // Char Literal
+    if (this.char === "'") {
+      return this.parseCharLiteral(mark, start);
+    }
+
+    // Numbers
+    return this.parseNumberLiteral(mark, start);
   }
 
   private parseIdentifier(mark: Pos): Token | undefined {
     const start = this.pos;
-    if (isLetter(this.char)) {
-      while (isLetter(this.char)) {
+    if (isLetter(this.char) || this.char === "_") {
+      while (isLetter(this.char) || isDigit(this.char)) {
         this.readChar();
       }
       const end = this.pos;
@@ -628,5 +650,96 @@ export class Lexer {
       };
     }
     return undefined;
+  }
+
+  private parseStringLiteral(mark: Pos, start: number): Token | undefined {
+    if (this.char !== '"') {
+      return undefined;
+    }
+    this.readChar(); // read first quote
+    while (this.char !== '"') {
+      if (this.char === "\\") {
+        // escape the next char
+        this.readChar();
+      }
+      if (this.char === "\0") {
+        throw new Error(
+          `String not terminated: ${this.text.slice(start, this.pos)}`
+        );
+      }
+      this.readChar();
+    }
+    this.readChar(); // read last quote
+    const end = this.pos - 1; // -1 to remove quotes
+    const literal = this.text.slice(start + 1, end); // +1 to remove quotes
+    return {
+      ...mark,
+      type: "StringLiteral",
+      literal: new TextEncoder().encode(literal),
+    };
+  }
+
+  private parseCharLiteral(mark: Pos, start: number): Token | undefined {
+    if (this.char !== "'") {
+      return undefined;
+    }
+    this.readChar(); // read first quote
+    while (this.char !== "'") {
+      if (this.char === "\\") {
+        // escape the next char
+        this.readChar();
+      }
+      if (this.char === "\0") {
+        throw new Error(
+          `Char not terminated: ${this.text.slice(start, this.pos)}`
+        );
+      }
+      this.readChar();
+    }
+    this.readChar(); // read last quote
+    const end = this.pos - 1; // -1 to remove quotes
+    const literal = this.text.slice(start + 1, end); // +1 to remove quotes
+    if (literal.length === 0) {
+      throw new Error("Char literals can not be empty");
+    }
+    return {
+      ...mark,
+      type: "CharLiteral",
+      literal: literal.charCodeAt(0),
+    };
+  }
+
+  private parseNumberLiteral(mark: Pos, start: number): Token | undefined {
+    let type: "float" | "int" = "int";
+    let nums: string[] = [];
+    let seenPeriod = false;
+    while (isDigit(this.char) || this.char === ".") {
+      if (this.char === "\0") {
+        break;
+      }
+      if (this.char === ".") {
+        if (seenPeriod) {
+          throw new Error(
+            `malformed number: ${this.text.slice(start, this.pos + 4)}`
+          );
+        }
+        seenPeriod = true;
+        type = "float";
+      }
+      nums.push(this.char);
+      this.readChar();
+    }
+    const num = nums.join("");
+    const value = type === "float" ? parseFloat(num) : parseInt(num);
+
+    if (isNaN(value)) {
+      return undefined;
+    }
+
+    return {
+      ...mark,
+      type: type === "float" ? "FloatLiteral" : "IntegerLiteral",
+      literal: value,
+    };
   }
 }

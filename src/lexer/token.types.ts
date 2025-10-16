@@ -104,23 +104,23 @@ export type Token = Pos &
   );
 
 export type IntegerToken = {
-  type: "Integer";
-  value: number;
+  type: "IntegerLiteral";
+  literal: number;
 };
 
 export type FloatToken = {
-  type: "Float";
-  value: number;
+  type: "FloatLiteral";
+  literal: number;
 };
 
 export type StringToken = {
-  type: "String";
-  value: Uint8Array;
+  type: "StringLiteral";
+  literal: Uint8Array;
 };
 
 export type CharToken = {
-  type: "Char";
-  value: number;
+  type: "CharLiteral";
+  literal: number;
 };
 
 export type IdentToken = {
