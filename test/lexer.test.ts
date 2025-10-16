@@ -120,7 +120,7 @@ describe("Lexer Tokens", () => {
   });
   test("Keywords", () => {
     const tests: Array<[string, string]> = [
-      ["fn", "Function"],
+      ["fn", "Func"],
       ["return", "Return"],
       ["i8", "i8"],
       ["u8", "u8"],
@@ -147,12 +147,16 @@ describe("Lexer Tokens", () => {
       ["as", "As"],
       ["true", "True"],
       ["false", "False"],
-      ["bool", "Bool"],
+      ["bool", "Boolean"],
     ];
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(
+        tokens[0].type,
+        expected,
+        `Type: ${tokens[0].type}, Expected: ${expected}`
+      );
     }
   });
   test("Operators", () => {
@@ -266,7 +270,7 @@ describe("Lexer Tokens", () => {
   test("Other", () => {
     const tests: Array<[string, string]> = [
       ["null", "Null"],
-      ["EOF", ""],
+      ["", "EOF"],
     ];
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);

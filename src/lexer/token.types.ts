@@ -1,10 +1,5 @@
-/**
- *      @TODO:
- *
- *        Compare:    != <= >=
- */
-
 export type Pos = { start: number; end: number; line: number; col: number };
+
 export type Token = Pos &
   // Identifier + literals
   (| IdentToken
@@ -383,7 +378,7 @@ export type RightShiftToken = {
 };
 
 export type ArrowToken = {
-  type: "PointerMember";
+  type: "Arrow";
   literal: "->";
 };
 
@@ -478,17 +473,17 @@ export type RightShiftAssignToken = {
 };
 
 export type BitwiseAndAssignToken = {
-  type: "BitwiseAnd";
+  type: "BitwiseAndAssign";
   literal: "&=";
 };
 
 export type BitwiseXorAssignToken = {
-  type: "BitwiseXor";
+  type: "BitwiseXorAssign";
   literal: "^=";
 };
 
 export type BitwiseOrAssignToken = {
-  type: "BitwiseOr";
+  type: "BitwiseOrAssign";
   literal: "|=";
 };
 
