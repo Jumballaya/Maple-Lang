@@ -374,15 +374,6 @@ export class Lexer {
         this.readChar();
         return tok;
       }
-      case ".": {
-        const tok: Token = {
-          ...mark,
-          type: "Period",
-          literal: ".",
-        };
-        this.readChar();
-        return tok;
-      }
       case "(": {
         const tok: Token = {
           ...mark,
@@ -474,6 +465,21 @@ export class Lexer {
         return tok;
       }
 
+      // Must be last, before the default clause
+      // If some other token needs to take this spot
+      // move both checks into the default clause
+      case ".": {
+        if (!isDigit(this.peekChar())) {
+          const tok: Token = {
+            ...mark,
+            type: "Period",
+            literal: ".",
+          };
+          this.readChar();
+          return tok;
+        }
+      }
+
       default: {
         // run function to test against all keywords instead of having them as cases
         const keywordToken = this.parseKeyword(mark);
@@ -541,22 +547,6 @@ export class Lexer {
     }
   }
 
-  private readIdentifier(): string {
-    throw new Error("Not implemented yet");
-  }
-
-  private readStringLiteral(): string {
-    throw new Error("Not implemented yet");
-  }
-
-  private readCharLiteral(): string {
-    throw new Error("Not implemented yet");
-  }
-
-  private readNumberLiteral(): number {
-    throw new Error("Not implemented yet");
-  }
-
   private mark(): Pos {
     return {
       start: this.pos,
@@ -581,32 +571,25 @@ export class Lexer {
 
   private parseKeyword(mark: Pos): Token | undefined {
     for (const [keyword, type] of KEYWORDS) {
-      if (this.char !== keyword[0]) {
-        continue;
-      }
-      if (this.testValue(keyword)) {
-        const atEnd = this.pos + keyword.length >= this.text.length;
-        const spaceAfter =
-          this.text.slice(
-            this.pos + keyword.length,
-            this.pos + keyword.length + 1
-          ) === " ";
-        if (atEnd || spaceAfter) {
-          // make sure the next char is a space or eof
-          this.consumeValue(keyword);
-          return {
-            ...mark,
-            type,
-            literal: keyword,
-          } as Token;
-        }
+      if (this.char !== keyword[0]) continue;
+      if (!this.testValue(keyword)) continue;
+
+      const next = this.text[this.pos + keyword.length] ?? "\0";
+      if (!this.isIdentContinue(next)) {
+        this.consumeValue(keyword);
+        return {
+          ...mark,
+          type,
+          literal: keyword,
+        } as Token;
       }
     }
     for (const [keyword, type] of TYPE_KEYWORDS) {
-      if (this.char !== keyword[0]) {
-        continue;
-      }
-      if (this.testValue(keyword)) {
+      if (this.char !== keyword[0]) continue;
+      if (!this.testValue(keyword)) continue;
+
+      const next = this.text[this.pos + keyword.length] ?? "\0";
+      if (!this.isIdentContinue(next)) {
         this.consumeValue(keyword);
         return {
           ...mark,
@@ -636,8 +619,10 @@ export class Lexer {
   }
 
   private parseIdentifier(mark: Pos): Token | undefined {
+    if (!this.isIdentStart(this.char)) return undefined;
     const start = this.pos;
-    if (isLetter(this.char) || this.char === "_") {
+
+    if (this.isIdentContinue(this.char)) {
       while (isLetter(this.char) || isDigit(this.char)) {
         this.readChar();
       }
@@ -653,93 +638,308 @@ export class Lexer {
   }
 
   private parseStringLiteral(mark: Pos, start: number): Token | undefined {
-    if (this.char !== '"') {
-      return undefined;
-    }
-    this.readChar(); // read first quote
-    while (this.char !== '"') {
+    if (this.char !== '"') return undefined;
+    this.readChar(); // consume opening "
+
+    const bytes: number[] = [];
+    const push = (code: number) => {
+      bytes.push(code & 0xff);
+    };
+
+    // naive UTF-8 encoder for BMP code points (sufficient for MVP); upgrade later if needed
+    const pushUtf8 = (ch: string) => {
+      const code = ch.codePointAt(0)!;
+      if (code <= 0x7f) {
+        push(code);
+      } else if (code <= 0x7ff) {
+        push(0xc0 | (code >> 6));
+        push(0x80 | (code & 0x3f));
+      } else {
+        push(0xe0 | (code >> 12));
+        push(0x80 | ((code >> 6) & 0x3f));
+        push(0x80 | (code & 0x3f));
+      }
+    };
+
+    while (!this.isEOF() && this.char !== '"') {
       if (this.char === "\\") {
-        // escape the next char
+        this.readChar(); // at escape code
+        switch (this.char) {
+          case "n":
+            this.readChar();
+            push(0x0a);
+            break;
+          case "r":
+            this.readChar();
+            push(0x0d);
+            break;
+          case "t":
+            this.readChar();
+            push(0x09);
+            break;
+          case "0":
+            this.readChar();
+            push(0x00);
+            break;
+          case '"':
+            this.readChar();
+            push(0x22);
+            break;
+          case "'":
+            this.readChar();
+            push(0x27);
+            break;
+          case "\\":
+            this.readChar();
+            push(0x5c);
+            break;
+          case "x": {
+            // \xNN — exactly 2 hex digits
+            const h1 = this.peekChar();
+            this.readChar();
+            const h2 = this.peekChar();
+            this.readChar();
+            const v1 = this.hexVal(h1),
+              v2 = this.hexVal(h2);
+            if (v1 < 0 || v2 < 0)
+              throw new Error("Invalid \\x escape (need two hex digits)");
+            push((v1 << 4) | v2);
+            break;
+          }
+          default: {
+            // Unknown escape: take literally (or throw)
+            const unk = this.char;
+            this.readChar();
+            pushUtf8(unk);
+          }
+        }
+      } else {
+        // normal char
+        pushUtf8(this.char);
         this.readChar();
       }
-      if (this.char === "\0") {
-        throw new Error(
-          `String not terminated: ${this.text.slice(start, this.pos)}`
-        );
-      }
-      this.readChar();
     }
-    this.readChar(); // read last quote
-    const end = this.pos - 1; // -1 to remove quotes
-    const literal = this.text.slice(start + 1, end); // +1 to remove quotes
+
+    if (this.char !== '"') {
+      throw new Error(
+        `String not terminated: ${this.text.slice(start, this.pos)}`
+      );
+    }
+    this.readChar(); // consume closing "
+
     return {
       ...mark,
       type: "StringLiteral",
-      literal: new TextEncoder().encode(literal),
+      literal: new Uint8Array(bytes),
     };
   }
 
   private parseCharLiteral(mark: Pos, start: number): Token | undefined {
-    if (this.char !== "'") {
-      return undefined;
-    }
-    this.readChar(); // read first quote
-    while (this.char !== "'") {
-      if (this.char === "\\") {
-        // escape the next char
-        this.readChar();
+    if (this.char !== "'") return undefined;
+    this.readChar(); // consume opening '
+
+    let code: number;
+
+    if ((this.char as string) === "\\") {
+      this.readChar(); // at escape code
+      switch (this.char as string) {
+        case "n":
+          this.readChar();
+          code = 0x0a;
+          break;
+        case "r":
+          this.readChar();
+          code = 0x0d;
+          break;
+        case "t":
+          this.readChar();
+          code = 0x09;
+          break;
+        case "0":
+          this.readChar();
+          code = 0x00;
+          break;
+        case '"':
+          this.readChar();
+          code = 0x22;
+          break;
+        case "'":
+          this.readChar();
+          code = 0x27;
+          break;
+        case "\\":
+          this.readChar();
+          code = 0x5c;
+          break;
+        case "x": {
+          // Allow 1–2 digits for chars: '\x4' == 0x04, '\x41' == 0x41
+          // We are currently on 'x'; consume hex after it:
+          const v = this.readHexDigits(1, 2);
+          this.readChar();
+          code = v & 0xff;
+          break;
+        }
+        default: {
+          // Unknown escape: take literally (or throw)
+          code = (this.char as string).charCodeAt(0) & 0xff;
+          this.readChar();
+        }
       }
-      if (this.char === "\0") {
-        throw new Error(
-          `Char not terminated: ${this.text.slice(start, this.pos)}`
-        );
+    } else {
+      if (this.char === "'" || this.char === "\0") {
+        throw new Error("Char literal cannot be empty");
       }
+      code = (this.char as string).charCodeAt(0) & 0xff;
       this.readChar();
     }
-    this.readChar(); // read last quote
-    const end = this.pos - 1; // -1 to remove quotes
-    const literal = this.text.slice(start + 1, end); // +1 to remove quotes
-    if (literal.length === 0) {
-      throw new Error("Char literals can not be empty");
+
+    if (this.char !== "'") {
+      throw new Error(
+        `Char not terminated: ${this.text.slice(start, this.pos)}`
+      );
     }
-    return {
-      ...mark,
-      type: "CharLiteral",
-      literal: literal.charCodeAt(0),
-    };
+    this.readChar(); // consume closing '
+
+    return { ...mark, type: "CharLiteral", literal: code };
   }
 
   private parseNumberLiteral(mark: Pos, start: number): Token | undefined {
-    let type: "float" | "int" = "int";
-    let nums: string[] = [];
-    let seenPeriod = false;
-    while (isDigit(this.char) || this.char === ".") {
-      if (this.char === "\0") {
-        break;
-      }
-      if (this.char === ".") {
-        if (seenPeriod) {
-          throw new Error(
-            `malformed number: ${this.text.slice(start, this.pos + 4)}`
-          );
-        }
-        seenPeriod = true;
-        type = "float";
-      }
-      nums.push(this.char);
-      this.readChar();
-    }
-    const num = nums.join("");
-    const value = type === "float" ? parseFloat(num) : parseInt(num);
-
-    if (isNaN(value)) {
+    // Fast reject: if current char isn't a digit nor a dot followed by digit, bail.
+    if (
+      !isDigit(this.char) &&
+      !(this.char === "." && isDigit(this.peekChar()))
+    ) {
       return undefined;
     }
 
-    return {
-      ...mark,
-      type: type === "float" ? "FloatLiteral" : "IntegerLiteral",
-      literal: value,
-    };
+    const begin = this.pos;
+
+    // Hex or binary prefixes (when starting with '0x' / '0b')
+    if (this.char === "0") {
+      const p = this.peekChar();
+      if (p === "x" || p === "X") {
+        // consume '0x'
+        this.readChar(); // now on 'x'/'X'
+        this.readChar(); // move to first hex digit
+        const digitsStart = this.pos;
+        while (this.isHex(this.char)) this.readChar();
+        const digits = this.text.slice(digitsStart, this.pos);
+        if (digits.length === 0)
+          throw new Error("Malformed hex literal: missing digits");
+        const lexeme = this.text.slice(begin, this.pos);
+        const value = Number.parseInt(digits, 16);
+        return { ...mark, type: "IntegerLiteral", literal: value };
+      }
+      if (p === "b" || p === "B") {
+        // consume '0b'
+        this.readChar();
+        this.readChar();
+        const digitsStart = this.pos;
+        while (this.isBin(this.char)) this.readChar();
+        const digits = this.text.slice(digitsStart, this.pos);
+        if (digits.length === 0)
+          throw new Error("Malformed binary literal: missing digits");
+        const value = Number.parseInt(digits, 2);
+        return { ...mark, type: "IntegerLiteral", literal: value };
+      }
+    }
+
+    // Decimal / Float
+    // Accept:
+    //   [digits][.digits][exp]
+    //   .digits[exp]
+    // where exp = (e|E)(+|-)?digits
+    let sawDot = false;
+    let sawExp = false;
+
+    // digits before dot (if starting with '.' we skip this)
+    if (isDigit(this.char)) {
+      while (isDigit(this.char)) this.readChar();
+    }
+
+    // fraction
+    if (this.char === ".") {
+      sawDot = true;
+      this.readChar(); // consume '.'
+      if (!isDigit(this.char)) {
+        // lone '.' after digits is not a number here (but you reached because first char was digit)
+        // We allow "123." as float form (C allows). If you don’t want it, check and error.
+      } else {
+        while (isDigit(this.char)) this.readChar();
+      }
+    } else if (!isDigit(this.text[begin] ?? "\0")) {
+      // started with '.' then digits: we already handled digits above
+      // (when entry was '.' followed by digit)
+    }
+
+    // exponent
+    if (this.char === "e" || this.char === "E") {
+      sawExp = true;
+      this.readChar(); // consume 'e'
+      if ((this.char as string) === "+" || (this.char as string) === "-")
+        this.readChar();
+      if (!isDigit(this.char))
+        throw new Error("Malformed float exponent: missing digits");
+      while (isDigit(this.char)) this.readChar();
+    }
+
+    const end = this.pos;
+    const lexeme = this.text.slice(begin, end);
+
+    if (sawDot || sawExp || lexeme.startsWith(".")) {
+      const num = Number.parseFloat(lexeme);
+      if (Number.isNaN(num)) throw new Error(`Malformed float: ${lexeme}`);
+      return { ...mark, type: "FloatLiteral", literal: num };
+    } else {
+      const num = Number.parseInt(lexeme, 10);
+      if (Number.isNaN(num)) throw new Error(`Malformed integer: ${lexeme}`);
+      return { ...mark, type: "IntegerLiteral", literal: num };
+    }
+  }
+
+  // Helpers
+
+  private isHex(c: string): boolean {
+    return (
+      (c >= "0" && c <= "9") || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")
+    );
+  }
+  private isBin(c: string): boolean {
+    return c === "0" || c === "1";
+  }
+  private isIdentStart(c: string): boolean {
+    return isLetter(c) || c === "_";
+  }
+  private isIdentContinue(c: string): boolean {
+    return isLetter(c) || isDigit(c) || c === "_";
+  }
+  private isEOF(): boolean {
+    return this.char === "\0";
+  }
+
+  private hexVal(c: string): number {
+    if (c >= "0" && c <= "9") return c.charCodeAt(0) - 48;
+    if (c >= "a" && c <= "f") return 10 + c.charCodeAt(0) - 97;
+    if (c >= "A" && c <= "F") return 10 + c.charCodeAt(0) - 65;
+    return -1;
+  }
+
+  private readHexDigits(min: number, max: number): number {
+    // Read between `min` and `max` hex digits, returning the accumulated value.
+    // Uses this.peekChar()/this.readChar() against your current cursor.
+    let read = 0;
+    let value = 0;
+    while (read < max) {
+      const p = this.peekChar();
+      const v = this.hexVal(p);
+      if (v < 0) break;
+      this.readChar(); // advance to include this digit
+      value = (value << 4) | v;
+      read++;
+    }
+    if (read < min) {
+      throw new Error(`Invalid hex escape: expected ${min} hex digit(s)`);
+    }
+    return value;
   }
 }

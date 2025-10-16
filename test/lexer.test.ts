@@ -10,12 +10,7 @@ describe("Lexer", () => {
     });
   });
   test("can lex integers", () => {
-    const sources = [
-      "0",
-      "123",
-      //  "0xFF",
-      //  "0b1010"
-    ];
+    const sources = ["0", "123", "0xFF", "0Xff", "0b1010", "0B1010"];
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
@@ -23,12 +18,7 @@ describe("Lexer", () => {
     }
   });
   test("can lex floats", () => {
-    const sources = [
-      "1.0",
-      "0.5",
-      "0.25",
-      // "3.14e-2"
-    ];
+    const sources = ["1.0", ".5", "0.25", "3.14e-2", "2E10", "123."];
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();

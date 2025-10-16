@@ -25,9 +25,9 @@ fn main(): void {
 `;
 
 async function main() {
-  const lexer = new Lexer(`\n`);
+  const lexer = new Lexer(`'\\x41'`);
   const tokens = lexer.getTokens();
 
-  console.log(String.fromCharCode(tokens[0]!.literal as number));
+  console.log(tokens);
 }
 main();
