@@ -1,6 +1,5 @@
-import { Lexer } from "./lexer/Lexer.js";
-import type { StringToken } from "./lexer/token.types.js";
-import { Parser, Tokenizer } from "./parser/Parser.js";
+import type { StringToken } from "./lexer/token.types";
+import { Parser } from "./parser/Parser";
 
 const decoder = new TextDecoder();
 function decodeStringToken(token: StringToken): string {

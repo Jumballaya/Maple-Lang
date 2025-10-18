@@ -1,6 +1,6 @@
-import { KEYWORDS, TYPE_KEYWORDS } from "./lexer.constants.js";
-import { isDigit, isLetter } from "./lexer.utils.js";
-import type { Pos, Token } from "./token.types.js";
+import { KEYWORDS, TYPE_KEYWORDS } from "./lexer.constants";
+import { isDigit, isLetter } from "./lexer.utils";
+import type { Pos, Token } from "./token.types";
 
 export class Lexer {
   private text: string;

@@ -1,4 +1,4 @@
-import type { ASTNode, ASTStatement } from "./types/ast.type.js";
+import type { ASTNode, ASTStatement } from "./types/ast.type";
 
 export class ASTProgram {
   public type: ASTNode["type"];

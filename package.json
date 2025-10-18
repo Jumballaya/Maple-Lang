@@ -2,7 +2,7 @@
   "name": "maple-lang",
   "version": "0.0.1",
   "main": "dist/main.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "start": "npm run build && node dist/main.js",
     "build": "tsc",

@@ -1,4 +1,4 @@
-import type { Token } from "./token.types.js";
+import type { Token } from "./token.types";
 
 export const KEYWORDS = new Map<string, Token["type"]>([
   ["fn", "Func"],
