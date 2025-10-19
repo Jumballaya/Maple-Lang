@@ -2,29 +2,38 @@
 
 WASM first programming language
 
-## Grammar
+## Example
 
 ```
-LetStmt       := 'let' Ident ':' Type ('=' Expr)? ';'
-FnDecl        := 'fn' Ident '(' Params? ')' RetType Block
-StructDecl    := 'struct' Ident '{' StructEntries '}'
-StructEntries := StructEntry (StructEntry)*
-StructEntry   := Ident ':' Type ','
+import malloc, free from "memory"
+import init_screen, draw_screen from "graphics"
 
-Params        := Param (',' Param)*
-Param         := Ident ':' Type
-RetType       := ( ':' Type )?
-Type          := 'void' | 'i8' | 'u8' | 'f8' | 'i16' | 'u16' | 'f16' | 'i32' | 'u32' | 'f32' | Ident | '*'+ Ident
+// from "graphics"
+//  struct Color {
+//    r: f32,
+//    g: f32,
+//    b: f32,
+//    a: f32
+//  }
+//
 
-IfStmt        :=
-ForStmt       :=
-WhileStmt     :=
-SwitchStmt    :=
+fn create_color_array_and_fill(count: i32, r: f32, g: f32, b: f32, a: f32): Color[] {
+  let colors: Color[] = malloc(Color * count);
+  for (let i: i32 = 0; i < count; i++) {
+    colors[i]->r = r;
+    colors[i]->g = g;
+    colors[i]->b = b;
+    colors[i]->a = a;
+  }
+}
 
-Block         := '{' Stmt* '}'
-Stmt          := IfStmt | ForStmt | WhileStmt | SwitchStmt | LetStmt | StructDecl | Assign ';' | Return ';' | Expr ';'
-Assign        := LValue '=' Expr
-LValue        := Ident | Expr '->' Ident | '*' Expr
-Expr          := literals | Ident | Call | Unary(*, &, -) | Binary(+,-,*,/,==,!=,<,<=,>,>=) | Assign ';'
-Call          := Ident '(' Args? ')'
+fn main(): void {
+  let w: i32 = 128;
+  let h: i32 = 128;
+  let colors: Color[] = create_color_array_and_fill(w * h, 0.86, 0.02, 0.14);
+  let screen: *GFXScreen = init_screen(w, h);
+
+  draw_screen(screen, colors);
+}
+
 ```
