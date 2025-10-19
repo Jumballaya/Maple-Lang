@@ -6,7 +6,7 @@ WASM first programming language
 
 ```
 import malloc, free from "memory"
-import init_screen, draw_screen from "graphics"
+import init_screen, draw_screen, destroy_screen from "graphics"
 
 // from "graphics"
 //  struct Color {
@@ -34,6 +34,8 @@ fn main(): void {
   let screen: *GFXScreen = init_screen(w, h);
 
   draw_screen(screen, colors);
+  destroy_screen(screen);
+  free(colors);
 }
 
 ```
