@@ -15,6 +15,6 @@ export class Identifier implements ASTExpression {
   }
 
   public toString(): string {
-    throw new Error("Not implemented");
+    return this.tokenLiteral();
   }
 }

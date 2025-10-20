@@ -1,7 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Parser } from "../src/parser/Parser";
+import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatement";
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
+import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
+import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
+import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 
 describe("Parser", () => {
   test("can accept source text", () => {
@@ -30,6 +34,19 @@ describe("Parser", () => {
       "missing type annotation"
     );
     return variableStmt;
+  };
+
+  const expectFunctionStatement = (stmt: unknown): FunctionStatement => {
+    assert.ok(stmt, "expected function statement");
+    const fnStmt = stmt as FunctionStatement;
+    assert.equal(
+      typeof fnStmt.tokenLiteral,
+      "function",
+      "function statement must expose tokenLiteral"
+    );
+    assert.ok(fnStmt.identifier, "missing function identifier");
+    assert.ok(fnStmt.fnExpr, "missing function expression");
+    return fnStmt;
   };
 
   test("parses empty program without statements", () => {
@@ -84,5 +101,61 @@ describe("Parser", () => {
     assert.equal(second.identifier.token.literal, "next");
     assert.equal(second.typeAnnotation, "i32");
     assert.equal(second.expression?.tokenLiteral(), "count");
+  });
+
+  test("parses minimal function with return statement", () => {
+    const source = "fn identity(): i32 { return 1; }";
+    const parser = new Parser(source);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const fnStmt = expectFunctionStatement(program.statements[0]);
+    assert.equal(fnStmt.identifier?.token.literal, "identity");
+    assert.equal(fnStmt.fnExpr.parameters.length, 0);
+    assert.equal(fnStmt.fnExpr.returnType, "i32");
+
+    const body = fnStmt.fnExpr.body;
+    assert.equal(body.statements.length, 1, "function body should include return");
+    const returnStmt = body.statements[0];
+    assert.ok(returnStmt instanceof ReturnStatement);
+    assert.equal(
+      (returnStmt as ReturnStatement).returnValue?.tokenLiteral(),
+      "1"
+    );
+  });
+
+  test("parses multi-parameter function with expression statements", () => {
+    const source = "fn add(lhs: i32, rhs: i32): i32 { lhs + rhs; return lhs; }";
+    const parser = new Parser(source);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const fnStmt = expectFunctionStatement(program.statements[0]);
+    assert.equal(fnStmt.identifier?.token.literal, "add");
+    assert.equal(fnStmt.fnExpr.parameters.length, 2);
+    assert.deepEqual(
+      fnStmt.fnExpr.parameters.map((param) => param.identifier.token.literal),
+      ["lhs", "rhs"]
+    );
+    assert.deepEqual(
+      fnStmt.fnExpr.parameters.map((param) => param.typeAnnotation),
+      ["i32", "i32"]
+    );
+    assert.equal(fnStmt.fnExpr.returnType, "i32");
+
+    const body = fnStmt.fnExpr.body;
+    assert.equal(body.statements.length, 2, "function body should capture statements");
+
+    const [exprStmt, retStmt] = body.statements;
+    assert.ok(exprStmt instanceof ExpressionStatement);
+    const expression = (exprStmt as ExpressionStatement).expression;
+    assert.ok(expression instanceof InfixExpression);
+    assert.equal((expression as InfixExpression).left.tokenLiteral(), "lhs");
+    assert.equal((expression as InfixExpression).right.tokenLiteral(), "rhs");
+
+    assert.ok(retStmt instanceof ReturnStatement);
+    assert.equal((retStmt as ReturnStatement).returnValue?.tokenLiteral(), "lhs");
   });
 });
