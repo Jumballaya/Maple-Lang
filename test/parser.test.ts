@@ -180,6 +180,14 @@ const expectSerializedProgram = (source: string, expected: Expectation) => {
   matchesStructure(serialized, expected);
 };
 
+const readParserErrors = (parser: Parser): string[] => {
+  const candidate = (parser as unknown as { errors?: unknown }).errors;
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+  return candidate.map((item) => `${item}`);
+};
+
 describe("Parser", () => {
   const ifSource = "if (ready) { ready = false; }";
   const ifElseSource = "if (count > 0) { total = total + count; } else { total = 0; }";
@@ -362,6 +370,45 @@ describe("Parser", () => {
       forStmt.loopBody.statements.length > 0,
       "for-loop body should include parsed statements"
     );
+  });
+
+  describe("error recovery", () => {
+    test("reports missing delimiter in let statement", () => {
+      const parser = new Parser("let broken i32;");
+      parser.parse();
+
+      assert.ok("errors" in parser, "parser should expose errors collection");
+      const errors = readParserErrors(parser);
+
+      assert.ok(errors.length > 0, "expected parser to report syntax issues");
+      assert.ok(
+        errors.some((msg) => /i32/i.test(msg) || /type/.test(msg.toLowerCase())),
+        "error message should reference the unexpected token"
+      );
+    });
+
+    test("collects multiple errors for missing semicolons", () => {
+      const parser = new Parser(
+        [
+          "let first: i32 = 1",
+          "let second: i32 = 2",
+          "let third: i32 = 3",
+        ].join("\n")
+      );
+      parser.parse();
+
+      assert.ok("errors" in parser, "parser should expose errors collection");
+      const errors = readParserErrors(parser);
+
+      assert.ok(errors.length >= 2, "expected parser to keep reporting errors");
+      const semicolonMentions = errors.filter((msg) =>
+        msg.toLowerCase().includes("semicolon") || msg.includes(";")
+      );
+      assert.ok(
+        semicolonMentions.length >= 2,
+        "expected messages to mention missing semicolons"
+      );
+    });
   });
 
   describe("expression precedence", () => {
