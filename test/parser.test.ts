@@ -1,9 +1,20 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Parser } from "../src/parser/Parser";
+import { BlockStatement } from "../src/parser/ast/statements/BlockStatement";
+import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../src/parser/ast/statements/ForStatement";
+import { IfStatement } from "../src/parser/ast/statements/IfStatement";
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
+import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 
 describe("Parser", () => {
+  const ifSource = "if (ready) { ready = false; }";
+  const ifElseSource = "if (count > 0) { total = total + count; } else { total = 0; }";
+  const whileSource = "while (count < limit) { count = count + 1; }";
+  const forSource =
+    "for (let i: i32 = 0; i < 3; i = i + 1) { sum = sum + i; }";
+
   test("can accept source text", () => {
     const src = "let x: i32 = 41 + 1;";
     assert.doesNotThrow(() => {
@@ -84,5 +95,100 @@ describe("Parser", () => {
     assert.equal(second.identifier.token.literal, "next");
     assert.equal(second.typeAnnotation, "i32");
     assert.equal(second.expression?.tokenLiteral(), "count");
+  });
+
+  test("parses standalone if statement", () => {
+    const parser = new Parser(ifSource);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const stmt = program.statements[0];
+    assert.ok(stmt instanceof IfStatement, "expected IfStatement");
+
+    const ifStmt = stmt as IfStatement;
+    assert.ok(ifStmt.conditionExpr, "missing condition expression");
+    assert.equal(ifStmt.conditionExpr.type, "expression");
+
+    assert.ok(ifStmt.thenBlock instanceof BlockStatement, "missing then block");
+    assert.ok(ifStmt.thenBlock.statements.length > 0, "then block should contain statements");
+    assert.equal(ifStmt.elseBlock, undefined);
+  });
+
+  test("parses standalone if/else statement", () => {
+    const parser = new Parser(ifElseSource);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const stmt = program.statements[0];
+    assert.ok(stmt instanceof IfStatement, "expected IfStatement");
+
+    const ifStmt = stmt as IfStatement;
+    assert.ok(ifStmt.conditionExpr, "missing condition expression");
+    assert.equal(ifStmt.conditionExpr.type, "expression");
+
+    assert.ok(ifStmt.thenBlock instanceof BlockStatement, "missing then block");
+    assert.ok(ifStmt.thenBlock.statements.length > 0, "then block should contain statements");
+
+    assert.ok(ifStmt.elseBlock instanceof BlockStatement, "missing else block");
+    assert.ok(ifStmt.elseBlock?.statements.length, "else block should contain statements");
+  });
+
+  test("parses standalone while loop", () => {
+    const parser = new Parser(whileSource);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const stmt = program.statements[0];
+    assert.ok(stmt instanceof WhileStatement, "expected WhileStatement");
+
+    const whileStmt = stmt as WhileStatement;
+    assert.ok(whileStmt.condExpr, "missing loop condition");
+    assert.equal(whileStmt.condExpr.type, "expression");
+
+    assert.ok(whileStmt.loopBody instanceof BlockStatement, "missing loop body block");
+    assert.ok(
+      whileStmt.loopBody.statements.length > 0,
+      "loop body should include parsed statements"
+    );
+  });
+
+  test("parses standalone for loop", () => {
+    const parser = new Parser(forSource);
+    const program = parser.parse();
+
+    assert.equal(program.statements.length, 1);
+
+    const stmt = program.statements[0];
+    assert.ok(stmt instanceof ForStatement, "expected ForStatement");
+
+    const forStmt = stmt as ForStatement;
+    assert.ok(forStmt.initBlock instanceof LetStatement, "missing for-loop initializer");
+
+    assert.ok(
+      forStmt.conditionExpr instanceof ExpressionStatement,
+      "missing for-loop condition"
+    );
+    assert.ok(
+      forStmt.conditionExpr.expression,
+      "for-loop condition expression should be populated"
+    );
+
+    assert.ok(
+      forStmt.updateExpr instanceof ExpressionStatement,
+      "missing for-loop update expression"
+    );
+    assert.ok(
+      forStmt.updateExpr.expression,
+      "for-loop update expression should be populated"
+    );
+
+    assert.ok(forStmt.loopBody instanceof BlockStatement, "missing loop body block");
+    assert.ok(
+      forStmt.loopBody.statements.length > 0,
+      "for-loop body should include parsed statements"
+    );
   });
 });
