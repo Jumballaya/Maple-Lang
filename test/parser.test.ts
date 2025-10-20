@@ -5,7 +5,9 @@ import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatemen
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
 import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
+import { Identifier } from "../src/parser/ast/expressions/Identifier";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
 
 describe("Parser", () => {
   test("can accept source text", () => {
@@ -119,10 +121,9 @@ describe("Parser", () => {
     assert.equal(body.statements.length, 1, "function body should include return");
     const returnStmt = body.statements[0];
     assert.ok(returnStmt instanceof ReturnStatement);
-    assert.equal(
-      (returnStmt as ReturnStatement).returnValue?.tokenLiteral(),
-      "1"
-    );
+    const returnValue = (returnStmt as ReturnStatement).returnValue;
+    assert.ok(returnValue instanceof IntegerLiteralExpression);
+    assert.equal(returnValue.tokenLiteral(), "1");
   });
 
   test("parses multi-parameter function with expression statements", () => {
@@ -153,9 +154,12 @@ describe("Parser", () => {
     const expression = (exprStmt as ExpressionStatement).expression;
     assert.ok(expression instanceof InfixExpression);
     assert.equal((expression as InfixExpression).left.tokenLiteral(), "lhs");
+    assert.equal((expression as InfixExpression).operator, "+");
     assert.equal((expression as InfixExpression).right.tokenLiteral(), "rhs");
 
     assert.ok(retStmt instanceof ReturnStatement);
-    assert.equal((retStmt as ReturnStatement).returnValue?.tokenLiteral(), "lhs");
+    const returnValue = (retStmt as ReturnStatement).returnValue;
+    assert.ok(returnValue instanceof Identifier);
+    assert.equal(returnValue.tokenLiteral(), "lhs");
   });
 });
