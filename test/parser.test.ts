@@ -8,6 +8,178 @@ import { IfStatement } from "../src/parser/ast/statements/IfStatement";
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 
+const ANY = Symbol("ANY");
+
+type Expectation =
+  | typeof ANY
+  | ((value: unknown) => boolean)
+  | { [key: string]: Expectation }
+  | Expectation[]
+  | string
+  | number
+  | boolean
+  | null;
+
+const isAstNode = (value: unknown): value is { type: "expression" | "statement" } => {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    ((value as { type: unknown }).type === "expression" ||
+      (value as { type: unknown }).type === "statement")
+  );
+};
+
+const pickKey = (node: Record<string, unknown>, candidates: string[]): string | undefined => {
+  return candidates.find((key) => Object.prototype.hasOwnProperty.call(node, key));
+};
+
+const assignSerialized = (
+  result: Record<string, unknown>,
+  handled: Set<string>,
+  key: string,
+  value: unknown
+) => {
+  handled.add(key);
+  if (value === null || value === undefined) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    result[key] = value.map((item) => (isAstNode(item) ? serializeAstNode(item) : item));
+    return;
+  }
+  if (isAstNode(value)) {
+    result[key] = serializeAstNode(value);
+    return;
+  }
+  if (typeof value !== "function") {
+    result[key] = value;
+  }
+};
+
+const serializeAstNode = (node: { [key: string]: unknown }): Record<string, unknown> => {
+  const constructorName = node.constructor?.name ?? "Object";
+  const result: Record<string, unknown> = { kind: constructorName };
+
+  if (typeof (node as { tokenLiteral?: () => unknown }).tokenLiteral === "function") {
+    const literal = (node as { tokenLiteral: () => unknown }).tokenLiteral();
+    if (literal !== undefined && literal !== null) {
+      result.literal = literal as string | number | boolean;
+    }
+  }
+
+  const handled = new Set<string>();
+  const pickAndAssign = (alias: string, candidates: string[]) => {
+    const key = pickKey(node, candidates);
+    if (key) {
+      assignSerialized(result, handled, alias, node[key]);
+    }
+  };
+
+  switch (constructorName) {
+    case "CallExpression":
+      pickAndAssign("callee", ["callee", "callable", "function", "func", "fn", "expression"]);
+      pickAndAssign("arguments", ["arguments", "args", "parameters", "argumentsList"]);
+      break;
+    case "MemberExpression":
+      pickAndAssign("object", ["object", "target", "expr", "left"]);
+      pickAndAssign("property", ["property", "member", "right"]);
+      break;
+    case "PointerMemberExpression":
+      pickAndAssign("pointer", ["pointer", "object", "target", "expr", "left"]);
+      pickAndAssign("member", ["member", "property", "right"]);
+      break;
+    case "IndexExpression":
+      pickAndAssign("left", ["left", "object", "target", "array"]);
+      pickAndAssign("index", ["index", "argument", "property"]);
+      break;
+    case "PrefixExpression":
+      pickAndAssign("right", ["right", "operand", "expression"]);
+      if ("operator" in node) {
+        assignSerialized(result, handled, "operator", (node as { operator: unknown }).operator);
+      }
+      break;
+    case "PostfixExpression":
+      pickAndAssign("left", ["left", "operand", "expression", "argument"]);
+      if ("operator" in node) {
+        assignSerialized(result, handled, "operator", (node as { operator: unknown }).operator);
+      }
+      break;
+    case "InfixExpression":
+      pickAndAssign("left", ["left", "lhs"]);
+      pickAndAssign("right", ["right", "rhs"]);
+      if ("operator" in node) {
+        assignSerialized(result, handled, "operator", (node as { operator: unknown }).operator);
+      }
+      break;
+  }
+
+  for (const key of Object.keys(node)) {
+    if (key === "token" || key === "type" || handled.has(key)) {
+      continue;
+    }
+    assignSerialized(result, handled, key, node[key]);
+  }
+
+  if (!("literal" in result)) {
+    delete result.literal;
+  }
+
+  return result;
+};
+
+const serializeProgram = (program: { statements: Array<{ [key: string]: unknown }> }) => {
+  return {
+    kind: program.constructor?.name ?? "ASTProgram",
+    statements: program.statements.map((stmt) => serializeAstNode(stmt)),
+  };
+};
+
+const matchesStructure = (actual: unknown, expected: Expectation, path = "value"): void => {
+  if (expected === ANY) {
+    return;
+  }
+
+  if (typeof expected === "function") {
+    assert.ok(expected(actual), `Expected predicate to pass at ${path}`);
+    return;
+  }
+
+  if (Array.isArray(expected)) {
+    assert.ok(Array.isArray(actual), `Expected array at ${path}`);
+    assert.equal(
+      (actual as unknown[]).length,
+      expected.length,
+      `Expected array of length ${expected.length} at ${path}`
+    );
+    for (let i = 0; i < expected.length; i++) {
+      matchesStructure((actual as unknown[])[i], expected[i]!, `${path}[${i}]`);
+    }
+    return;
+  }
+
+  if (expected && typeof expected === "object") {
+    assert.ok(actual && typeof actual === "object", `Expected object at ${path}`);
+    for (const [key, value] of Object.entries(expected)) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(actual as Record<string, unknown>, key),
+        `Missing key ${path}.${key}`
+      );
+      matchesStructure((actual as Record<string, unknown>)[key], value, `${path}.${key}`);
+    }
+    return;
+  }
+
+  assert.equal(actual, expected, `Mismatch at ${path}`);
+};
+
+const expectSerializedProgram = (source: string, expected: Expectation) => {
+  const parser = new Parser(source);
+  const program = parser.parse();
+  const serialized = serializeProgram(program);
+  matchesStructure(serialized, expected);
+};
+
 describe("Parser", () => {
   const ifSource = "if (ready) { ready = false; }";
   const ifElseSource = "if (count > 0) { total = total + count; } else { total = 0; }";
@@ -190,5 +362,126 @@ describe("Parser", () => {
       forStmt.loopBody.statements.length > 0,
       "for-loop body should include parsed statements"
     );
+  });
+
+  describe("expression precedence", () => {
+    test("respects arithmetic precedence", () => {
+      expectSerializedProgram("1 + 2 * 3 - 4 / 2;", {
+        kind: "ASTProgram",
+        statements: [
+          {
+            kind: "ExpressionStatement",
+            literal: "1",
+            expression: {
+              kind: "InfixExpression",
+              operator: "-",
+              left: {
+                kind: "InfixExpression",
+                operator: "+",
+                left: { literal: "1" },
+                right: {
+                  kind: "InfixExpression",
+                  operator: "*",
+                  left: { literal: "2" },
+                  right: { literal: "3" },
+                },
+              },
+              right: {
+                kind: "InfixExpression",
+                operator: "/",
+                left: { literal: "4" },
+                right: { literal: "2" },
+              },
+            },
+          },
+        ],
+      });
+    });
+
+    test("respects logical operator precedence", () => {
+      expectSerializedProgram("ready && armed || manual && override;", {
+        kind: "ASTProgram",
+        statements: [
+          {
+            kind: "ExpressionStatement",
+            literal: "ready",
+            expression: {
+              kind: "InfixExpression",
+              operator: "||",
+              left: {
+                kind: "InfixExpression",
+                operator: "&&",
+                left: { literal: "ready" },
+                right: { literal: "armed" },
+              },
+              right: {
+                kind: "InfixExpression",
+                operator: "&&",
+                left: { literal: "manual" },
+                right: { literal: "override" },
+              },
+            },
+          },
+        ],
+      });
+    });
+
+    test("binds pointer and member operations correctly", () => {
+      expectSerializedProgram("*ptr->next->value;", {
+        kind: "ASTProgram",
+        statements: [
+          {
+            kind: "ExpressionStatement",
+            literal: "*",
+            expression: {
+              kind: "PrefixExpression",
+              operator: "*",
+              right: {
+                kind: "PointerMemberExpression",
+                member: { literal: "value" },
+                pointer: {
+                  kind: "PointerMemberExpression",
+                  member: { literal: "next" },
+                  pointer: { literal: "ptr" },
+                },
+              },
+            },
+          },
+        ],
+      });
+    });
+
+    test("supports chained call, index, and member expressions", () => {
+      expectSerializedProgram("build()(input).result[index].name;", {
+        kind: "ASTProgram",
+        statements: [
+          {
+            kind: "ExpressionStatement",
+            literal: "build",
+            expression: {
+              kind: "MemberExpression",
+              property: { literal: "name" },
+              object: {
+                kind: "IndexExpression",
+                index: { literal: "index" },
+                left: {
+                  kind: "MemberExpression",
+                  property: { literal: "result" },
+                  object: {
+                    kind: "CallExpression",
+                    arguments: [{ literal: "input" }],
+                    callee: {
+                      kind: "CallExpression",
+                      arguments: [],
+                      callee: { literal: "build" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      });
+    });
   });
 });
