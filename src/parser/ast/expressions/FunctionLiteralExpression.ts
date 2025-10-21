@@ -1,13 +1,31 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import { Token } from "../../../lexer/token.types";
+import { BlockStatement } from "../statements/BlockStatement";
 import { ASTExpression } from "../types/ast.type";
+import { Identifier } from "./Identifier";
+
+type FunctionParam = {
+  identifier: Identifier;
+  type: string;
+};
 
 export class FunctionLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
+  public params: FunctionParam[];
+  public body: BlockStatement;
+  public returnType: string;
 
-  constructor(token: Token) {
+  constructor(
+    token: Token,
+    params: FunctionParam[],
+    body: BlockStatement,
+    returnType: string
+  ) {
     this.token = token;
+    this.params = params;
+    this.body = body;
+    this.returnType = returnType;
   }
 
   public tokenLiteral(): string {
@@ -15,6 +33,12 @@ export class FunctionLiteralExpression implements ASTExpression {
   }
 
   public toString(tab_level = 0): string {
-    throw new Error("Not implemented");
+    const params = this.params
+      .map((p) => `${p.identifier.toString()}: ${p.type}`)
+      .join(", ");
+    const lit = this.tokenLiteral();
+    return `${"\t".repeat(tab_level)}${lit}(${params}) {\n${this.body.toString(
+      tab_level + 1
+    )}}`;
   }
 }

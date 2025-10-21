@@ -5,9 +5,11 @@ import { ASTExpression } from "../types/ast.type";
 export class ArrayLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
+  public elements: ASTExpression[];
 
-  constructor(token: Token) {
+  constructor(token: Token, elements: ASTExpression[] = []) {
     this.token = token;
+    this.elements = elements;
   }
 
   public tokenLiteral(): string {
@@ -15,6 +17,7 @@ export class ArrayLiteralExpression implements ASTExpression {
   }
 
   public toString(): string {
-    throw new Error("Not implemented");
+    const elements = this.elements.map((el) => el.toString()).join(", ");
+    return `[ ${elements} ]`;
   }
 }

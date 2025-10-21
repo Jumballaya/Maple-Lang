@@ -5,9 +5,13 @@ import { ASTExpression } from "../types/ast.type";
 export class Identifier implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
+  public typeAnnotation: string;
+  public symbolId: number;
 
-  constructor(token: Token) {
+  constructor(token: Token, typeAnnotation: string, symbolId: number) {
     this.token = token;
+    this.typeAnnotation = typeAnnotation;
+    this.symbolId = symbolId;
   }
 
   public tokenLiteral(): string {
@@ -15,6 +19,6 @@ export class Identifier implements ASTExpression {
   }
 
   public toString(): string {
-    throw new Error("Not implemented");
+    throw this.tokenLiteral();
   }
 }
