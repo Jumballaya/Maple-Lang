@@ -5,6 +5,7 @@ import type { ModuleMeta } from "./emitters/emitter.types.js";
 import path from "path";
 import type { MapleModule } from "./MapleModule.js";
 import { ASTProgram } from "../parser/ast/ASTProgram.js";
+import { stdlib } from "./stdlib.js";
 
 //
 //
@@ -39,95 +40,6 @@ import { ASTProgram } from "../parser/ast/ASTProgram.js";
 //    Goal: link and build final binary
 //    - wasm-ld all .o files in the build folder and generate the .wasm file
 //
-
-const stdlib: Record<string, ModuleMeta> = {
-  math: {
-    name: "math",
-    dataPtr: 0,
-    exports: {
-      i_to_f: {
-        kind: "func",
-        signature: "i_f",
-      },
-      fraction: {
-        kind: "struct",
-        meta: {
-          name: "fraction",
-          size: 8,
-          exported: true,
-          members: {
-            numerator: {
-              name: "numerator",
-              offset: 0,
-              size: 4,
-              type: "i32",
-            },
-            denominator: {
-              name: "denominator",
-              offset: 4,
-              size: 4,
-              type: "i32",
-            },
-          },
-        },
-      },
-    },
-    functions: {},
-    globals: {},
-    imports: {},
-    stringPool: {},
-    structs: {
-      fraction: {
-        name: "fraction",
-        size: 8,
-        exported: true,
-        members: {
-          numerator: {
-            name: "numerator",
-            offset: 0,
-            size: 4,
-            type: "i32",
-          },
-          denominator: {
-            name: "denominator",
-            offset: 4,
-            size: 4,
-            type: "i32",
-          },
-        },
-      },
-    },
-    data: [],
-  },
-  memory: {
-    name: "memory",
-    dataPtr: 0,
-    exports: {
-      malloc: {
-        kind: "func",
-        signature: "i_i",
-      },
-      free: {
-        kind: "func",
-        signature: "i_v",
-      },
-      realloc: {
-        kind: "func",
-        signature: "iii_i",
-      },
-      string_copy: {
-        kind: "func",
-        signature: "i_i",
-      },
-    },
-    functions: {},
-    globals: {},
-    imports: {},
-    stringPool: {},
-    structs: {},
-    data: [],
-  },
-};
 
 async function getAST(fp: string): Promise<ASTProgram> {
   const res = await readFile(fp);
