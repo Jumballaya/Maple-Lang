@@ -336,19 +336,49 @@
   ;;
   ;;
   ;;
+  ;;  Realloc
   ;;
-  ;;
-  ;;------------- User Code ------------------
-  
-  
-  (func $main (export "main"))
-
-  (func (export "__entrypoint__")
-    (local $str i32)
-    (local $dat i32)
-    (call $heap_init (local.get $heap_start))
-    (call $main (i32.const 1024))
+  (func $realloc (export "realloc") (param $old i32) (param $old_size i32) (param $new_size i32) (result i32)
+    (local $np i32)
+    (local.set $np (call $malloc (local.get $new_size)))
+    (if (i32.eqz (local.get $np)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $old))
+      (then (return (local.get $np)))
+    )
+    (memory.copy (local.get $np) (local.get $old)
+                (select (local.get $old_size) (local.get $new_size)
+                        (i32.lt_u (local.get $old_size) (local.get $new_size))))
+    (call $free (local.get $old))
+    (local.get $np)
   )
 
+  ;;
+  ;;  fn min(a: i32, b: i32): i32 {
+  ;;    if (a < b) {
+  ;;      return a;
+  ;;    }
+  ;;    return b;
+  ;;  }
+  ;;
+  (func $min (param $a i32) (param $b i32) (result i32)
+    (if
+      (i32.lt_s (local.get $a) (local.get $b))
+      (then (return (local.get $a)))
+    )
+    (return (local.get $b))
+  )
 
+  ;;
+  ;;  Copies one string to another
+  ;;
+  (func $string_copy (export "string_copy") (param $from_ptr i32) (param $to_ptr i32)
+    (memory.copy
+      (i32.load offset=4 (local.get $to_ptr))     ;; from->data
+      (i32.load offset=4 (local.get $from_ptr))   ;; to->data
+      (call $min                                  ;; min(from->len, to->len)
+        (i32.load (local.get $to_ptr))
+        (i32.load (local.get $from_ptr))
+      )
+    )
+  )
 )

@@ -2,7 +2,7 @@ import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import { Token } from "../../../lexer/token.types";
 import { ASTExpression } from "../types/ast.type";
 
-export class InfixExpression implements ASTExpression {
+export class AssignmentExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public left: ASTExpression;

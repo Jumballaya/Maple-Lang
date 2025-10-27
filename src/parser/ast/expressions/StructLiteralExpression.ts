@@ -1,10 +1,11 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import { Token } from "../../../lexer/token.types";
+import { StructMember } from "../statements/StructStatement";
 import { ASTExpression } from "../types/ast.type";
 
 type StructTable = {
   size: number;
-  members: Record<string, { type: string; offset: number; size: number }>;
+  members: Record<string, StructMember>;
 };
 
 export class StructLiteralExpression implements ASTExpression {
