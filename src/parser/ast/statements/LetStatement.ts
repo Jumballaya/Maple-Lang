@@ -9,17 +9,20 @@ export class LetStatement implements ASTStatement {
   public identifier: Identifier;
   public expression: ASTExpression | null = null;
   public typeAnnotation: string;
+  public exported;
 
   constructor(
     token: Token,
     ident: Identifier,
     typeAnnotation: string,
-    expr: ASTExpression | null = null
+    expr: ASTExpression | null = null,
+    exported = false
   ) {
     this.token = token;
     this.identifier = ident;
     this.expression = expr;
     this.typeAnnotation = typeAnnotation;
+    this.exported = exported;
   }
 
   public tokenLiteral(): string {

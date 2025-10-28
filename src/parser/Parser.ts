@@ -8,7 +8,7 @@ export class Parser {
     this.tokenizer = new Tokenizer(source);
   }
 
-  public parse(): ASTProgram {
-    return new ASTProgram("statement");
+  public parse(name: string): ASTProgram {
+    return new ASTProgram("statement", name);
   }
 }

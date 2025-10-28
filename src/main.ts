@@ -26,6 +26,6 @@ fn main(): void {
 
 async function main() {
   const parser = new Parser(example);
-  console.log(parser.parse());
+  console.log(parser.parse("main"));
 }
 main();

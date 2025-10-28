@@ -1,88 +1,95 @@
 import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
+import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression.js";
+import { CallExpression } from "../../parser/ast/expressions/CallExpression.js";
 import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
 import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
+import { BlockStatement } from "../../parser/ast/statements/BlockStatement.js";
+import { ExpressionStatement } from "../../parser/ast/statements/ExpressionStatement.js";
+import { ForStatement } from "../../parser/ast/statements/ForStatement.js";
+import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
+import { IfStatement } from "../../parser/ast/statements/IfStatement.js";
+import { LetStatement } from "../../parser/ast/statements/LetStatement.js";
+import { WhileStatement } from "../../parser/ast/statements/WhileStatement.js";
 import { ASTStatement } from "../../parser/ast/types/ast.type.js";
 import type { ModuleBuilder } from "../ModuleBuilder.js";
 import type { ModuleEmitter } from "../ModuleEmitter.js";
 import { baseScalar, sizeofType } from "./emit.types.js";
 
 export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
-  switch (stmt.type) {
-    case "block": {
-      for (const st of stmt.body) {
-        extractGlobalData(st, builder);
+  if (stmt instanceof BlockStatement) {
+    for (const st of stmt.statements) {
+      extractGlobalData(st, builder);
+    }
+    return;
+  }
+  if (stmt instanceof FunctionStatement) {
+    extractGlobalData(stmt.fnExpr.body, builder);
+    return;
+  }
+  if (stmt instanceof ForStatement) {
+    extractGlobalData(stmt.loopBody, builder);
+    return;
+  }
+  if (stmt instanceof IfStatement) {
+    extractGlobalData(stmt.thenBlock, builder);
+    if (stmt.elseBlock) {
+      extractGlobalData(stmt.elseBlock, builder);
+    }
+    return;
+  }
+  if (stmt instanceof WhileStatement) {
+    extractGlobalData(stmt.loopBody, builder);
+    return;
+  }
+  if (stmt instanceof ExpressionStatement) {
+    if (stmt.expression instanceof AssignmentExpression) {
+      const expr = stmt.expression;
+      if (expr.value instanceof StringLiteralExpression) {
+        extractStringLiteral(expr.value, builder);
       }
-      break;
-    }
-    case "function": {
-      extractGlobalData(stmt.body, builder);
-      break;
-    }
-    case "for": {
-      extractGlobalData(stmt.body, builder);
-      break;
-    }
-    case "if": {
-      extractGlobalData(stmt.thenBlock, builder);
-      if (stmt.elseBlock) {
-        extractGlobalData(stmt.elseBlock, builder);
+      if (expr.value instanceof ArrayLiteralExpression) {
+        extractArrayLiteral(expr.value, builder);
       }
-      break;
-    }
-    case "while": {
-      extractGlobalData(stmt.body, builder);
-      break;
-    }
-    case "expression": {
-      if (stmt.expression.type === "assignment") {
-        const expr = stmt.expression;
-        if (expr.expression.type === "string_literal") {
-          extractStringLiteral(expr.expression, builder);
-        }
-        if (expr.expression.type === "array_literal") {
-          extractArrayLiteral(expr.expression, builder);
-        }
-        if (expr.expression.type === "struct_literal") {
-          extractStructLiteral(expr.expression, builder);
-        }
+      if (expr.value instanceof StructLiteralExpression) {
+        extractStructLiteral(expr.value, builder);
       }
-      if (stmt.expression.type === "function_call") {
-        const expr = stmt.expression;
-        for (const p of expr.params) {
-          if (p.type === "string_literal") {
-            extractStringLiteral(p, builder);
-          }
-          if (p.type === "array_literal") {
-            extractArrayLiteral(p, builder);
-          }
-          if (p.type === "struct_literal") {
-            extractStructLiteral(p, builder);
-          }
+    }
+    if (stmt.expression instanceof CallExpression) {
+      const expr = stmt.expression;
+      for (const p of expr.args) {
+        if (p instanceof StringLiteralExpression) {
+          extractStringLiteral(p, builder);
+        }
+        if (p instanceof ArrayLiteralExpression) {
+          extractArrayLiteral(p, builder);
+        }
+        if (p instanceof StructLiteralExpression) {
+          extractStructLiteral(p, builder);
         }
       }
-      if (stmt.expression.type === "string_literal") {
-        extractStringLiteral(stmt.expression, builder);
-      }
-      if (stmt.expression.type === "array_literal") {
-        extractArrayLiteral(stmt.expression, builder);
-      }
-      if (stmt.expression.type === "struct_literal") {
-        extractStructLiteral(stmt.expression, builder);
-      }
-      break;
     }
-    case "let": {
-      if (stmt.expression.type === "string_literal") {
-        extractStringLiteral(stmt.expression, builder);
-      }
-      if (stmt.expression.type === "array_literal") {
-        extractArrayLiteral(stmt.expression, builder);
-      }
-      if (stmt.expression.type === "struct_literal") {
-        extractStructLiteral(stmt.expression, builder);
-      }
-      break;
+    if (stmt.expression instanceof StringLiteralExpression) {
+      extractStringLiteral(stmt.expression, builder);
     }
+    if (stmt.expression instanceof ArrayLiteralExpression) {
+      extractArrayLiteral(stmt.expression, builder);
+    }
+    if (stmt.expression instanceof StructLiteralExpression) {
+      extractStructLiteral(stmt.expression, builder);
+    }
+    return;
+  }
+  if (stmt instanceof LetStatement) {
+    if (stmt.expression instanceof StringLiteralExpression) {
+      extractStringLiteral(stmt.expression, builder);
+    }
+    if (stmt.expression instanceof ArrayLiteralExpression) {
+      extractArrayLiteral(stmt.expression, builder);
+    }
+    if (stmt.expression instanceof StructLiteralExpression) {
+      extractStructLiteral(stmt.expression, builder);
+    }
+    return;
   }
 }
 
@@ -92,9 +99,9 @@ function extractArrayLiteral(
 ) {
   const memberType = baseScalar(expr.memberType);
   const memberSize = sizeofType(memberType);
-  const total = expr.value.length * memberSize;
+  const total = expr.elements.length * memberSize;
   const addr = builder.dataAlloc(total);
-  builder.addBytes(numToLittleEndian(expr.value, expr.memberType), addr);
+  builder.addBytes(numToLittleEndian(expr.elements, expr.memberType), addr);
   expr.location = addr;
 }
 
@@ -121,18 +128,18 @@ function extractStructLiteral(
   expr: StructLiteralExpression,
   builder: ModuleBuilder
 ) {
-  const sd = builder.getStruct(expr.struct);
+  const sd = builder.getStruct(expr.tokenLiteral());
   if (!sd) {
-    throw new Error(`struct not found: ${expr.struct}`);
+    throw new Error(`struct not found: ${expr.tokenLiteral()}`);
   }
-  for (const f of Object.keys(expr.values)) {
+  for (const f of Object.keys(expr.table)) {
     if (!sd.members[f]) {
       throw new Error(`struct "${sd.name}" has no member "${f}"`);
     }
   }
 
   let encoded = "";
-  for (const [, value] of Object.entries(expr.values)) {
+  for (const [, value] of Object.entries(expr.table)) {
     if (typeof value !== "number") {
       throw new Error(
         "[struct literal member] non-number literal values not supported"
@@ -190,53 +197,59 @@ function defStructLocalFields(
 }
 
 export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
-  switch (s.type) {
-    case "function": {
-      extractLocals(s.body, builder);
-      break;
+  if (s instanceof FunctionStatement) {
+    extractLocals(s.fnExpr.body, builder);
+    return;
+  }
+  if (s instanceof LetStatement) {
+    if (s.expression instanceof StructLiteralExpression) {
+      defStructLocalFields(
+        builder,
+        s.identifier.tokenLiteral(),
+        s.expression.name
+      );
+      return;
     }
-    case "let": {
-      if (s.expression.type === "struct_literal") {
-        defStructLocalFields(builder, s.identifier, s.expression.struct);
-        break;
-      }
+    builder.defLocal({
+      name: s.identifier.tokenLiteral(),
+      type: s.typeAnnotation,
+      scope: "local",
+    });
+    return;
+  }
+  if (s instanceof BlockStatement) {
+    for (const st of s.statements) {
+      extractLocals(st, builder);
+    }
+    return;
+  }
+  if (s instanceof IfStatement) {
+    extractLocals(s.thenBlock, builder);
+    if (s.elseBlock) {
+      extractLocals(s.elseBlock, builder);
+    }
+    return;
+  }
+  if (s instanceof WhileStatement) {
+    extractLocals(s.loopBody, builder);
+    return;
+  }
+  if (s instanceof ForStatement) {
+    const init = s.initBlock;
+    if (init.expression instanceof StructLiteralExpression) {
+      defStructLocalFields(
+        builder,
+        init.identifier.tokenLiteral(),
+        init.expression.name
+      );
+    } else {
       builder.defLocal({
-        name: s.identifier,
-        type: s.typeAnnotation,
+        name: s.initBlock.identifier.tokenLiteral(),
+        type: s.initBlock.typeAnnotation,
         scope: "local",
       });
-      break;
     }
-    case "block": {
-      for (const st of s.body) {
-        extractLocals(st, builder);
-      }
-      break;
-    }
-    case "if": {
-      extractLocals(s.thenBlock, builder);
-      if (s.elseBlock) {
-        extractLocals(s.elseBlock, builder);
-      }
-      break;
-    }
-    case "while": {
-      extractLocals(s.body, builder);
-      break;
-    }
-    case "for": {
-      const init = s.initBlock;
-      if (init.expression.type === "struct_literal") {
-        defStructLocalFields(builder, init.identifier, init.expression.struct);
-      } else {
-        builder.defLocal({
-          name: s.initBlock.identifier,
-          type: s.initBlock.typeAnnotation,
-          scope: "local",
-        });
-      }
-      extractLocals(s.body, builder);
-      break;
-    }
+    extractLocals(s.loopBody, builder);
+    return;
   }
 }

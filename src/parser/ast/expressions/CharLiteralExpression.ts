@@ -5,9 +5,9 @@ import { ASTExpression } from "../types/ast.type";
 export class CharLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
-  public value: string;
+  public value: number;
 
-  constructor(token: Token, value: string) {
+  constructor(token: Token, value: number) {
     this.token = token;
     this.value = value;
   }
@@ -17,6 +17,6 @@ export class CharLiteralExpression implements ASTExpression {
   }
 
   public toString(): string {
-    return this.value;
+    return String.fromCharCode(this.value);
   }
 }

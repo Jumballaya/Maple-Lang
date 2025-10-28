@@ -6,6 +6,7 @@ export class StringLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public value: string;
+  public location = 0;
 
   constructor(token: Token, value: string) {
     this.token = token;

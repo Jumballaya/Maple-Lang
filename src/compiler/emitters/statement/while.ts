@@ -30,7 +30,7 @@ export function emitWhileStatement(
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
   // loop body
-  emitStatement(stmt.body, emitter);
+  emitStatement(stmt.loopBody, emitter);
 
   // loop to top
   emitter.writer.line(`(br ${lp})`);

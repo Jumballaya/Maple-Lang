@@ -35,7 +35,7 @@ export function emitBinaryOp(
   const l = emitOperand(expr.left, numType, emitter);
   const r = emitOperand(expr.right, numType, emitter);
 
-  switch (expr.op) {
+  switch (expr.operator) {
     case "+": {
       return `(${numType}.add ${l} ${r})`;
     }

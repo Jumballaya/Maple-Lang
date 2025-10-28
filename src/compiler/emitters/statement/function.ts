@@ -8,10 +8,12 @@ export function emitFunction(
   fn: FunctionStatement,
   emitter: ModuleEmitter
 ): void {
-  const rType = fn.returnType ? valueTypeToWasm(fn.returnType) : "void";
+  const rType = fn.fnExpr.returnType
+    ? valueTypeToWasm(fn.fnExpr.returnType)
+    : "void";
   const params: Array<{ name: string; type: string }> = [];
-  for (const [name, type] of fn.params) {
-    params.push({ name, type });
+  for (const p of fn.fnExpr.params) {
+    params.push({ name: p.identifier.tokenLiteral(), type: p.type });
   }
   emitter.withFunction(
     {
@@ -25,7 +27,9 @@ export function emitFunction(
       const w = emitter.writer;
 
       // define params
-      for (const [name, type] of fn.params) {
+      for (const p of fn.fnExpr.params) {
+        const name = p.identifier.tokenLiteral();
+        const type = p.type;
         emitter.defParam({ name, type, scope: "param" });
         params.push({ name, type });
       }
@@ -33,17 +37,20 @@ export function emitFunction(
       // start writing func
       w.append("(func");
       if (fn.name) {
-        w.append(` $${fn.name}${fn.exported ? ` (export "${fn.name}")` : ""}`);
+        const exported = fn.exported;
+        w.append(` $${fn.name}${exported ? ` (export "${fn.name}")` : ""}`);
       }
 
       // write params
-      for (const [n, t] of fn.params) {
+      for (const p of fn.fnExpr.params) {
+        const n = p.identifier.tokenLiteral();
+        const t = p.type;
         w.append(` (param $${n} ${valueTypeToWasm(t)})`);
       }
 
       // write return result
-      if (fn.returnType) {
-        w.append(` (result ${valueTypeToWasm(fn.returnType)})`);
+      if (fn.fnExpr.returnType) {
+        w.append(` (result ${valueTypeToWasm(fn.fnExpr.returnType)})`);
       }
       w.newLine();
       w.open();
@@ -55,7 +62,7 @@ export function emitFunction(
       }
 
       // write body
-      for (const s of fn.body.body) {
+      for (const s of fn.fnExpr.body.statements) {
         emitStatement(s, emitter);
       }
 
@@ -144,15 +151,17 @@ export function emitFunctionSignature(
 //
 export function generateFunctionSignature(fn: FunctionStatement): string {
   let signature = "";
-  for (const [_, type] of fn.params) {
-    signature += valueTypeToWasm(type).slice(0, 1);
+  for (const p of fn.fnExpr.params) {
+    signature += valueTypeToWasm(p.type).slice(0, 1);
   }
   if (signature === "") {
     signature = "v";
   }
   signature += "_";
 
-  const rType = fn.returnType ? valueTypeToWasm(fn.returnType) : "void";
+  const rType = fn.fnExpr.returnType
+    ? valueTypeToWasm(fn.fnExpr.returnType)
+    : "void";
   signature += `${rType.slice(0, 1)}`;
 
   return signature;

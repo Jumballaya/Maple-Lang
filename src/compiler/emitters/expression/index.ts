@@ -1,4 +1,5 @@
 import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression.js";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { Writer } from "../../writer/Writer.js";
 import { baseScalar, sizeofType, wasmLoadOp } from "../emit.types.js";
@@ -13,9 +14,9 @@ export function emitIndexExpression(
 
   //
   // Extract the type we are pulling out of the array
-  const varData = emitter.getVar(expression.identifier);
+  const varData = emitter.getVar(expression.left.tokenLiteral());
   if (!varData) {
-    throw new Error(`unknown variable : ${expression.identifier}`);
+    throw new Error(`unknown variable : ${expression.left.tokenLiteral()}`);
   }
   const arrayType = varData.type;
   const memberType = baseScalar(arrayType);
@@ -25,15 +26,15 @@ export function emitIndexExpression(
   // if it is index 0 as a number literal, just use
   // the base pointer of the array, no math
   if (
-    expression.index.type === "integer_literal" &&
+    expression.index instanceof IntegerLiteralExpression &&
     expression.index.value === 0
   ) {
-    writer.append(`(${loadOp} ${emitGet(expression.identifier, emitter)})`);
+    writer.append(`(${loadOp} ${emitGet(varData.name, emitter)})`);
 
     // otherwise, we need to evaluate the expression
     // as the index
   } else {
-    const base = emitGet(expression.identifier, emitter);
+    const base = emitGet(varData.name, emitter);
     const index = emitExpression(expression.index, emitter);
     writer.append(
       `(${loadOp} (i32.add ${base} (i32.mul ${index} (i32.const ${memberSize}))))`

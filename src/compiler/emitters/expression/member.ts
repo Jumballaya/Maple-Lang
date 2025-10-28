@@ -1,3 +1,4 @@
+import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
@@ -12,13 +13,13 @@ export function getPointerMemberData(
   //         only, and dont bother with an expression, but I also
   //         want chaining: x->y->z[0]->a etc. etc.
   //
-  if (expr.identifier.type !== "identifier") {
+  if (expr.parent instanceof Identifier) {
     throw new Error(
       "[expression pointer_member/member] only identifier expressions on the lhs of an assignment supported"
     );
   }
 
-  const base = expr.identifier.value;
+  const base = expr.parent.tokenLiteral();
   const member = expr.member;
 
   // prefer flattened locals like base_member

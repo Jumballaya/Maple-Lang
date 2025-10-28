@@ -15,8 +15,8 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   emitter.writer.open(`(loop ${lp}`);
 
   // break condition
-  const cond = emitExpression(stmt.conditionExpr.expression, emitter);
-  const t = emitter.getExprType(stmt.conditionExpr.expression);
+  const cond = emitExpression(stmt.conditionExpr.expression!, emitter);
+  const t = emitter.getExprType(stmt.conditionExpr.expression!);
   const asI32 =
     t === "bool"
       ? cond
@@ -26,10 +26,10 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
   // body
-  emitStatement(stmt.body, emitter);
+  emitStatement(stmt.loopBody, emitter);
 
   // update function
-  emitter.writer.line(emitExpression(stmt.updateExpr.expression, emitter));
+  emitter.writer.line(emitExpression(stmt.updateExpr.expression!, emitter));
 
   // loop to top
   emitter.writer.line(`(br ${lp})`);

@@ -17,7 +17,7 @@ export function emitIfStatement(stmt: IfStatement, emitter: ModuleEmitter) {
 
   // condition
   emitter.writer.tabIn();
-  emitter.writer.line(emitExpression(stmt.condition, emitter));
+  emitter.writer.line(emitExpression(stmt.conditionExpr, emitter));
 
   // then
   emitter.writer.open("(then ");

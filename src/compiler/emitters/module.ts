@@ -13,18 +13,24 @@ import {
   extractFunctionSignature,
   generateFunctionSignature,
 } from "./statement/function.js";
+import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
+import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
+import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
+import { StructStatement } from "../../parser/ast/statements/StructStatement.js";
+import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
+import { ImportStatement } from "../../parser/ast/statements/ImportStatement.js";
 
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const name = stmt.identifier;
   const type = stmt.typeAnnotation;
-  const value = emitExpression(stmt.expression, emitter);
+  const value = emitExpression(stmt.expression!, emitter);
   const expr = stmt.expression;
 
   // string/array literal
   if (
-    expr.type === "string_literal" ||
-    expr.type === "array_literal" ||
-    expr.type === "struct_literal"
+    expr instanceof StringLiteralExpression ||
+    expr instanceof ArrayLiteralExpression ||
+    expr instanceof StructLiteralExpression
   ) {
     // const num = emitNumberGet(expr.location, "i32");
     const num = `(i32.const 10)`;
@@ -51,8 +57,8 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   const builder = new ModuleBuilder(program.name);
 
   // parse for structs at top level
-  for (const stmt of program.body) {
-    if (stmt.type === "struct") {
+  for (const stmt of program.statements) {
+    if (stmt instanceof StructStatement) {
       const { name, members, size } = stmt;
       builder.defStruct({ name, members, size });
       // @TODO: Figure out how to fold in struct export/import
@@ -60,17 +66,22 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   }
 
   // parse for functions at top level
-  for (const stmt of program.body) {
-    if (stmt.type === "function") {
+  for (const stmt of program.statements) {
+    if (stmt instanceof FunctionStatement) {
       if (!stmt.name) {
         continue;
       }
-      const { exported, name, params, returnType } = stmt;
+      const { exported, name } = stmt;
+      const { params, returnType } = stmt.fnExpr;
       const signature = generateFunctionSignature(stmt);
       builder.defFunc(name, {
         exported,
         result: returnType ? valueTypeToWasm(returnType) : "void",
-        params: params.map(([name, type]) => ({ name, type, scope: "local" })),
+        params: params.map(({ identifier, type }) => ({
+          name: identifier.tokenLiteral(),
+          type,
+          scope: "local",
+        })),
         signature,
       });
       if (exported) {
@@ -80,32 +91,32 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   }
 
   // get imports
-  for (const stmt of program.body) {
-    if (stmt.type === "import") {
+  for (const stmt of program.statements) {
+    if (stmt instanceof ImportStatement) {
       for (const imp of stmt.imported) {
-        builder.defImport(imp, stmt.path, imp);
+        builder.defImport(imp, stmt.importPath, imp);
       }
     }
   }
 
   // get globals
-  for (const stmt of program.body) {
-    if (stmt.type === "let") {
+  for (const stmt of program.statements) {
+    if (stmt instanceof LetStatement) {
       const name = stmt.identifier;
       const type = stmt.typeAnnotation;
 
       builder.defGlobal({
-        name,
+        name: name.tokenLiteral(),
         type,
         scope: "global",
       });
       if (stmt.exported) {
-        builder.defExport(name, { kind: "global", type });
+        builder.defExport(name.tokenLiteral(), { kind: "global", type });
       }
     }
   }
 
-  for (const stmt of program.body) {
+  for (const stmt of program.statements) {
     extractGlobalData(stmt, builder);
   }
 
@@ -128,8 +139,8 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
   }
 
   // parse module body
-  for (const stmt of ast.body) {
-    if (stmt.type === "import") {
+  for (const stmt of ast.statements) {
+    if (stmt instanceof ImportStatement) {
       for (const imp of stmt.imported) {
         const impData = ctx.mod.imports[imp];
         const info = impData?.info;
@@ -137,7 +148,7 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
           const sig = extractFunctionSignature(info.signature);
           const [params, results, typeName] = sig;
           emitter.addImportWat(
-            `(import "${stmt.path}" "${imp}" (func $${imp} (type ${typeName})))`
+            `(import "${stmt.importPath}" "${imp}" (func $${imp} (type ${typeName})))`
           );
           emitter.addSignatureWat(
             emitFunctionSignature(typeName, params, results)
@@ -145,10 +156,10 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
         }
       }
     }
-    if (stmt.type === "let") {
+    if (stmt instanceof LetStatement) {
       emitGlobal(stmt, emitter);
     }
-    if (stmt.type === "function") {
+    if (stmt instanceof FunctionStatement) {
       emitFunction(stmt, emitter);
     }
   }

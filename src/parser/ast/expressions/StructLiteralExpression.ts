@@ -14,6 +14,7 @@ export class StructLiteralExpression implements ASTExpression {
   public name: string;
   public structId: number;
   public table: StructTable;
+  public location = 0;
 
   constructor(
     token: Token,

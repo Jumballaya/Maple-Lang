@@ -3,9 +3,11 @@ import type { ASTNode, ASTStatement } from "./types/ast.type";
 export class ASTProgram {
   public type: ASTNode["type"];
   public statements: Array<ASTStatement> = [];
+  public name: string;
 
-  constructor(type: ASTNode["type"]) {
+  constructor(type: ASTNode["type"], name: string) {
     this.type = type;
+    this.name = name;
   }
 
   public tokenLiteral(): string {

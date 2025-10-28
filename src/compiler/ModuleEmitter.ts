@@ -11,6 +11,17 @@ import { MapleModule } from "./MapleModule.js";
 import { FuncWriter } from "./writer/FuncWriter.js";
 import { Writer } from "./writer/Writer.js";
 import type { IWriter } from "./writer/writer.type.js";
+import { IntegerLiteralExpression } from "../parser/ast/expressions/IntegerLiteral.js";
+import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression.js";
+import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression.js";
+import { Identifier } from "../parser/ast/expressions/Identifier.js";
+import { IndexExpression } from "../parser/ast/expressions/IndexExpression.js";
+import { InfixExpression } from "../parser/ast/expressions/InfixExpression.js";
+import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression.js";
+import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression.js";
+import { CallExpression } from "../parser/ast/expressions/CallExpression.js";
+import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression.js";
+import { MemberExpression } from "../parser/ast/expressions/MemberExpression.js";
 
 export class ModuleEmitter {
   private writers: IWriter[] = [new Writer()];
@@ -108,77 +119,75 @@ export class ModuleEmitter {
   }
 
   public getExprType(expr: ASTExpression): "i32" | "f32" | "bool" | "void" {
-    switch (expr.type) {
-      case "integer_literal": {
-        return "i32";
+    if (expr instanceof IntegerLiteralExpression) {
+      return "i32";
+    }
+    if (expr instanceof FloatLiteralExpression) {
+      return "f32";
+    }
+    if (expr instanceof BooleanLiteralExpression) {
+      return "bool";
+    }
+    if (expr instanceof Identifier) {
+      const v = this.getVar(expr.tokenLiteral());
+      if (!v) {
+        throw new Error(`unknown variable: ${expr.tokenLiteral()}`);
       }
-      case "float_literal": {
-        return "f32";
-      }
-      case "bool_literal": {
+      const t = baseScalar(v.type);
+      return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
+    }
+    if (expr instanceof IndexExpression) {
+      const meta = this.getVar(expr.left.tokenLiteral());
+      const maple = meta?.type ?? "i32[]";
+      const elem = baseScalar(maple);
+      return elem === "f32" ? "f32" : elem === "bool" ? "bool" : "i32";
+    }
+    if (expr instanceof InfixExpression) {
+      const lt = this.getExprType(expr.left);
+      const rt = this.getExprType(expr.right);
+      if (cmpOps.has(expr.operator)) {
         return "bool";
       }
-      case "identifier": {
-        const v = this.getVar(expr.value);
-        if (!v) {
-          throw new Error(`unknown variable: ${expr.value}`);
-        }
-        const t = baseScalar(v.type);
-        return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
-      }
-      case "index": {
-        const meta = this.getVar(expr.identifier);
-        const maple = meta?.type ?? "i32[]";
-        const elem = baseScalar(maple);
-        return elem === "f32" ? "f32" : elem === "bool" ? "bool" : "i32";
-      }
-      case "binary": {
-        const lt = this.getExprType(expr.left);
-        const rt = this.getExprType(expr.right);
-        if (cmpOps.has(expr.op)) {
-          return "bool";
-        }
-        return lt === "f32" || rt === "f32" ? "f32" : "i32";
-      }
-      case "prefix": {
-        throw new Error(
-          `[get expression type] prefix expression not implemented`
-        );
-      }
-      case "postfix": {
-        throw new Error(
-          `[get expression type] postfix expression not implemented`
-        );
-      }
-      case "function_call": {
-        const internal = this.mod.functions[expr.function];
-        if (internal) {
-          return internal.result;
-        }
-        const imp = this.mod.imports[expr.function];
-        if (imp?.info && imp.info.kind === "func") {
-          const retType = imp.info.signature.split("_")[1];
-          if (retType === "v") {
-            return "void";
-          } else if (retType === "i") {
-            return "i32";
-          } else if (retType === "f") {
-            return "f32";
-          }
-        }
-        throw new Error(`[function call expression] unable to determine type`);
-      }
-      case "pointer_member":
-      case "member": {
-        throw new Error(
-          `[get expression type] member/pointer member expression not implemented`
-        );
-      }
-
-      default: {
-        return "i32";
-      }
+      return lt === "f32" || rt === "f32" ? "f32" : "i32";
     }
+    if (expr instanceof PrefixExpression) {
+      throw new Error(
+        `[get expression type] prefix expression not implemented`
+      );
+    }
+    if (expr instanceof PostfixExpression) {
+      throw new Error(
+        `[get expression type] postfix expression not implemented`
+      );
+    }
+    if (expr instanceof CallExpression) {
+      const internal = this.mod.functions[expr.func];
+      if (internal) {
+        return internal.result;
+      }
+      const imp = this.mod.imports[expr.func];
+      if (imp?.info && imp.info.kind === "func") {
+        const retType = imp.info.signature.split("_")[1];
+        if (retType === "v") {
+          return "void";
+        } else if (retType === "i") {
+          return "i32";
+        } else if (retType === "f") {
+          return "f32";
+        }
+      }
+      throw new Error(`[function call expression] unable to determine type`);
+    }
+    if (
+      expr instanceof PointerMemberExpression ||
+      expr instanceof MemberExpression
+    ) {
+      throw new Error(
+        `[get expression type] member/pointer member expression not implemented`
+      );
+    }
+
+    return "i32";
   }
 
   public resolveBinaryOpTypes(

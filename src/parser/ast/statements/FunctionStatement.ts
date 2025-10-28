@@ -7,10 +7,19 @@ export class FunctionStatement implements ASTStatement {
   public readonly type = "statement";
   public token: Token;
   public fnExpr: FunctionLiteralExpression;
+  public name: string;
+  public exported: boolean;
 
-  constructor(token: Token, fnExpr: FunctionLiteralExpression) {
+  constructor(
+    token: Token,
+    fnExpr: FunctionLiteralExpression,
+    name: string,
+    exported = false
+  ) {
     this.token = token;
     this.fnExpr = fnExpr;
+    this.name = name;
+    this.exported = exported;
   }
 
   public tokenLiteral(): string {

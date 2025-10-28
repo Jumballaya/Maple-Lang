@@ -15,15 +15,21 @@ export class StructStatement implements ASTStatement {
 
   public name: string;
   public members: Record<string, StructMember>;
+  public exported: boolean;
+  public size: number;
 
   constructor(
     token: Token,
     name: string,
-    members: Record<string, StructMember>
+    members: Record<string, StructMember>,
+    size: number,
+    exported = false
   ) {
     this.token = token;
     this.name = name;
     this.members = members;
+    this.size = size;
+    this.exported = exported;
   }
 
   public tokenLiteral(): string {

@@ -8,9 +8,9 @@ export function emitFunctionCall(
   emitter: ModuleEmitter
 ): string {
   const writer = new Writer();
-  writer.append(`(call $${expr.function} `);
+  writer.append(`(call $${expr.func} `);
 
-  for (const param of expr.params) {
+  for (const param of expr.args) {
     writer.append(emitExpression(param, emitter));
   }
   writer.append(")");
