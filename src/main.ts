@@ -1,11 +1,15 @@
-import type { StringToken } from "./lexer/token.types";
 import { Parser } from "./parser/Parser";
 
-const decoder = new TextDecoder();
-function decodeStringToken(token: StringToken): string {
-  const u8 = token.literal;
-  return decoder.decode(u8);
-}
+const usage = `Usage: maple <file> [optional_arg]
+Compiles a maple source code file into a .wasm file
+
+Options:
+  -o, --output <file>   Specify output file (default: <input>.wasm)
+
+Examples:
+  maple src/main.maple
+  maple src/main.maple -o app.wasm
+`;
 
 const example = `
 // this is the top comment
