@@ -1,0 +1,8 @@
+
+let numbers: f32[] = [1.1, 2.2, 3.3, 4.4, 5.5];
+
+fn display_numbers(): void {
+  for (let i: i32 = 0; i < 5; i += 1) {
+    print_f32(numbers[i]);
+  }
+}

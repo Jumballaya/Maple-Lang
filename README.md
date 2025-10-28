@@ -2,40 +2,53 @@
 
 WASM first programming language
 
-## Example
+## Installation
 
+- 1. You must have the following installed
+  - wat2wasm
+    - via [https://github.com/WebAssembly/wabt](WABT)
+  - wasm-ld
+    - via [https://github.com/emscripten-core/emscripten](Emscripten)
+- 2. Set up the project: `npm install`
+
+## Usage
+
+You can run via `npm start -- <your_entry_file>`
+
+```bash
+Usage: maple <file> [optional_arg]
+Compiles a maple source code file into a .wasm file
+
+Options:
+  -o, --output <file>   Specify output file (default: <input>.wasm)
+
+Examples:
+  maple src/main.maple
+  maple src/main.maple -o app.wasm
 ```
-import malloc, free from "memory"
-import init_screen, draw_screen, destroy_screen from "graphics"
 
-// from "graphics"
-//  struct Color {
-//    r: f32,
-//    g: f32,
-//    b: f32,
-//    a: f32
-//  }
-//
+## Examples
 
-fn create_color_array_and_fill(count: i32, r: f32, g: f32, b: f32, a: f32): Color[] {
-  let colors: Color[] = malloc(Color * count);
-  for (let i: i32 = 0; i < count; i++) {
-    colors[i]->r = r;
-    colors[i]->g = g;
-    colors[i]->b = b;
-    colors[i]->a = a;
-  }
+### Demo 1 -- imports
+
+- Files: `demo/demo1/main.maple`, `demo/demo1/test.maple`
+
+**main.maple**
+
+```ts
+import add from "./test.maple"
+
+export fn _start(a: i32, b: i32): i32 {
+  return add(a, b);
 }
-
-fn main(): void {
-  let w: i32 = 128;
-  let h: i32 = 128;
-  let colors: Color[] = create_color_array_and_fill(w * h, 0.86, 0.02, 0.14);
-  let screen: *GFXScreen = init_screen(w, h);
-
-  draw_screen(screen, colors);
-  destroy_screen(screen);
-  free(colors);
-}
-
 ```
+
+**test.maple**
+
+```ts
+export fn add(a: i32, b: i32):i32 {
+  return a + b;
+}
+```
+
+To compile, run: `npm start -- demo/demo1/main.maple` and you will find your `app.wasm` in the build folder that was created.

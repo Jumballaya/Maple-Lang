@@ -1,0 +1,5 @@
+import Color, create_Color, destry_Color from "color.maple"
+
+fn _start(): void {
+  
+}
