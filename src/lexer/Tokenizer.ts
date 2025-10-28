@@ -35,4 +35,12 @@ export class Tokenizer {
   public peekToken(): Token {
     return this._peekToken;
   }
+
+  public peekTokenIs(type: Token['type']): boolean {
+    return this._peekToken.type === type;
+  }
+
+  public curTokenIs(type: Token['type']): boolean {
+    return this._curToken.type === type;
+  }
 }

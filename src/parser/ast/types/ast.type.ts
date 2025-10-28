@@ -19,3 +19,7 @@ export type PrefixParseFn = {
 export type InfixParseFn = {
   (expr: ASTExpression): ASTExpression | null;
 };
+
+export type PostfixParseFn = {
+  (expr: ASTExpression): ASTExpression | null;
+};
