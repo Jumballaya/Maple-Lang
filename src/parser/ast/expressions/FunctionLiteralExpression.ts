@@ -4,7 +4,7 @@ import { BlockStatement } from "../statements/BlockStatement";
 import { ASTExpression } from "../types/ast.type";
 import { Identifier } from "./Identifier";
 
-type FunctionParam = {
+export type FunctionParam = {
   identifier: Identifier;
   type: string;
 };

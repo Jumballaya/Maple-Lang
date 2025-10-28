@@ -6,12 +6,10 @@ export class Identifier implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public typeAnnotation: string;
-  public symbolId: number;
 
-  constructor(token: Token, typeAnnotation: string, symbolId: number) {
+  constructor(token: Token, typeAnnotation: string) {
     this.token = token;
     this.typeAnnotation = typeAnnotation;
-    this.symbolId = symbolId;
   }
 
   public tokenLiteral(): string {

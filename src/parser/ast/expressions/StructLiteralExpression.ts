@@ -12,19 +12,16 @@ export class StructLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public name: string;
-  public structId: number;
   public table: StructTable;
   public location = 0;
 
   constructor(
     token: Token,
     name: string,
-    structId: number,
     table: StructTable
   ) {
     this.token = token;
     this.name = name;
-    this.structId = structId;
     this.table = table;
   }
 
