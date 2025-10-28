@@ -10,8 +10,7 @@ export function asExpr(x: string | number): ASTExpression {
   if (typeof x === "string") {
     return new Identifier(
       { type: "Identifier", literal: x, col: 0, line: 0, end: 0, start: 0 },
-      "i32",
-      0
+      "i32"
     );
   }
   if (Number.isInteger(x)) {

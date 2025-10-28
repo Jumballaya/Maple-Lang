@@ -1,31 +1,56 @@
-import { FloatToken, IdentToken, Token } from "../lexer/token.types";
+import { FloatToken, IdentToken, Token, VoidToken } from "../lexer/token.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import { ASTProgram } from "./ast/ASTProgram";
 import { BooleanLiteralExpression } from "./ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "./ast/expressions/CallExpression";
 import { FloatLiteralExpression } from "./ast/expressions/FloatLiteralExpression";
-import { FunctionLiteralExpression, FunctionParam } from "./ast/expressions/FunctionLiteralExpression";
+import {
+  FunctionLiteralExpression,
+  FunctionParam,
+} from "./ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "./ast/expressions/Identifier";
 import { InfixExpression } from "./ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
 import { PrefixExpression } from "./ast/expressions/PrefixExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
+import { FunctionStatement } from "./ast/statements/FunctionStatement";
 import { IfStatement } from "./ast/statements/IfStatement";
+import { ImportStatement } from "./ast/statements/ImportStatement";
 import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
-import { ASTExpression, ASTStatement, InfixParseFn, PostfixParseFn, PrefixParseFn } from "./ast/types/ast.type";
-import { CALL, EQUALS, LESSGREATER, LOWEST, ParserPrecedence, PREFIX, PRODUCT, SUM } from "./ast/types/parser.type";
+import {
+  ASTExpression,
+  ASTStatement,
+  InfixParseFn,
+  PostfixParseFn,
+  PrefixParseFn,
+} from "./ast/types/ast.type";
+import { BUILTIN_TYPES } from "./ast/types/builtin_types";
+import {
+  CALL,
+  EQUALS,
+  LESSGREATER,
+  LOWEST,
+  ParserPrecedence,
+  PREFIX,
+  PRODUCT,
+  SUM,
+} from "./ast/types/parser.type";
 
 export class Parser {
   private tokenizer: Tokenizer;
-  private errors: string[] = [];
+  public errors: Array<{ message: string; token: Token }> = [];
 
+  private prefixParseFns: Map<Token["type"], PrefixParseFn> = new Map();
+  private infixParseFns: Map<Token["type"], InfixParseFn> = new Map();
+  private postfixParseFns: Map<Token["type"], PostfixParseFn> = new Map();
 
-  private prefixParseFns: Map<Token['type'], PrefixParseFn> = new Map();
-  private infixParseFns: Map<Token['type'], InfixParseFn> = new Map();
-  private postfixParseFns: Map<Token['type'], PostfixParseFn> = new Map();
+  private identifierTypes: Map<string, string> = new Map();
 
-  private precendences: Partial<Record<Token['type'], ParserPrecedence>> = {
+  private locals: string[] = []; // all of the variables local to the current scope
+
+  private precendences: Partial<Record<Token["type"], ParserPrecedence>> = {
     Assign: EQUALS,
     NotEquals: EQUALS,
     LessThan: LESSGREATER,
@@ -40,34 +65,35 @@ export class Parser {
   constructor(source: string) {
     this.tokenizer = new Tokenizer(source);
 
-
     // Prefix
-    this.registerPrefix('Identifier', this.parseIdentifier.bind(this));
-    this.registerPrefix('FloatLiteral', this.parseFloatLiteral.bind(this));
-    this.registerPrefix('Bang', this.parsePrefixExpression.bind(this));
-    this.registerPrefix('Minus', this.parsePrefixExpression.bind(this));
-    this.registerPrefix('True', this.parseBooleanLiteral.bind(this));
-    this.registerPrefix('False', this.parseBooleanLiteral.bind(this));
-    this.registerPrefix('LParen', this.parseGroupedExpression.bind(this));
-    this.registerPrefix('Func', this.parseFunctionLiteral.bind(this));
+    this.registerPrefix("Identifier", this.parseIdentifier.bind(this));
+    this.registerPrefix("FloatLiteral", this.parseFloatLiteral.bind(this));
+    this.registerPrefix("IntegerLiteral", this.parseIntegerLiteral.bind(this));
+
+    this.registerPrefix("Bang", this.parsePrefixExpression.bind(this));
+    this.registerPrefix("Minus", this.parsePrefixExpression.bind(this));
+    this.registerPrefix("True", this.parseBooleanLiteral.bind(this));
+    this.registerPrefix("False", this.parseBooleanLiteral.bind(this));
+    this.registerPrefix("LParen", this.parseGroupedExpression.bind(this));
+    this.registerPrefix("Func", this.parseFunctionLiteral.bind(this));
 
     // Infix
-    this.registerInfix('Plus', this.parseInfixExpression.bind(this));
-    this.registerInfix('Minus', this.parseInfixExpression.bind(this));
-    this.registerInfix('Slash', this.parseInfixExpression.bind(this));
-    this.registerInfix('Star', this.parseInfixExpression.bind(this));
-    this.registerInfix('Equals', this.parseInfixExpression.bind(this));
-    this.registerInfix('NotEquals', this.parseInfixExpression.bind(this));
-    this.registerInfix('LessThan', this.parseInfixExpression.bind(this));
-    this.registerInfix('GreaterThan', this.parseInfixExpression.bind(this));
-    this.registerInfix('LParen', this.parseCallExpression.bind(this));
+    this.registerInfix("Plus", this.parseInfixExpression.bind(this));
+    this.registerInfix("Minus", this.parseInfixExpression.bind(this));
+    this.registerInfix("Slash", this.parseInfixExpression.bind(this));
+    this.registerInfix("Star", this.parseInfixExpression.bind(this));
+    this.registerInfix("Equals", this.parseInfixExpression.bind(this));
+    this.registerInfix("NotEquals", this.parseInfixExpression.bind(this));
+    this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
+    this.registerInfix("GreaterThan", this.parseInfixExpression.bind(this));
+    this.registerInfix("LParen", this.parseCallExpression.bind(this));
   }
 
   public parse(name: string): ASTProgram {
-    const program = new ASTProgram('expression', name);
+    const program = new ASTProgram("expression", name);
 
-    while (this.tokenizer.curToken().type !== 'EOF') {
-      const statement = this.parseStatement();
+    while (this.tokenizer.curToken().type !== "EOF") {
+      const statement = this.parseStatement(false, true);
       if (statement !== null) {
         program.statements.push(statement);
       }
@@ -77,17 +103,47 @@ export class Parser {
     return program;
   }
 
-  private parseStatement(): ASTStatement | null {
-    switch (this.tokenizer.curToken().type) {
-      case 'Let': {
-        return this.parseLetStatement();
+  private parseStatement(
+    exported = false,
+    topLevel = false
+  ): ASTStatement | null {
+    const token = this.tokenizer.curToken();
+    switch (token.type) {
+      case "Identifier": {
+        if (!topLevel) {
+          this.errors.push({
+            message: "Parser: Imports/Exports must be top-level only",
+            token,
+          });
+          return null;
+        }
+        if (token.literal === "export") {
+          this.tokenizer.nextToken();
+          return this.parseStatement(true, true);
+        }
+        if (token.literal === "import") {
+          return this.parseImportStatement();
+        }
+        this.errors.push({
+          message: "Parser: No idenitifier expression at the top level",
+          token,
+        });
+        return null;
       }
 
-      case 'Return': {
+      case "Func": {
+        return this.parseFunctionStatement(exported);
+      }
+
+      case "Let": {
+        return this.parseLetStatement(exported);
+      }
+
+      case "Return": {
         return this.parseReturnStatement();
       }
 
-      case 'If': {
+      case "If": {
         return this.parseIfStatement();
       }
 
@@ -97,23 +153,111 @@ export class Parser {
     }
   }
 
-  private parseLetStatement(): ASTStatement | null {
+  private parseFunctionStatement(exported = false): ASTStatement | null {
     const statementToken = this.tokenizer.curToken();
-    if (!this.expectPeek('Identifier')) {
+    this.tokenizer.nextToken(); // skip past 'fn' token
+
+    // Get identifier
+    if (!this.tokenizer.curTokenIs("Identifier")) {
+      return null;
+    }
+    const identToken = this.tokenizer.curToken();
+    const ident = identToken.literal.toString();
+
+    // Get the function expression: (): {}
+    const expr =
+      this.parseFunctionLiteral() as FunctionLiteralExpression | null;
+
+    if (!expr) {
+      return null;
+    }
+
+    this.identifierTypes.set(ident, expr.returnType);
+
+    return new FunctionStatement(statementToken, expr, ident, exported);
+  }
+
+  private parseImportStatement(): ASTStatement | null {
+    const tok = this.tokenizer.curToken();
+    this.tokenizer.nextToken(); // consume the 'import' token
+
+    if (!this.tokenizer.curTokenIs("Identifier")) {
+      this.errors.push({
+        message: "Parser: no identifier found for import statement",
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+    const imported: string[] = [];
+    const identToken = this.tokenizer.curToken();
+    const ident = identToken.literal.toString();
+    imported.push(ident);
+
+    while (this.tokenizer.peekTokenIs("Comma")) {
+      this.tokenizer.nextToken(); // get the to comma
+      this.tokenizer.nextToken(); // consume the comma
+      const identToken = this.tokenizer.curToken();
+      const ident = identToken.literal.toString();
+      imported.push(ident);
+    }
+
+    for (const imp of imported) {
+      this.identifierTypes.set(imp, "i32"); // set dummy value for now
+    }
+
+    if (!this.tokenizer.peekTokenIs("Identifier")) {
+      this.errors.push({
+        message: "Parser: keyword 'from' missing in import statement",
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // consume last comma or first import
+
+    const importToken = this.tokenizer.curToken() as IdentToken;
+    if (importToken.literal !== "from") {
+      this.errors.push({
+        message: `Parser: keyword 'from' missing in import statement, got: ${importToken.literal}`,
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // consume the 'from' identifier
+
+    const pathToken = this.tokenizer.curToken();
+    if (pathToken.type !== "StringLiteral") {
+      this.errors.push({
+        message: `Parser: import path must be a string`,
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+
+    const importPath = new TextDecoder().decode(pathToken.literal);
+    return new ImportStatement(tok, imported, importPath);
+  }
+
+  private parseLetStatement(exported = false): ASTStatement | null {
+    const statementToken = this.tokenizer.curToken();
+    if (!this.expectPeek("Identifier")) {
       return null;
     }
     const identToken = this.tokenizer.curToken();
 
-    let typeAnn = '';
-    if (this.tokenizer.peekTokenIs('Colon')) {
+    let typeAnn = "";
+    if (this.tokenizer.peekTokenIs("Colon")) {
       this.tokenizer.nextToken();
+      this.tokenizer.nextToken(); // consume colon
       const t = this.parseTypeNode();
       if (!t) return null;
       typeAnn = t;
     }
     const identifier = new Identifier(identToken, typeAnn);
+    this.identifierTypes.set(identToken.literal.toString(), typeAnn);
 
-    if (!this.expectPeek('Assign')) {
+    if (!this.expectPeek("Assign")) {
       return null;
     }
 
@@ -121,14 +265,18 @@ export class Parser {
 
     const value = this.parseExpression(LOWEST);
 
-    if (this.tokenizer.peekTokenIs('Semicolon')) {
+    if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
     }
 
-    const exported = true; // @TODO: properly parse export
-
     // @TODO: keep a map of ident types to use here
-    const letStmt = new LetStatement(statementToken, identifier, '', value, exported);
+    const letStmt = new LetStatement(
+      statementToken,
+      identifier,
+      "",
+      value,
+      exported
+    );
     letStmt.typeAnnotation = typeAnn;
     return letStmt;
   }
@@ -139,7 +287,7 @@ export class Parser {
 
     const returnValue = this.parseExpression(LOWEST);
 
-    if (this.tokenizer.peekTokenIs('Semicolon')) {
+    if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
     }
 
@@ -151,7 +299,10 @@ export class Parser {
 
     this.tokenizer.nextToken();
 
-    while (!this.tokenizer.curTokenIs('RBrace') && !this.tokenizer.curTokenIs('EOF')) {
+    while (
+      !this.tokenizer.curTokenIs("RBrace") &&
+      !this.tokenizer.curTokenIs("EOF")
+    ) {
       const stmt = this.parseStatement();
       if (stmt !== null) {
         block.statements.push(stmt);
@@ -167,7 +318,7 @@ export class Parser {
 
     const expression = this.parseExpression(LOWEST);
 
-    if (this.tokenizer.peekTokenIs('Semicolon')) {
+    if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
     }
 
@@ -183,7 +334,7 @@ export class Parser {
     let leftExpr = prefix();
 
     while (
-      !this.tokenizer.peekTokenIs('Semicolon') &&
+      !this.tokenizer.peekTokenIs("Semicolon") &&
       precendence < this.peekPrecedence()
     ) {
       const infix = this.infixParseFns.get(this.tokenizer.peekToken().type);
@@ -209,14 +360,14 @@ export class Parser {
 
   private parseInfixExpression(left: ASTExpression): ASTExpression {
     const exprToken = this.tokenizer.curToken();
-    const op = this.tokenizer.curToken().literal;
+    const op = this.tokenizer.curToken().literal.toString();
     const precedence = this.curPrecedence();
     this.tokenizer.nextToken();
     const right = this.parseExpression(precedence);
     if (!right) {
       const message = `Parser: Fatal: unable to parse right hand side of infix operator ${op}`;
-      this.errors.push(message);
-      throw new Error(this.errors.join('\n'));
+      this.errors.push({ message, token: exprToken });
+      throw new Error(this.errors.join("\n"));
     }
     return new InfixExpression(exprToken, left, op, right);
   }
@@ -224,7 +375,7 @@ export class Parser {
   private parseGroupedExpression(): ASTExpression | null {
     this.tokenizer.nextToken();
     const expr = this.parseExpression(LOWEST);
-    if (!this.expectPeek('RParen')) {
+    if (!this.expectPeek("RParen")) {
       return null;
     }
     return expr;
@@ -232,24 +383,28 @@ export class Parser {
 
   // @TODO: Keep a map of identifiers so I can map the type here
   private parseIdentifier(): ASTExpression {
-    return new Identifier(this.tokenizer.curToken());
+    const tok = this.tokenizer.curToken();
+    const literal = tok.literal;
+    const type = this.getType(literal.toString());
+
+    return new Identifier(tok, type);
   }
 
   private parseIfStatement(): ASTStatement | null {
     const exprToken = this.tokenizer.curToken();
 
-    if (!this.expectPeek('LParen')) {
+    if (!this.expectPeek("LParen")) {
       return null;
     }
 
     this.tokenizer.nextToken();
     const condition = this.parseExpression(LOWEST);
 
-    if (!this.expectPeek('RParen')) {
+    if (!this.expectPeek("RParen")) {
       return null;
     }
 
-    if (!this.expectPeek('LBrace')) {
+    if (!this.expectPeek("LBrace")) {
       return null;
     }
 
@@ -259,10 +414,10 @@ export class Parser {
 
     const consequence = this.parseBlockStatement();
     const expression = new IfStatement(exprToken, condition, consequence);
-    if (this.tokenizer.peekTokenIs('Else')) {
+    if (this.tokenizer.peekTokenIs("Else")) {
       this.tokenizer.nextToken();
 
-      if (!this.expectPeek('LBrace')) {
+      if (!this.expectPeek("LBrace")) {
         return null;
       }
 
@@ -273,13 +428,17 @@ export class Parser {
   }
 
   private parseCallExpression(func: ASTExpression): ASTExpression {
-    return new CallExpression(this.tokenizer.curToken(), func, this.parseCallArguments());
+    return new CallExpression(
+      this.tokenizer.curToken(),
+      func.tokenLiteral(),
+      this.parseCallArguments()
+    );
   }
 
   private parseCallArguments(): ASTExpression[] {
     const args: ASTExpression[] = [];
 
-    if (this.tokenizer.peekTokenIs('RParen')) {
+    if (this.tokenizer.peekTokenIs("RParen")) {
       this.tokenizer.nextToken();
       return args;
     }
@@ -288,7 +447,7 @@ export class Parser {
     const expr = this.parseExpression(LOWEST);
     if (expr) args.push(expr);
 
-    while (this.tokenizer.peekTokenIs('Comma')) {
+    while (this.tokenizer.peekTokenIs("Comma")) {
       this.tokenizer.nextToken();
       this.tokenizer.nextToken();
 
@@ -296,7 +455,7 @@ export class Parser {
       if (expr) args.push(expr);
     }
 
-    if (!this.expectPeek('RParen')) {
+    if (!this.expectPeek("RParen")) {
       return [];
     }
 
@@ -305,55 +464,78 @@ export class Parser {
 
   private parseFloatLiteral(): ASTExpression | null {
     const literalToken = this.tokenizer.curToken();
-    if (literalToken.type !== 'FloatLiteral') {
+    if (literalToken.type !== "FloatLiteral") {
       this.tokenizer.nextToken();
       return null;
     }
     const value = literalToken.literal;
     if (isNaN(value)) {
-      const message = `Parser: Could not parse ${this.tokenizer.curToken().literal} as a number`;
-      this.errors.push(message);
+      const message = `Parser: Could not parse ${
+        this.tokenizer.curToken().literal
+      } as a number`;
+      this.errors.push({ message, token: this.tokenizer.curToken() });
       return null;
     }
     return new FloatLiteralExpression(literalToken, value);
   }
 
+  private parseIntegerLiteral(): ASTExpression | null {
+    const literalToken = this.tokenizer.curToken();
+    if (literalToken.type !== "IntegerLiteral") {
+      this.tokenizer.nextToken();
+      return null;
+    }
+    const value = literalToken.literal;
+    if (isNaN(value)) {
+      const message = `Parser: Could not parse ${
+        this.tokenizer.curToken().literal
+      } as a number`;
+      this.errors.push({ message, token: this.tokenizer.curToken() });
+      return null;
+    }
+    return new IntegerLiteralExpression(literalToken, value);
+  }
+
   private parseBooleanLiteral(): ASTExpression {
-    return new BooleanLiteralExpression(this.tokenizer.curToken(), this.tokenizer.curTokenIs('True'));
+    return new BooleanLiteralExpression(
+      this.tokenizer.curToken(),
+      this.tokenizer.curTokenIs("True")
+    );
   }
 
   private parseFunctionLiteral(): ASTExpression | null {
     const literalToken = this.tokenizer.curToken();
 
-    if (!this.expectPeek('LParen')) {
+    if (!this.expectPeek("LParen")) {
       return null;
     }
 
     const parameters = this.parseFunctionParameters();
 
-    let returnType: string = '';
-    if (this.tokenizer.peekTokenIs('Colon')) {
-      this.tokenizer.nextToken();
-      const t = this.parseTypeNode();
-      if (!t) {
-        return null;
-      }
-      returnType = t;
+    if (!this.expectPeek("Colon")) {
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume the colon
+
+    const t = this.parseTypeNode();
+    if (!t) {
+      return null;
     }
 
-    if (!this.expectPeek('LBrace')) {
+    if (!this.expectPeek("LBrace")) {
       return null;
     }
 
     const body = this.parseBlockStatement();
 
-    return new FunctionLiteralExpression(literalToken, parameters, body, returnType);
+    this.deleteLocals(); // deletes all function locals
+    return new FunctionLiteralExpression(literalToken, parameters, body, t);
   }
 
   private parseFunctionParameters(): FunctionParam[] {
     const params: FunctionParam[] = [];
 
-    if (this.tokenizer.peekTokenIs('RParen')) {
+    if (this.tokenizer.peekTokenIs("RParen")) {
       this.tokenizer.nextToken();
       return params;
     }
@@ -364,14 +546,14 @@ export class Parser {
       params.push(first);
     }
 
-    while (this.tokenizer.peekTokenIs('Comma')) {
+    while (this.tokenizer.peekTokenIs("Comma")) {
       this.tokenizer.nextToken();
       this.tokenizer.nextToken();
       const p = this.parseTypedParameter();
       if (p) params.push(p);
     }
 
-    if (!this.expectPeek('RParen')) {
+    if (!this.expectPeek("RParen")) {
       return [];
     }
 
@@ -379,39 +561,42 @@ export class Parser {
   }
 
   private parseTypedParameter(): FunctionParam | null {
-    if (this.tokenizer.curToken().type !== 'Identifier') {
-      this.peekError('Identifier');
+    if (this.tokenizer.curToken().type !== "Identifier") {
+      this.peekError("Identifier");
       return null;
     }
     const identToken = this.tokenizer.curToken();
-    if (!this.expectPeek('Colon')) {
+    if (!this.expectPeek("Colon")) {
       return null;
     }
-    const typeNode = this.parseTypeNode();
-    if (!typeNode) {
+    this.tokenizer.nextToken(); // consume the colon
+    const type = this.parseTypeNode();
+    if (!type) {
       return null;
     }
-    const ident = new Identifier(identToken, typeNode)
-    ident.typeAnnotation = typeNode;
+    const ident = new Identifier(identToken, type);
+    const varName = identToken.literal.toString();
+    this.identifierTypes.set(varName, type);
+    this.locals.push(varName);
     return {
       identifier: ident,
-      type: typeNode,
+      type,
     };
   }
 
-  private registerPrefix(type: Token['type'], fn: PrefixParseFn) {
+  private registerPrefix(type: Token["type"], fn: PrefixParseFn) {
     this.prefixParseFns.set(type, fn);
   }
 
-  private registerInfix(type: Token['type'], fn: InfixParseFn) {
+  private registerInfix(type: Token["type"], fn: InfixParseFn) {
     this.infixParseFns.set(type, fn);
   }
 
-  private registerPostfix(type: Token['type'], fn: PostfixParseFn) {
+  private registerPostfix(type: Token["type"], fn: PostfixParseFn) {
     this.postfixParseFns.set(type, fn);
   }
 
-  private expectPeek(type: Token['type']): boolean {
+  private expectPeek(type: Token["type"]): boolean {
     if (this.tokenizer.peekTokenIs(type)) {
       this.tokenizer.nextToken();
       return true;
@@ -431,24 +616,54 @@ export class Parser {
   }
 
   private parseTypeNode(): string | null {
-    if (!this.expectPeek('Identifier')) {
-      this.errors.push(`Parser: expected type.`);
-      return null;
+    if (this.tokenizer.curTokenIs("Identifier")) {
+      const curToken = this.tokenizer.curToken() as IdentToken;
+      return curToken.literal;
     }
-    const curToken = this.tokenizer.curToken() as IdentToken;
-    return curToken.literal;
+
+    for (let i = 0; i < BUILTIN_TYPES.length; i++) {
+      if (this.tokenizer.curTokenIs(BUILTIN_TYPES[i]!)) {
+        const curToken = this.tokenizer.curToken();
+        return curToken.literal.toString();
+      }
+    }
+
+    this.errors.push({
+      message: `Parser: Expected type, none found`,
+      token: this.tokenizer.curToken(),
+    });
+    return null;
+  }
+
+  private getType(ident: string): string {
+    const type = this.identifierTypes.get(ident);
+    if (!type) {
+      this.errors.push({
+        message: `Parser: Identifier not found: ${ident}`,
+        token: this.tokenizer.curToken(),
+      });
+      return "";
+    }
+    return type;
   }
 
   // Errors
-  private peekError(type: Token['type']) {
+  private peekError(type: Token["type"]) {
     const peekType = this.tokenizer.peekToken().type;
     const message = `Parser: Expected next token to be ${type}, got ${peekType}`;
-    this.errors.push(message);
+    this.errors.push({ message, token: this.tokenizer.peekToken() });
   }
 
-  private noPrefixParseFnError(type: Token['type']) {
+  private noPrefixParseFnError(type: Token["type"]) {
     const message = `Parser: No prefix parse function found for ${type}.`;
-    this.errors.push(message);
+    this.errors.push({ message, token: this.tokenizer.curToken() });
   }
 
+  // Function State
+  private deleteLocals() {
+    for (const l of this.locals) {
+      this.identifierTypes.delete(l);
+    }
+    this.locals.length = 0;
+  }
 }

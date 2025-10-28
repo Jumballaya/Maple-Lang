@@ -6,6 +6,7 @@ import path from "path";
 import type { MapleModule } from "./MapleModule.js";
 import { ASTProgram } from "../parser/ast/ASTProgram.js";
 import { stdlib } from "./stdlib.js";
+import { Parser } from "../parser/Parser.js";
 
 //
 //
@@ -41,15 +42,40 @@ import { stdlib } from "./stdlib.js";
 //    - wasm-ld all .o files in the build folder and generate the .wasm file
 //
 
-async function getAST(fp: string): Promise<ASTProgram> {
+async function openFile(fp: string): Promise<string> {
   const res = await readFile(fp);
-  const txt = res.toString();
-  const json = JSON.parse(txt) as ASTProgram;
-  return json;
+  return res.toString();
 }
 
-export async function compiler(entryPoint: string, cwd: string) {
-  const entryAST = await getAST(entryPoint);
+function parseFile(name: string, text: string): ASTProgram | null {
+  const p = new Parser(text);
+  const ast = p.parse(name);
+  if (p.errors.length) {
+    for (const error of p.errors) {
+      const { message, token } = error;
+      const { line, col } = token;
+      console.error(
+        `Maple Error:\nline: ${line}, col: ${col}\nMessage: "${message}"\nToken: "${token.literal}"\n`
+      );
+    }
+  }
+
+  if (p.errors.length) {
+    return null;
+  }
+  return ast;
+}
+
+export async function compiler(
+  entryPoint: string,
+  entryMod: string,
+  cwd: string
+) {
+  const entrySrc = await openFile(entryPoint);
+  const entryAST = parseFile(entryMod, entrySrc);
+  if (!entryAST) {
+    return;
+  }
   const data = extractModuleMeta(entryAST);
 
   const stdLibList: Record<string, ModuleMeta> = {};
@@ -64,7 +90,10 @@ export async function compiler(entryPoint: string, cwd: string) {
       stdLibList[imp.module] = stdMod;
       continue;
     }
-    const userMod = await getAST(path.join(cwd, imp.module));
+    const userMod = parseFile(
+      imp.module,
+      await openFile(path.join(cwd, imp.module))
+    );
     if (!userMod) {
       throw new Error(`unable to find module: ${imp.module}`);
     }

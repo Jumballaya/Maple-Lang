@@ -1,4 +1,5 @@
-import { Parser } from "./parser/Parser";
+import path from "path";
+import { compiler } from "./compiler/compiler";
 
 const usage = `Usage: maple <file> [optional_arg]
 Compiles a maple source code file into a .wasm file
@@ -11,25 +12,14 @@ Examples:
   maple src/main.maple -o app.wasm
 `;
 
-const example = `
-// this is the top comment
-struct string {
-  len: i32,
-  data: *u8,
-}
-
-fn print_string2(str: *string): void {
-  print(str);
-}
-
-fn main(): void {
-  message: string = "Hello World!";
-  print_string2(&message);
-}
-`;
-
 async function main() {
-  const parser = new Parser(example);
-  console.log(parser.parse("main"));
+  const entry = process.argv[2];
+  if (!entry) {
+    console.log(usage);
+    return;
+  }
+
+  const parsed = path.parse(entry);
+  compiler(entry, parsed.name, parsed.dir);
 }
 main();
