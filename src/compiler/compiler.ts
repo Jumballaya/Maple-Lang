@@ -173,9 +173,9 @@ export async function compiler(
     instance: WebAssembly.Instance;
   };
   const module = wasm.instance.exports as {
-    _start: (n: number) => number;
+    _start: (a: number, b: number) => number;
   };
-  console.log(module._start(14.12312));
+  console.log(module._start(14, 32));
 }
 
 function run(cmd: string): Promise<void> {
