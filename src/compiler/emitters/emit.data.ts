@@ -175,7 +175,7 @@ function numToLittleEndian(ns: number[], type: string) {
   }, "");
 }
 
-export function alignup(value: number, alignment = 8) {
+export function alignup(value: number, alignment = 4) {
   if (alignment <= 0) {
     throw new Error(`Alignment must be a positive integer`);
   }

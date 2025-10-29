@@ -19,9 +19,10 @@ import { StructLiteralExpression } from "../../parser/ast/expressions/StructLite
 import { StructStatement } from "../../parser/ast/statements/StructStatement.js";
 import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
 import { ImportStatement } from "../../parser/ast/statements/ImportStatement.js";
+import { emitNumberGet } from "./expression/core.js";
 
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
-  const name = stmt.identifier;
+  const name = stmt.identifier.tokenLiteral();
   const type = stmt.typeAnnotation;
   const value = emitExpression(stmt.expression!, emitter);
   const expr = stmt.expression;
@@ -32,8 +33,7 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
     expr instanceof ArrayLiteralExpression ||
     expr instanceof StructLiteralExpression
   ) {
-    // const num = emitNumberGet(expr.location, "i32");
-    const num = `(i32.const 10)`;
+    const num = emitNumberGet(expr.location, "i32");
     emitter.addGlobalWat(
       `(global $${name} (mut ${valueTypeToWasm(type)}) ${num})`
     );
@@ -43,7 +43,7 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
     return;
   }
 
-  // everything else
+  // // everything else
   emitter.addGlobalWat(`(global $${name} (mut ${type}) ${value})`);
 }
 

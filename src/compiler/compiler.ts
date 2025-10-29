@@ -183,7 +183,7 @@ export async function compiler(
   const memory = module.memory;
 
   const ptr = module._start();
-  const dv = new Int32Array(memory.buffer, ptr << 2, 3);
+  const dv = new Int32Array(memory.buffer, ptr, 3);
   console.log(dv);
 }
 

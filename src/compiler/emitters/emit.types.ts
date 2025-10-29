@@ -6,6 +6,9 @@ export function baseScalar(t: string): string {
 }
 
 export function valueTypeToWasm(t: string): "i32" | "f32" {
+  if (t.startsWith("*") || t.endsWith("[]")) {
+    return "i32";
+  }
   const base = baseScalar(t);
   if (base === "f32") return "f32";
   return "i32"; // i8/u8/i16/u16/i32/u32/bool/ptr/arrays => i32 stack lane

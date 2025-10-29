@@ -19,7 +19,7 @@ export class ModuleBuilder {
   private structs: Record<string, StructData> = {};
   private data: Array<ModuleDataMeta> = [];
   private stringPool: Record<string, number> = {};
-  private dataPtr = 256;
+  private dataPtr = 1024;
 
   constructor(name: string) {
     this.name = name;
@@ -96,10 +96,10 @@ export class ModuleBuilder {
   //
 
   // Reserve bytes in the data section, return the start address
-  public dataAlloc(size: number, align = 8): number {
+  public dataAlloc(size: number, align = 4): number {
     const addr = this.dataPtr;
     const pad = alignup(size, align);
-    this.dataPtr += size + pad;
+    this.dataPtr += pad;
     return addr;
   }
 
