@@ -1,19 +1,5 @@
-import malloc, free from "memory"
-
 export struct Color {
   r: i32,
   g: i32,
   b: i32,
 };
-
-export fn create_Color(r: i32, g: i32, b: i32): Color {
-  let c: *Color = malloc(Color);
-  c->r = r;
-  c->g = g;
-  c->b = b;
-  return c;
-}
-
-export fn destry_Color(c: Color) {
-  free(c);
-}
