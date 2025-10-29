@@ -1,5 +1,5 @@
 import Color from "color.maple"
 
-fn _start(): void {
-  
+fn _start(): i32 {
+  return 1024;
 }

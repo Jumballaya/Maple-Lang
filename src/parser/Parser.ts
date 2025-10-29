@@ -1,3 +1,5 @@
+import { sizeofType } from "../compiler/emitters/emit.types";
+import { StructMember } from "../compiler/emitters/emitter.types";
 import { FloatToken, IdentToken, Token, VoidToken } from "../lexer/token.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import { ASTProgram } from "./ast/ASTProgram";
@@ -20,6 +22,7 @@ import { IfStatement } from "./ast/statements/IfStatement";
 import { ImportStatement } from "./ast/statements/ImportStatement";
 import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
+import { StructStatement } from "./ast/statements/StructStatement";
 import {
   ASTExpression,
   ASTStatement,
@@ -140,6 +143,10 @@ export class Parser {
         return this.parseLetStatement(exported);
       }
 
+      case "Struct": {
+        return this.parseStructStatement(exported);
+      }
+
       case "Return": {
         return this.parseReturnStatement();
       }
@@ -238,6 +245,80 @@ export class Parser {
 
     const importPath = new TextDecoder().decode(pathToken.literal);
     return new ImportStatement(tok, imported, importPath);
+  }
+
+  private parseStructStatement(exported = false): ASTStatement | null {
+    const statementToken = this.tokenizer.nextToken(); // consume 'struct' token
+    if (!this.tokenizer.curTokenIs("Identifier")) {
+      return null;
+    }
+    const identToken = this.tokenizer.curToken();
+    const name = identToken.literal.toString();
+
+    if (!this.expectPeek("LBrace")) {
+      return null;
+    }
+
+    const members: Record<string, StructMember> = {};
+    let size = 0;
+
+    while (!this.tokenizer.peekTokenIs("RBrace")) {
+      if (!this.expectPeek("Identifier")) {
+        return null;
+      }
+      const firstIdent = this.tokenizer.curToken();
+      const firstName = firstIdent.literal.toString();
+      if (!this.expectPeek("Colon")) {
+        return null;
+      }
+      this.tokenizer.nextToken();
+      const firstType = this.parseTokenType(this.tokenizer.curToken());
+      const sz = sizeofType(firstType);
+      members[firstName] = {
+        name: firstName,
+        offset: size,
+        size: sz,
+        type: firstType,
+      };
+      size += sz;
+
+      if (!this.expectPeek("Comma")) {
+        return null;
+      }
+    }
+
+    this.tokenizer.nextToken();
+
+    return new StructStatement(statementToken, name, members, size, exported);
+  }
+
+  private parseTokenType(token: Token): string {
+    switch (token.type) {
+      case "Identifier": {
+        return "i32"; // struct pointer
+      }
+      case "StringLiteral": {
+        return "i32"; // string pointer
+      }
+      case "Boolean": {
+        return "i32";
+      }
+      case "FloatLiteral": {
+        return "f32";
+      }
+      case "i32":
+      case "i16":
+      case "i8":
+      case "u32":
+      case "u16":
+      case "u8": {
+        return "i32";
+      }
+      case "f32": {
+        return "f32";
+      }
+    }
+    return "";
   }
 
   private parseLetStatement(exported = false): ASTStatement | null {

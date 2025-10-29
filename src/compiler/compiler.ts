@@ -104,6 +104,8 @@ export async function compiler(
     pass1[imp.module] = { data: extractModuleMeta(userMod), ast: userMod };
   }
 
+  console.log(pass1["color.maple"]!.data);
+
   // 2. Link module imports/exports
   for (const mod of Object.values(pass1)) {
     const data = mod.data;

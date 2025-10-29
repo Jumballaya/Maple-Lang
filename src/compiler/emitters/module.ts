@@ -59,8 +59,17 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   // parse for structs at top level
   for (const stmt of program.statements) {
     if (stmt instanceof StructStatement) {
-      const { name, members, size } = stmt;
-      builder.defStruct({ name, members, size });
+      const { name, members, size, exported } = stmt;
+      builder.defStruct({ name, members, size, exported });
+      builder.defExport(name, {
+        kind: "struct",
+        meta: {
+          name,
+          members,
+          size,
+          exported,
+        },
+      });
       // @TODO: Figure out how to fold in struct export/import
     }
   }
