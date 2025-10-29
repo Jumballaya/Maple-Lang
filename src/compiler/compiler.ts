@@ -167,20 +167,24 @@ export async function compiler(
   for (const bin of Object.values(stdLibList)) {
     await run(`cp src/compiler/stdlib/${bin.name}.o build/${bin.name}.o`);
   }
-  await run("wasm-ld --no-check-features build/*.o -o build/app.wasm");
+  await run(
+    "wasm-ld --no-gc-sections --no-check-features build/*.o -o build/app.wasm"
+  );
   ////// Run
   const binary = await readFile("build/app.wasm");
-  const memory = new WebAssembly.Memory({ initial: 1 });
-  const wasm = (await WebAssembly.instantiate(binary, {
-    runtime: { heap_memory: memory },
-  })) as any as {
+  const wasm = (await WebAssembly.instantiate(binary, {})) as any as {
     module: WebAssembly.Module;
     instance: WebAssembly.Instance;
   };
   const module = wasm.instance.exports as {
-    _start: (a: number, b: number) => number;
+    memory: WebAssembly.Memory;
+    _start: () => number;
   };
-  console.log(module._start(14, 32));
+  const memory = module.memory;
+
+  const ptr = module._start();
+  const dv = new Int32Array(memory.buffer, ptr << 2, 3);
+  console.log(dv);
 }
 
 function run(cmd: string): Promise<void> {
