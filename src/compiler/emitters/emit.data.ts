@@ -1,6 +1,9 @@
 import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
 import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression.js";
+import { BooleanLiteralExpression } from "../../parser/ast/expressions/BooleanLiteralExpression.js";
 import { CallExpression } from "../../parser/ast/expressions/CallExpression.js";
+import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression.js";
+import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral.js";
 import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
 import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
 import { BlockStatement } from "../../parser/ast/statements/BlockStatement.js";
@@ -129,24 +132,33 @@ function extractStructLiteral(
   builder: ModuleBuilder
 ) {
   const sd = builder.getStruct(expr.tokenLiteral());
+  console.log(builder);
+
+  // @TODO -- This needs to go into a 3rd pass: validation
   if (!sd) {
     throw new Error(`struct not found: ${expr.tokenLiteral()}`);
   }
-  for (const f of Object.keys(expr.table)) {
+  for (const f of Object.keys(expr.members)) {
     if (!sd.members[f]) {
       throw new Error(`struct "${sd.name}" has no member "${f}"`);
     }
   }
 
   let encoded = "";
-  for (const [, value] of Object.entries(expr.table)) {
-    if (typeof value !== "number") {
+  for (const [, value] of Object.entries(expr.members)) {
+    if (
+      !(value instanceof IntegerLiteralExpression) &&
+      !(value instanceof FloatLiteralExpression) &&
+      !(value instanceof BooleanLiteralExpression)
+    ) {
       throw new Error(
-        "[struct literal member] non-number literal values not supported"
+        "[struct literal member] non-number/boolean literal values not supported"
       );
     }
+    const val =
+      typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
     encoded += numToLittleEndian(
-      [value],
+      [val],
       Number.isInteger(value) ? "i32" : "f32"
     );
   }

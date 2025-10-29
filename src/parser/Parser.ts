@@ -15,6 +15,10 @@ import { Identifier } from "./ast/expressions/Identifier";
 import { InfixExpression } from "./ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
 import { PrefixExpression } from "./ast/expressions/PrefixExpression";
+import {
+  StructLiteralExpression,
+  StructTable,
+} from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
 import { FunctionStatement } from "./ast/statements/FunctionStatement";
@@ -329,8 +333,12 @@ export class Parser {
     const identToken = this.tokenizer.curToken();
 
     let typeAnn = "";
+    let typeIdent: IdentToken | null = null;
     if (this.tokenizer.peekTokenIs("Colon")) {
       this.tokenizer.nextToken();
+      if (this.tokenizer.peekTokenIs("Identifier")) {
+        typeIdent = this.tokenizer.peekToken() as IdentToken; // @TODO: Extract actual type token from this.parseTyping
+      }
       this.tokenizer.nextToken(); // consume colon
       const t = this.parseTyping();
       if (!t) return null;
@@ -347,9 +355,15 @@ export class Parser {
 
     // this is an array literal, it needs the type up front
     const isArray = this.tokenizer.curTokenIs("LBracket");
-    const value = isArray
-      ? this.parseArrayLiteral(typeAnn)
-      : this.parseExpression(LOWEST);
+    const isStruct = this.tokenizer.curTokenIs("LBrace");
+    let value: ASTExpression | null = null;
+    if (isArray) {
+      value = this.parseArrayLiteral(typeAnn);
+    } else if (isStruct) {
+      value = this.parseStructLiteral(typeIdent as IdentToken);
+    } else {
+      value = this.parseExpression(LOWEST);
+    }
 
     if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
@@ -420,7 +434,10 @@ export class Parser {
     let leftExpr = prefix();
 
     while (
-      !this.tokenizer.peekTokenIs("Semicolon") &&
+      !(
+        this.tokenizer.peekTokenIs("Semicolon") ||
+        !this.tokenizer.peekTokenIs("Comma")
+      ) &&
       precendence < this.peekPrecedence()
     ) {
       const infix = this.infixParseFns.get(this.tokenizer.peekToken().type);
@@ -646,6 +663,37 @@ export class Parser {
     }
     this.tokenizer.nextToken();
     return typeof p.value === "number" ? p.value : p.value ? 1 : 0;
+  }
+
+  private parseStructLiteral(token: IdentToken): ASTExpression | null {
+    const name = token.literal;
+    const members: Record<string, ASTExpression> = {};
+    while (!this.tokenizer.peekTokenIs("RBrace")) {
+      if (!this.expectPeek("Identifier")) {
+        return null;
+      }
+      const ident = this.tokenizer.curToken();
+      const name = ident.literal.toString();
+      if (!this.expectPeek("Assign")) {
+        return null;
+      }
+      this.tokenizer.nextToken();
+
+      const expr = this.parseExpression(LOWEST);
+      if (expr) {
+        members[name] = expr;
+      }
+
+      if (!this.expectPeek("Comma")) {
+        return null;
+      }
+    }
+
+    if (!this.expectPeek("RBrace")) {
+      return null;
+    }
+
+    return new StructLiteralExpression(token, name, members);
   }
 
   private parseFunctionLiteral(): ASTExpression | null {

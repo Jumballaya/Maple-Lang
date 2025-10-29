@@ -1,5 +1,11 @@
 import Color from "color.maple"
 
+let c: Color = {
+  r = 214,
+  g = 7,
+  b = 23,
+}
+
 fn _start(): i32 {
-  return 1024;
+  return c;
 }

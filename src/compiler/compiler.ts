@@ -9,6 +9,26 @@ import { stdlib } from "./stdlib.js";
 import { Parser } from "../parser/Parser.js";
 
 //
+//    Next idea:
+//
+//      Add passes:
+//          1. Verification/validation: make sure types are correct.
+//             this has to be done AFTER pass1, and before building
+//             the actual code.
+//             This make sure structs are correct, have the correct
+//             members being used, etc. it would also build defaults
+//             for members not explicitly constructed.
+//             It would also check to make sure types are applied
+//             correctly.
+//
+//          2. Optimization: The first implementation would be just
+//             combining static math operations, static casting, etc.
+//             it would combine stuff like: 2 + 2 -> 4 instead of
+//             emitting an add operation and 2 loads.
+//
+//
+//
+///////////////
 //
 //  Compilation
 //
