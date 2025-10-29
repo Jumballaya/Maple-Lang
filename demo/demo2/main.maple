@@ -1,6 +1,5 @@
 
-let x: i32 = 10;
-
 fn _start(): i32 {
+  let x: i32[] = [1, 2, 3];
   return x;
 }

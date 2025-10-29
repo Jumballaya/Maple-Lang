@@ -514,12 +514,57 @@ export class Parser {
     if (!this.tokenizer.curTokenIs("LBracket")) {
       return null;
     }
+    this.tokenizer.nextToken(); // consume LBracket
+    const value = [];
 
-    if (!this.expectPeek("RBracket")) {
+    // initial values
+    if (!this.tokenizer.curTokenIs("RBracket")) {
+      const v = this.parseArrayLiteralMember();
+      if (v !== null) {
+        value.push(v);
+      }
+    }
+
+    // more values
+    while (this.tokenizer.curTokenIs("Comma")) {
+      this.tokenizer.nextToken(); // consume Comma
+      const v = this.parseArrayLiteralMember();
+      if (v !== null) {
+        value.push(v);
+      }
+    }
+
+    if (!this.tokenizer.curTokenIs("RBracket")) {
       return null;
     }
 
-    return new ArrayLiteralExpression(literalToken, type, []);
+    this.tokenizer.nextToken(); // consume RBracket
+
+    return new ArrayLiteralExpression(literalToken, type, value);
+  }
+
+  private parseArrayLiteralMember(): number | null {
+    const p = this.parseExpression(LOWEST);
+    if (!p) {
+      this.errors.push({
+        message: "Parser: missing expression in array literal",
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+    const isFloat = p instanceof FloatLiteralExpression;
+    const isInt = p instanceof IntegerLiteralExpression;
+    const isBool = p instanceof BooleanLiteralExpression;
+    if (!(isFloat || isInt || isBool)) {
+      this.errors.push({
+        message:
+          "Parser: only float, integer and bool literals in an array literal are supported",
+        token: this.tokenizer.curToken(),
+      });
+      return null;
+    }
+    this.tokenizer.nextToken();
+    return typeof p.value === "number" ? p.value : p.value ? 1 : 0;
   }
 
   private parseFunctionLiteral(): ASTExpression | null {
