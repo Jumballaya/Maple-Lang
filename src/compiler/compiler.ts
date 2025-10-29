@@ -72,6 +72,10 @@ export async function compiler(
   cwd: string
 ) {
   const entrySrc = await openFile(entryPoint);
+  if (!entrySrc) {
+    return;
+  }
+
   const entryAST = parseFile(entryMod, entrySrc);
   if (!entryAST) {
     return;
@@ -150,6 +154,7 @@ export async function compiler(
   // build .wat files
   const toCompile: string[] = [];
   for (const mod of toWrite) {
+    console.log(`Assembling module: ${mod.name}`);
     await writeFile(`build/${mod.name}.wat`, mod.buildWat());
     toCompile.push(mod.name);
   }

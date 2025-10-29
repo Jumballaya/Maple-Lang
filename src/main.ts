@@ -20,6 +20,10 @@ async function main() {
   }
 
   const parsed = path.parse(entry);
-  compiler(entry, parsed.name, parsed.dir);
+  try {
+    await compiler(entry, parsed.name, parsed.dir);
+  } catch (e) {
+    console.log("Error: ", e);
+  }
 }
 main();

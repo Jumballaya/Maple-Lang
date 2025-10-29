@@ -156,17 +156,18 @@ function extractStructLiteral(
 }
 
 function numToLittleEndian(ns: number[], type: string) {
-  const byteSize = sizeofType(baseScalar(type));
+  const baseType = baseScalar(type);
+  const byteSize = sizeofType(baseType);
   const buffer = new ArrayBuffer(byteSize * ns.length);
 
-  if (type === "i32") {
+  if (baseType === "i32") {
     const i32 = new Int32Array(buffer);
     i32.set(ns, 0);
-  } else if (type === "f32") {
+  } else if (baseType === "f32") {
     const f32 = new Float32Array(buffer);
     f32.set(ns, 0);
   } else {
-    throw new Error(`unsupported type: "${type}"`);
+    throw new Error(`unsupported type: "${baseType}"`);
   }
 
   return Array.from(new Uint8Array(buffer)).reduce((str, b) => {

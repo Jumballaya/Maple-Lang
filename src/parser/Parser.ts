@@ -1,6 +1,7 @@
 import { FloatToken, IdentToken, Token, VoidToken } from "../lexer/token.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import { ASTProgram } from "./ast/ASTProgram";
+import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
 import { BooleanLiteralExpression } from "./ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "./ast/expressions/CallExpression";
 import { FloatLiteralExpression } from "./ast/expressions/FloatLiteralExpression";
@@ -250,7 +251,7 @@ export class Parser {
     if (this.tokenizer.peekTokenIs("Colon")) {
       this.tokenizer.nextToken();
       this.tokenizer.nextToken(); // consume colon
-      const t = this.parseTypeNode();
+      const t = this.parseTyping();
       if (!t) return null;
       typeAnn = t;
     }
@@ -263,7 +264,11 @@ export class Parser {
 
     this.tokenizer.nextToken();
 
-    const value = this.parseExpression(LOWEST);
+    // this is an array literal, it needs the type up front
+    const isArray = this.tokenizer.curTokenIs("LBracket");
+    const value = isArray
+      ? this.parseArrayLiteral(typeAnn)
+      : this.parseExpression(LOWEST);
 
     if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
@@ -503,6 +508,20 @@ export class Parser {
     );
   }
 
+  private parseArrayLiteral(type: string): ASTExpression | null {
+    const literalToken = this.tokenizer.curToken();
+
+    if (!this.tokenizer.curTokenIs("LBracket")) {
+      return null;
+    }
+
+    if (!this.expectPeek("RBracket")) {
+      return null;
+    }
+
+    return new ArrayLiteralExpression(literalToken, type, []);
+  }
+
   private parseFunctionLiteral(): ASTExpression | null {
     const literalToken = this.tokenizer.curToken();
 
@@ -517,7 +536,7 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume the colon
 
-    const t = this.parseTypeNode();
+    const t = this.parseTyping();
     if (!t) {
       return null;
     }
@@ -570,7 +589,7 @@ export class Parser {
       return null;
     }
     this.tokenizer.nextToken(); // consume the colon
-    const type = this.parseTypeNode();
+    const type = this.parseTyping();
     if (!type) {
       return null;
     }
@@ -615,24 +634,34 @@ export class Parser {
     return precedence ?? LOWEST;
   }
 
-  private parseTypeNode(): string | null {
-    if (this.tokenizer.curTokenIs("Identifier")) {
-      const curToken = this.tokenizer.curToken() as IdentToken;
-      return curToken.literal;
+  private parseTyping(): string | null {
+    const curToken = this.tokenizer.curToken();
+    let type = curToken.literal.toString();
+
+    const isIdent = this.tokenizer.curTokenIs("Identifier");
+    const isBuiltin = BUILTIN_TYPES.includes(type as any);
+
+    if (!isIdent && !isBuiltin) {
+      this.errors.push({
+        message: `Parser: Expected type, none found`,
+        token: this.tokenizer.curToken(),
+      });
+      return null;
     }
 
-    for (let i = 0; i < BUILTIN_TYPES.length; i++) {
-      if (this.tokenizer.curTokenIs(BUILTIN_TYPES[i]!)) {
-        const curToken = this.tokenizer.curToken();
-        return curToken.literal.toString();
+    if (this.tokenizer.peekTokenIs("LBracket")) {
+      this.tokenizer.nextToken();
+      if (!this.expectPeek("RBracket")) {
+        this.errors.push({
+          message: `Parser: array types must include the ending bracket`,
+          token: this.tokenizer.curToken(),
+        });
+        return null;
       }
+      type += "[]";
     }
 
-    this.errors.push({
-      message: `Parser: Expected type, none found`,
-      token: this.tokenizer.curToken(),
-    });
-    return null;
+    return type;
   }
 
   private getType(ident: string): string {
