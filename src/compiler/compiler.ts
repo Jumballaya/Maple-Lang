@@ -124,8 +124,6 @@ export async function compiler(
     pass1[imp.module] = { data: extractModuleMeta(userMod), ast: userMod };
   }
 
-  console.log(pass1["color.maple"]!.data);
-
   // 2. Link module imports/exports
   for (const mod of Object.values(pass1)) {
     const data = mod.data;
@@ -163,6 +161,9 @@ export async function compiler(
       imp.resolved = true;
     }
   }
+
+  // @TODO: Validation pass
+  // @TODO: Optimization pass
 
   // step 3. compile
   // Emit code
@@ -205,6 +206,7 @@ export async function compiler(
   const memory = module.memory;
 
   const ptr = module._start();
+  console.log(ptr);
   const dv = new Int32Array(memory.buffer, ptr, 3);
   console.log(dv);
 }

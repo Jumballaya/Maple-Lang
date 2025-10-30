@@ -1,0 +1,6 @@
+import malloc, free from "memory"
+
+export fn _start(): i32 {
+  let x: i32 = malloc(4);
+  return x;
+}

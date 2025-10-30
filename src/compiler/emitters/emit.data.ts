@@ -131,18 +131,16 @@ function extractStructLiteral(
   expr: StructLiteralExpression,
   builder: ModuleBuilder
 ) {
-  const sd = builder.getStruct(expr.tokenLiteral());
-  console.log(builder);
-
   // @TODO -- This needs to go into a 3rd pass: validation
-  if (!sd) {
-    throw new Error(`struct not found: ${expr.tokenLiteral()}`);
-  }
-  for (const f of Object.keys(expr.members)) {
-    if (!sd.members[f]) {
-      throw new Error(`struct "${sd.name}" has no member "${f}"`);
-    }
-  }
+  // const sd = builder.getStruct(expr.tokenLiteral());
+  // if (!sd) {
+  //   throw new Error(`struct not found: ${expr.tokenLiteral()}`);
+  // }
+  // for (const f of Object.keys(expr.members)) {
+  //   if (!sd.members[f]) {
+  //     throw new Error(`struct "${sd.name}" has no member "${f}"`);
+  //   }
+  // }
 
   let encoded = "";
   for (const [, value] of Object.entries(expr.members)) {
@@ -157,9 +155,10 @@ function extractStructLiteral(
     }
     const val =
       typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
+    console.log(val);
     encoded += numToLittleEndian(
       [val],
-      Number.isInteger(value) ? "i32" : "f32"
+      value instanceof FloatLiteralExpression ? "f32" : "i32"
     );
   }
 
