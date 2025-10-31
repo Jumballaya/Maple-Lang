@@ -14,20 +14,21 @@ import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiter
 import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
+import { IfStatement } from "../src/parser/ast/statements/IfStatement";
 
 // @TODO:
 //
-//      If Statements:
-//          1. if, no else
-//          2. if, no else, returns
-//          3. if and else
-//          4. if and else, returns
-//
 //      For Loop:
-//
+//        1. basic loop: for (i: i32 = 0; i < 10; i++) {}
+//        2. loop with body
+//        3. loop with a return
+//        4. loop with a break
 //
 //      While Loop:
-//
+//        1. basic loop: while (i < 10) { i++; }
+//        2. loop with a body
+//        3. loop with a return
+//        4. loop with a break
 //
 //      Pointers:
 //        parse pointer syntax:     "*T"
@@ -43,6 +44,7 @@ import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanL
 //        Inc/Dec: ++, --
 //
 //      Function calls and nesting
+//        1. a(b(c()))
 //
 //      Strings
 //
@@ -57,7 +59,7 @@ import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanL
 //
 //      General
 //        supports chained call, index, and member expressions
-//
+//          1. a.b->c[3](f.g()[4]->h())
 //
 
 describe("Parser", () => {
@@ -517,6 +519,304 @@ describe("Parser", () => {
     assert(returnStmt instanceof ReturnStatement);
     assert(returnStmt.returnValue instanceof Identifier);
     assert(returnStmt.returnValue.tokenLiteral() === "x");
+  });
+
+  test("can parse if statement - no else", () => {
+    const p = new Parser(`fn test(n: i32): i32 {
+      let x: i32 = 0;
+      if (n > 10) {
+        x = 5;
+      }
+      return x;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 3);
+
+    const letStmt = funcStmt.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "x");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[1];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const thenStmt = thenBlock.statements[0];
+    assert(ifStmt.elseBlock === undefined);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof InfixExpression);
+    assert(thenStmt instanceof ExpressionStatement);
+
+    assert(condExp.left instanceof Identifier);
+    assert(condExp.left.typeAnnotation === "i32");
+    assert(condExp.left.tokenLiteral() === "n");
+    assert(condExp.right instanceof IntegerLiteralExpression);
+    assert(condExp.operator === ">");
+    assert(condExp.right.value === 10);
+
+    assert(thenStmt.expression instanceof AssignmentExpression);
+    assert(thenStmt.expression.left instanceof Identifier);
+    assert(thenStmt.expression.left.tokenLiteral() === "x");
+    assert(thenStmt.expression.left.typeAnnotation === "i32");
+    assert(thenStmt.expression.value instanceof IntegerLiteralExpression);
+    assert(thenStmt.expression.value.value === 5);
+
+    const returnStmt = funcStmt.fnExpr.body.statements[2];
+    assert(returnStmt instanceof ReturnStatement);
+    assert(returnStmt.returnValue instanceof Identifier);
+    assert(returnStmt.returnValue.tokenLiteral() === "x");
+  });
+
+  test("can parse if statement - no else, returns", () => {
+    const p = new Parser(`fn test(n: i32): i32 {
+      if (n > 10) {
+        return 5;
+      }
+      return 0;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 3);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const thenStmt = thenBlock.statements[0];
+    assert(ifStmt.elseBlock === undefined);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof InfixExpression);
+    assert(thenStmt instanceof ReturnStatement);
+
+    assert(condExp.left instanceof Identifier);
+    assert(condExp.left.typeAnnotation === "i32");
+    assert(condExp.left.tokenLiteral() === "n");
+    assert(condExp.operator === ">");
+    assert(condExp.right instanceof IntegerLiteralExpression);
+    assert(condExp.right.value === 10);
+
+    const forRetStmt = thenBlock.statements[0];
+    assert(forRetStmt instanceof ReturnStatement);
+    assert(forRetStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(forRetStmt.returnValue.value === 5);
+
+    const returnStmt = funcStmt.fnExpr.body.statements[1];
+    assert(returnStmt instanceof ReturnStatement);
+    assert(returnStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(returnStmt.returnValue.value === 0);
+  });
+
+  test("can parse if statement - with else", () => {
+    const p = new Parser(`fn test(n: i32): i32 {
+      let x: i32 = 0;
+      if (n > 10) {
+        x = 5;
+      } else {
+        x = 15;
+      }
+      return x;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 3);
+
+    const letStmt = funcStmt.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "x");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[1];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const elseBlock = ifStmt.elseBlock;
+    const thenStmt = thenBlock.statements[0];
+    const elseStmt = elseBlock?.statements[0];
+    assert(elseBlock && elseStmt);
+    assert(elseBlock.statements.length === 1);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof InfixExpression);
+    assert(thenStmt instanceof ExpressionStatement);
+    assert(elseStmt instanceof ExpressionStatement);
+
+    assert(condExp.left instanceof Identifier);
+    assert(condExp.left.typeAnnotation === "i32");
+    assert(condExp.left.tokenLiteral() === "n");
+    assert(condExp.operator === ">");
+    assert(condExp.right instanceof IntegerLiteralExpression);
+    assert(condExp.right.value === 10);
+
+    assert(thenStmt instanceof ExpressionStatement);
+    assert(thenStmt.expression instanceof AssignmentExpression);
+    assert(thenStmt.expression.left instanceof Identifier);
+    assert(thenStmt.expression.left.tokenLiteral() === "x");
+
+    assert(thenStmt.expression.left.typeAnnotation === "i32");
+    assert(thenStmt.expression.value instanceof IntegerLiteralExpression);
+    assert(thenStmt.expression.value.value === 5);
+
+    assert(elseStmt instanceof ExpressionStatement);
+    assert(elseStmt.expression instanceof AssignmentExpression);
+    assert(elseStmt.expression.left instanceof Identifier);
+    assert(elseStmt.expression.left.tokenLiteral() === "x");
+
+    assert(elseStmt.expression.left.typeAnnotation === "i32");
+    assert(elseStmt.expression.value instanceof IntegerLiteralExpression);
+    assert(elseStmt.expression.value.value === 15);
+
+    const returnStmt = funcStmt.fnExpr.body.statements[2];
+    assert(returnStmt instanceof ReturnStatement);
+    assert(returnStmt.returnValue instanceof Identifier);
+    assert(returnStmt.returnValue.tokenLiteral() === "x");
+  });
+
+  test("can parse if statement - with else, returns", () => {
+    const p = new Parser(`fn test(n: i32): i32 {
+      if (n > 10) {
+        return 5;
+      } else {
+        return 15;
+      }
+    }`);
+    const ast = p.parse("test");
+    console.log(p.errors);
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 1);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[1];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const elseBlock = ifStmt.elseBlock;
+    const thenStmt = thenBlock.statements[0];
+    const elseStmt = elseBlock?.statements[0];
+    assert(elseBlock && elseStmt);
+    assert(elseBlock.statements.length === 1);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof InfixExpression);
+    assert(thenStmt instanceof ReturnStatement);
+    assert(elseStmt instanceof ReturnStatement);
+
+    assert(condExp.left instanceof Identifier);
+    assert(condExp.left.typeAnnotation === "i32");
+    assert(condExp.left.tokenLiteral() === "n");
+    assert(condExp.operator === ">");
+    assert(condExp.right instanceof IntegerLiteralExpression);
+    assert(condExp.right.value === 10);
+
+    assert(thenStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(thenStmt.returnValue.value === 5);
+
+    assert(elseStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(elseStmt.returnValue.value === 15);
+  });
+
+  test("can parse if statement with boolean condition", () => {
+    const p = new Parser(`fn test(b: bool): i32 {
+      if (b) {
+        return 5;
+      } else {
+        return 15;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 1);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const elseBlock = ifStmt.elseBlock;
+    const thenStmt = thenBlock.statements[0];
+    const elseStmt = elseBlock?.statements[0];
+    assert(elseBlock && elseStmt);
+    assert(elseBlock.statements.length === 1);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof Identifier);
+    assert(thenStmt instanceof ReturnStatement);
+    assert(elseStmt instanceof ReturnStatement);
+
+    assert(condExp.tokenLiteral() === "b");
+
+    assert(thenStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(thenStmt.returnValue.value === 5);
+
+    assert(elseStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(elseStmt.returnValue.value === 15);
+  });
+
+  test("can parse if statement with integer", () => {
+    const p = new Parser(`fn test(i: i32): i32 {
+      if (i) {
+        return 5;
+      } else {
+        return 15;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    assert(funcStmt instanceof FunctionStatement);
+    assert(funcStmt.name === "test");
+    assert(funcStmt.fnExpr.params.length === 1);
+    assert(funcStmt.fnExpr.returnType === "i32");
+    assert(funcStmt.fnExpr.body.statements.length === 1);
+
+    const ifStmt = funcStmt.fnExpr.body.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    const condExp = ifStmt.conditionExpr;
+    const thenBlock = ifStmt.thenBlock;
+    const elseBlock = ifStmt.elseBlock;
+    const thenStmt = thenBlock.statements[0];
+    const elseStmt = elseBlock?.statements[0];
+    assert(elseBlock && elseStmt);
+    assert(elseBlock.statements.length === 1);
+    assert(thenBlock.statements.length === 1);
+    assert(condExp instanceof Identifier);
+    assert(thenStmt instanceof ReturnStatement);
+    assert(elseStmt instanceof ReturnStatement);
+
+    assert(condExp.tokenLiteral() === "i");
+
+    assert(thenStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(thenStmt.returnValue.value === 5);
+
+    assert(elseStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(elseStmt.returnValue.value === 15);
   });
 });
 
