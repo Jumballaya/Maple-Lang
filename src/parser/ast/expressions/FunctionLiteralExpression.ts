@@ -14,13 +14,13 @@ export class FunctionLiteralExpression implements ASTExpression {
   public token: Token;
   public params: FunctionParam[];
   public body: BlockStatement;
-  public returnType: string;
+  public returnType: string | null;
 
   constructor(
     token: Token,
     params: FunctionParam[],
     body: BlockStatement,
-    returnType: string
+    returnType: string | null
   ) {
     this.token = token;
     this.params = params;

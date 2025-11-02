@@ -98,7 +98,7 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
-    assertFunctionSignature(ast.statements[0], "test", [], "void", 0, false);
+    assertFunctionSignature(ast.statements[0], "test", [], null, 0, false);
   });
 
   test("can parse an exported function", () => {
@@ -107,7 +107,7 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    assertFunctionSignature(ast.statements[0], "test_1", [], "void", 0, true);
+    assertFunctionSignature(ast.statements[0], "test_1", [], null, 0, true);
   });
 
   test("can parse a function that returns i32", () => {
@@ -788,9 +788,7 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_for_1", [], "void", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_for_1", [], null, 1, false)) {
       return;
     }
   });
@@ -803,9 +801,7 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_for_2", [], "void", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_for_2", [], null, 1, false)) {
       return;
     }
   });
@@ -818,9 +814,7 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_for_3", [], "void", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_for_3", [], null, 1, false)) {
       return;
     }
   });
@@ -836,9 +830,7 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_for_4", [], "void", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_for_4", [], null, 1, false)) {
       return;
     }
   });
@@ -891,7 +883,7 @@ describe("Parser", () => {
     assert(ast.statements.length === 2);
     const funcStmt = ast.statements[0];
     if (
-      !assertFunctionSignature(funcStmt, "while_loop_1", [], "void", 1, false)
+      !assertFunctionSignature(funcStmt, "while_loop_1", [], null, 1, false)
     ) {
       return;
     }
@@ -912,7 +904,7 @@ describe("Parser", () => {
     assert(ast.statements.length === 2);
     const funcStmt = ast.statements[0];
     if (
-      !assertFunctionSignature(funcStmt, "while_loop_2", [], "void", 2, false)
+      !assertFunctionSignature(funcStmt, "while_loop_2", [], null, 2, false)
     ) {
       return;
     }
@@ -974,7 +966,7 @@ function assertFunctionSignature(
   funcStmt: ASTStatement,
   name: string,
   params: Array<[string, string]>,
-  returnType: string,
+  returnType: string | null,
   bodyLength: number,
   exported: boolean
 ): funcStmt is FunctionStatement {

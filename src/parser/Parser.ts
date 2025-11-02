@@ -184,7 +184,7 @@ export class Parser {
       return null;
     }
 
-    this.identifierTypes.set(ident, expr.returnType);
+    this.identifierTypes.set(ident, expr.returnType ?? "void");
 
     return new FunctionStatement(statementToken, expr, ident, exported);
   }
@@ -332,7 +332,7 @@ export class Parser {
     }
     const identToken = this.tokenizer.curToken();
 
-    let typeAnn = "";
+    let typeAnn: string = "";
     let typeIdent: IdentToken | null = null;
     if (this.tokenizer.peekTokenIs("Colon")) {
       this.tokenizer.nextToken();
@@ -342,7 +342,9 @@ export class Parser {
       this.tokenizer.nextToken(); // consume colon
       const t = this.parseTyping();
       if (!t) return null;
-      typeAnn = t;
+      if (t === "void") {
+        return null;
+      }
     }
     const identifier = new Identifier(identToken, typeAnn);
     this.identifierTypes.set(identToken.literal.toString(), typeAnn);
@@ -710,9 +712,9 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume the colon
 
-    const t = this.parseTyping();
-    if (!t) {
-      return null;
+    let t = this.parseTyping();
+    if (t === "void") {
+      t = null;
     }
 
     if (!this.expectPeek("LBrace")) {
@@ -764,7 +766,7 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume the colon
     const type = this.parseTyping();
-    if (!type) {
+    if (!type || type === "void") {
       return null;
     }
     const ident = new Identifier(identToken, type);

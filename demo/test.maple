@@ -1,0 +1,4 @@
+
+fn _start(a: i32, b: i32): void {
+  return a + b;
+}
