@@ -15,20 +15,14 @@ import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStat
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
 import { IfStatement } from "../src/parser/ast/statements/IfStatement";
+import { ASTStatement } from "../src/parser/ast/types/ast.type";
+import {
+  StructData,
+  StructMember,
+} from "../src/compiler/emitters/emitter.types";
 
 // @TODO:
 //
-//      For Loop:
-//        1. basic loop: for (i: i32 = 0; i < 10; i++) {}
-//        2. loop with body
-//        3. loop with a return
-//        4. loop with a break
-//
-//      While Loop:
-//        1. basic loop: while (i < 10) { i++; }
-//        2. loop with a body
-//        3. loop with a return
-//        4. loop with a break
 //
 //      Pointers:
 //        parse pointer syntax:     "*T"
@@ -103,99 +97,83 @@ describe("Parser", () => {
     const p = new Parser("fn test(): void {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "void");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(ast.statements[0], "test", [], "void", 0, false);
   });
 
   test("can parse an exported function", () => {
-    const p = new Parser("export fn test(): void {}");
+    const p = new Parser("export fn test_1(): void {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "void");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
-    assert(funcStmt.exported);
+    assertFunctionSignature(ast.statements[0], "test_1", [], "void", 0, true);
   });
 
   test("can parse a function that returns i32", () => {
-    const p = new Parser("fn test(): i32 {}");
+    const p = new Parser("fn test_i32(): i32 {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(ast.statements[0], "test_i32", [], "i32", 0, false);
   });
 
   test("can parse a function that returns f32", () => {
-    const p = new Parser("fn test(): f32 {}");
+    const p = new Parser("fn test_f32(): f32 {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "f32");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(ast.statements[0], "test_f32", [], "f32", 0, false);
   });
 
   test("can parse a function that returns bool", () => {
-    const p = new Parser("fn test(): bool {}");
+    const p = new Parser("fn test_bool(): bool {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "bool");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(
+      ast.statements[0],
+      "test_bool",
+      [],
+      "bool",
+      0,
+      false
+    );
   });
 
   test("can parse a function that returns a struct", () => {
-    const p = new Parser("fn test(): Color {}");
+    const p = new Parser("fn test_struct(): Color {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "Color");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(
+      ast.statements[0],
+      "test_struct",
+      [],
+      "Color",
+      0,
+      false
+    );
   });
 
   test("can parse a function that returns an array", () => {
-    const p = new Parser("fn test(): i32[] {}");
+    const p = new Parser("fn test_arr(): i32[] {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "i32[]");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(
+      ast.statements[0],
+      "test_arr",
+      [],
+      "i32[]",
+      0,
+      false
+    );
   });
 
   test("can parse a function that takes params", () => {
@@ -203,80 +181,54 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "add");
-    assert(funcStmt.fnExpr.params.length === 2);
-    const paramALiteral = funcStmt.fnExpr.params[0].identifier
-      .tokenLiteral()
-      .toString();
-    const paramBLiteral = funcStmt.fnExpr.params[1].identifier
-      .tokenLiteral()
-      .toString();
-
-    assert(paramALiteral === "a");
-    assert(funcStmt.fnExpr.params[0].type === "i32");
-    assert(paramBLiteral === "b");
-    assert(funcStmt.fnExpr.params[1].type === "i32");
-
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    const params: Array<[string, string]> = [
+      ["a", "i32"],
+      ["b", "i32"],
+    ];
+    assertFunctionSignature(ast.statements[0], "add", params, "i32", 0, false);
   });
 
   test("can parse a function that takes many different types of params", () => {
-    const p = new Parser("fn add(a: i32, b: f32, c: Color, d: bool): i32 {}");
+    const p = new Parser(
+      "fn multi_func(a: i32, b: f32, c: Color, d: bool): i32 {}"
+    );
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "add");
-
     const params: [string, string][] = [
       ["a", "i32"],
       ["b", "f32"],
       ["c", "Color"],
       ["d", "bool"],
     ];
-
-    assert(funcStmt.fnExpr.params.length === params.length);
-    let i = 0;
-    for (const [name, param] of params) {
-      const literal = funcStmt.fnExpr.params[i].identifier
-        .tokenLiteral()
-        .toString();
-      const type = funcStmt.fnExpr.params[0].type;
-      assert(literal, name);
-      assert(type, param);
-      i++;
-    }
-
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 0);
+    assertFunctionSignature(
+      ast.statements[0],
+      "multi_func",
+      params,
+      "i32",
+      0,
+      false
+    );
   });
 
   test("can parse a function that returns", () => {
     const p = new Parser(`
-    fn add(a: i32, b: i32): i32 {
+    fn func_ret(a: i32, b: i32): i32 {
       return a + b;
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "add");
-    assert(funcStmt.fnExpr.params.length === 2);
-    const paramALiteral = funcStmt.fnExpr.params[0].identifier.tokenLiteral();
-    const paramBLiteral = funcStmt.fnExpr.params[1].identifier.tokenLiteral();
-
-    assert(paramALiteral === "a");
-    assert(funcStmt.fnExpr.params[0].type === "i32");
-    assert(paramBLiteral === "b");
-    assert(funcStmt.fnExpr.params[1].type === "i32");
-
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 1);
+    const params: [string, string][] = [
+      ["a", "i32"],
+      ["a", "i32"],
+    ];
+    if (
+      !assertFunctionSignature(funcStmt, "func_ret", params, "i32", 1, false)
+    ) {
+      return;
+    }
 
     const returnStmt = funcStmt.fnExpr.body.statements[0];
     assert(returnStmt instanceof ReturnStatement);
@@ -299,61 +251,49 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const structStmt = ast.statements[0];
-    assert(structStmt instanceof StructStatement);
-    assert(structStmt.name === "S");
-    assert(Object.keys(structStmt.members).length === 2);
-    assert(!!structStmt.members["len"]);
-    assert(!!structStmt.members["next"]);
-    assert(structStmt.members["len"].name === "len");
-    assert(structStmt.members["len"].offset === 0);
-    assert(structStmt.members["len"].size === 4);
-    assert(structStmt.members["len"].type === "i32");
-    assert(structStmt.members["next"].name === "next");
-    assert(structStmt.members["next"].offset === 4);
-    assert(structStmt.members["next"].size === 4);
-    assert(structStmt.members["next"].type === "f32");
+    assertStructStatement(ast.statements[0], "S", {
+      len: { name: "len", offset: 0, size: 4, type: "i32" },
+      next: { name: "next", offset: 4, size: 4, type: "f32" },
+    });
   });
 
   test("can parse a struct definition (no trailing comma)", () => {
     const p = new Parser(`struct S {
       len: i32,
-      next: f32
+      next: i32
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    const structStmt = ast.statements[0];
-    assert(structStmt instanceof StructStatement);
-    assert(structStmt.name === "S");
-    assert(Object.keys(structStmt.members).length === 2);
-    assert(!!structStmt.members["len"]);
-    assert(!!structStmt.members["next"]);
-    assert(structStmt.members["len"].name === "len");
-    assert(structStmt.members["len"].offset === 0);
-    assert(structStmt.members["len"].size === 4);
-    assert(structStmt.members["len"].type === "i32");
-    assert(structStmt.members["next"].name === "next");
-    assert(structStmt.members["next"].offset === 4);
-    assert(structStmt.members["next"].size === 4);
-    assert(structStmt.members["next"].type === "f32");
+    assertStructStatement(ast.statements[0], "S", {
+      len: { name: "len", offset: 0, size: 4, type: "i32" },
+      next: { name: "next", offset: 4, size: 4, type: "f32" },
+    });
   });
 
   test("can parse a struct literal", () => {
     const p = new Parser(`
-    struct S {
-      len: i32,
-      next: f32,
+    struct T {
+      apple: i32,
+      banana: f32,
+      _flag: bool,
     }
     
-    let s: S = {
+    let t: T = {
       len = 10,
-      next = 20.5,
+      banana = 20.5,
+      _flag = false,
     };`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 2);
+    assertStructStatement(ast.statements[0], "S", {
+      apple: { name: "apple", offset: 0, size: 4, type: "i32" },
+      banana: { name: "banana", offset: 4, size: 4, type: "f32" },
+      _flag: { name: "_flag", offset: 8, size: 4, type: "bool" },
+    });
+
     const letStmt = ast.statements[1];
     assert(letStmt instanceof LetStatement);
     assert(letStmt.identifier.tokenLiteral() === "s");
@@ -362,14 +302,18 @@ describe("Parser", () => {
     assert(structLit instanceof StructLiteralExpression);
     assert(structLit.name === "S");
     assert(Object.keys(structLit.members).length === 2);
-    assert(!!structLit.members["len"]);
-    assert(!!structLit.members["next"]);
-    const lenExpr = structLit.members["len"];
-    const nextExpr = structLit.members["next"];
-    assert(lenExpr instanceof IntegerLiteralExpression);
-    assert(nextExpr instanceof FloatLiteralExpression);
-    assert(lenExpr.value === 10);
-    assert(floatEquals(nextExpr.value, 20.5));
+    assert(!!structLit.members["apple"]);
+    assert(!!structLit.members["banana"]);
+    assert(!!structLit.members["_flag"]);
+    const appleExpr = structLit.members["apple"];
+    const banExpr = structLit.members["banana"];
+    const flagExpr = structLit.members["_flag"];
+    assert(appleExpr instanceof IntegerLiteralExpression);
+    assert(banExpr instanceof FloatLiteralExpression);
+    assert(flagExpr instanceof BooleanLiteralExpression);
+    assert(appleExpr.value === 10);
+    assert(floatEquals(banExpr.value, 20.5));
+    assert(flagExpr.value === false);
   });
 
   test("can parse a struct literal (no trailing comma)", () => {
@@ -386,6 +330,11 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 2);
+    assertStructStatement(ast.statements[0], "S", {
+      len: { name: "len", size: 4, offset: 0, type: "i32" },
+      next: { name: "next", size: 4, offset: 4, type: "f32" },
+    });
+
     const letStmt = ast.statements[1];
     assert(letStmt instanceof LetStatement);
     assert(letStmt.identifier.tokenLiteral() === "s");
@@ -405,7 +354,7 @@ describe("Parser", () => {
   });
 
   test("can parse an assignment expression (i32)", () => {
-    const p = new Parser(`fn test(): i32 {
+    const p = new Parser(`fn test_assign_i32(): i32 {
       let x: i32 = 0;
       x = 5;
       return x;
@@ -414,11 +363,11 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    if (
+      !assertFunctionSignature(funcStmt, "test_assign_i32", [], "i32", 3, false)
+    ) {
+      return;
+    }
 
     const letStmt = funcStmt.fnExpr.body.statements[0];
     assert(letStmt instanceof LetStatement);
@@ -444,7 +393,7 @@ describe("Parser", () => {
   });
 
   test("can parse an assignment (f32)", () => {
-    const p = new Parser(`fn test(): f32 {
+    const p = new Parser(`fn test_assign_f32(): f32 {
       let x: f32 = 0.0;
       x = 3.1415;
       return x;
@@ -453,11 +402,11 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "f32");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    if (
+      !assertFunctionSignature(funcStmt, "test_assign_f32", [], "f32", 3, false)
+    ) {
+      return;
+    }
 
     const letStmt = funcStmt.fnExpr.body.statements[0];
     assert(letStmt instanceof LetStatement);
@@ -483,7 +432,7 @@ describe("Parser", () => {
   });
 
   test("can parse an assignment (bool)", () => {
-    const p = new Parser(`fn test(): bool {
+    const p = new Parser(`fn test_assign_bool(): bool {
       let x: bool = false;
       x = true;
       return x;
@@ -492,11 +441,18 @@ describe("Parser", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 0);
-    assert(funcStmt.fnExpr.returnType === "bool");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    if (
+      !assertFunctionSignature(
+        funcStmt,
+        "test_assign_bool",
+        [],
+        "bool",
+        3,
+        false
+      )
+    ) {
+      return;
+    }
 
     const letStmt = funcStmt.fnExpr.body.statements[0];
     assert(letStmt instanceof LetStatement);
@@ -522,7 +478,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement - no else", () => {
-    const p = new Parser(`fn test(n: i32): i32 {
+    const p = new Parser(`fn test_if_1(n: i32): i32 {
       let x: i32 = 0;
       if (n > 10) {
         x = 5;
@@ -532,11 +488,12 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_1", params, "i32", 3, false)
+    ) {
+      return;
+    }
 
     const letStmt = funcStmt.fnExpr.body.statements[0];
     assert(letStmt instanceof LetStatement);
@@ -577,7 +534,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement - no else, returns", () => {
-    const p = new Parser(`fn test(n: i32): i32 {
+    const p = new Parser(`fn test_if_2(n: i32): i32 {
       if (n > 10) {
         return 5;
       }
@@ -586,11 +543,12 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_2", params, "i32", 2, false)
+    ) {
+      return;
+    }
 
     const ifStmt = funcStmt.fnExpr.body.statements[0];
     assert(ifStmt instanceof IfStatement);
@@ -621,7 +579,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement - with else", () => {
-    const p = new Parser(`fn test(n: i32): i32 {
+    const p = new Parser(`fn test_if_3(n: i32): i32 {
       let x: i32 = 0;
       if (n > 10) {
         x = 5;
@@ -633,11 +591,12 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 3);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_3", params, "i32", 3, false)
+    ) {
+      return;
+    }
 
     const letStmt = funcStmt.fnExpr.body.statements[0];
     assert(letStmt instanceof LetStatement);
@@ -694,7 +653,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement - with else, returns", () => {
-    const p = new Parser(`fn test(n: i32): i32 {
+    const p = new Parser(`fn test_if_4(n: i32): i32 {
       if (n > 10) {
         return 5;
       } else {
@@ -702,14 +661,14 @@ describe("Parser", () => {
       }
     }`);
     const ast = p.parse("test");
-    console.log(p.errors);
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 1);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_4", params, "i32", 1, false)
+    ) {
+      return;
+    }
 
     const ifStmt = funcStmt.fnExpr.body.statements[1];
     assert(ifStmt instanceof IfStatement);
@@ -740,7 +699,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement with boolean condition", () => {
-    const p = new Parser(`fn test(b: bool): i32 {
+    const p = new Parser(`fn test_if_5(b: bool): i32 {
       if (b) {
         return 5;
       } else {
@@ -750,11 +709,12 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 1);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_5", params, "i32", 1, false)
+    ) {
+      return;
+    }
 
     const ifStmt = funcStmt.fnExpr.body.statements[0];
     assert(ifStmt instanceof IfStatement);
@@ -780,7 +740,7 @@ describe("Parser", () => {
   });
 
   test("can parse if statement with integer", () => {
-    const p = new Parser(`fn test(i: i32): i32 {
+    const p = new Parser(`fn test_if_6(i: i32): i32 {
       if (i) {
         return 5;
       } else {
@@ -790,11 +750,12 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    assert(funcStmt instanceof FunctionStatement);
-    assert(funcStmt.name === "test");
-    assert(funcStmt.fnExpr.params.length === 1);
-    assert(funcStmt.fnExpr.returnType === "i32");
-    assert(funcStmt.fnExpr.body.statements.length === 1);
+    const params: [string, string][] = [["n", "i32"]];
+    if (
+      !assertFunctionSignature(funcStmt, "test_if_6", params, "i32", 1, false)
+    ) {
+      return;
+    }
 
     const ifStmt = funcStmt.fnExpr.body.statements[0];
     assert(ifStmt instanceof IfStatement);
@@ -818,9 +779,228 @@ describe("Parser", () => {
     assert(elseStmt.returnValue instanceof IntegerLiteralExpression);
     assert(elseStmt.returnValue.value === 15);
   });
+
+  test("can parse a for loop, empty", () => {
+    const p = new Parser(`fn test_for_1(): void {
+      for (let i: i32 = 0; i < 10; i++) {}
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "test_for_1", [], "void", 1, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a for loop not starting from 0", () => {
+    const p = new Parser(`fn test_for_2(): void {
+      for (let i: i32 = 17; i < 22; i++) {}
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "test_for_2", [], "void", 1, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a for loop starting from negative", () => {
+    const p = new Parser(`fn test_for_3(): void {
+      for (let i: i32 = -3; i < 7; i++) {}
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "test_for_3", [], "void", 1, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a for loop with a body", () => {
+    const p = new Parser(`fn test_for_4(): void {
+      for (let i: i32 = 0; i < 10; i++) {
+        let x: i32 = 0;
+        x = i;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "test_for_4", [], "void", 1, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a for loop with a return", () => {
+    const p = new Parser(`fn test_for_5(): i32 {
+      for (let i: i32 = 0; i < 10; i++) {
+        if (i > 7) {
+          return i;
+        }
+      }
+      return 0;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "test_for_5", [], "i32", 2, false)) {
+      return;
+    }
+  });
+
+  test("can parse a for loop with a break", () => {
+    const p = new Parser(`fn for_for_5(): i32 {
+      for (let i: i32 = 0; i < 10; i++) {
+        if (i > 7) {
+          break;
+        }
+      }
+      return 0;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 2);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "for_for_5", [], "i32", 1, false)) {
+      return;
+    }
+  });
+
+  test("can parse a while loop", () => {
+    const p = new Parser(`fn while_loop_1(): void {
+      let i: i32 = 0;
+      while (i < 10) {
+        i++;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 2);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "while_loop_1", [], "void", 1, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a while loop with a return", () => {
+    const p = new Parser(`fn while_loop_2(): void {
+      let i: i32 = 0;
+      while (i < 10) {
+        if (i > 7) {
+          return i;
+        }
+        i++;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 2);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "while_loop_2", [], "void", 2, false)
+    ) {
+      return;
+    }
+  });
+
+  test("can parse a while loop with a break", () => {
+    const p = new Parser(`fn while_loop_3(): i32 {
+      let i: i32 = 0;
+      while (i < 10) {
+        if (i > 9) {
+          break;
+        }
+        i++;
+      }
+      return i;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 2);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "while_loop_3", [], "i32", 3, false)
+    ) {
+      return;
+    }
+  });
 });
+
+/// Utils
 
 const EPSILON = 0.00001;
 function floatEquals(a: number, b: number): boolean {
   return Math.abs(a - b) < EPSILON;
+}
+
+function assertStructStatement(
+  structStmt: ASTStatement,
+  name: string,
+  members: Record<string, StructMember>
+): structStmt is StructStatement {
+  assert(structStmt instanceof StructStatement);
+  assert(structStmt.name === name);
+  assert(
+    Object.keys(structStmt.members).length === Object.keys(members).length
+  );
+
+  for (const [key, data] of Object.entries(members)) {
+    assert(!!structStmt.members[key]);
+    assert(structStmt.members[key].name === data.name);
+    assert(structStmt.members[key].offset === data.offset);
+    assert(structStmt.members[key].size === data.size);
+    assert(structStmt.members[key].type === data.type);
+  }
+
+  return true;
+}
+
+function assertFunctionSignature(
+  funcStmt: ASTStatement,
+  name: string,
+  params: Array<[string, string]>,
+  returnType: string,
+  bodyLength: number,
+  exported: boolean
+): funcStmt is FunctionStatement {
+  assert(funcStmt instanceof FunctionStatement);
+  assert(funcStmt.name === name);
+  assert(funcStmt.fnExpr.params.length === params.length);
+  assert(funcStmt.fnExpr.returnType === returnType);
+  assert(funcStmt.fnExpr.body.statements.length === bodyLength);
+  assert(funcStmt.exported === exported);
+  assertFunctionParams(funcStmt, params);
+  return true;
+}
+
+// params: Array<[name, type]>
+function assertFunctionParams(
+  funcStmt: FunctionStatement,
+  expectedParams: Array<[string, string]>
+): void {
+  const params = funcStmt.fnExpr.params;
+  assert(expectedParams.length === params.length);
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i];
+    const lit = p.identifier.tokenLiteral();
+    const type = p.type;
+    const [expectedLit, expectedType] = expectedParams[i];
+    assert(lit === expectedLit);
+    assert(type === expectedType);
+  }
 }

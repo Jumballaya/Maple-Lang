@@ -155,7 +155,6 @@ function extractStructLiteral(
     }
     const val =
       typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
-    console.log(val);
     encoded += numToLittleEndian(
       [val],
       value instanceof FloatLiteralExpression ? "f32" : "i32"
