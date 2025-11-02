@@ -201,14 +201,11 @@ export async function compiler(
   };
   const module = wasm.instance.exports as {
     memory: WebAssembly.Memory;
-    _start: () => number;
+    _start: (a: number, b: number) => number;
   };
+  console.log(module._start.toString());
   const memory = module.memory;
-
-  const ptr = module._start();
-  console.log(ptr);
-  const dv = new Int32Array(memory.buffer, ptr, 3);
-  console.log(dv);
+  console.log(`Answer: ${module._start(13, 14)}`);
 }
 
 function run(cmd: string): Promise<void> {

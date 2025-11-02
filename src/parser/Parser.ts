@@ -4,6 +4,7 @@ import { FloatToken, IdentToken, Token, VoidToken } from "../lexer/token.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
+import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "./ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "./ast/expressions/CallExpression";
 import { FloatLiteralExpression } from "./ast/expressions/FloatLiteralExpression";
@@ -118,25 +119,41 @@ export class Parser {
     const token = this.tokenizer.curToken();
     switch (token.type) {
       case "Identifier": {
-        if (!topLevel) {
+        const isExport = token.literal === "export";
+        const isImport = token.literal === "import";
+        if ((isImport || isExport) && !topLevel) {
           this.errors.push({
             message: "Parser: Imports/Exports must be top-level only",
             token,
           });
           return null;
         }
-        if (token.literal === "export") {
+        if (isExport) {
           this.tokenizer.nextToken();
           return this.parseStatement(true, true);
         }
-        if (token.literal === "import") {
+        if (isImport) {
           return this.parseImportStatement();
         }
-        this.errors.push({
-          message: "Parser: No idenitifier expression at the top level",
-          token,
-        });
-        return null;
+        const identToken = token;
+        if (!this.expectPeek("Assign")) {
+          return null;
+        }
+        const type = this.identifierTypes.get(identToken.literal);
+        if (!type) {
+          return null;
+        }
+        const ident = new Identifier(identToken, type);
+        const exprToken = this.tokenizer.nextToken();
+        const valueExpr = this.parseExpression(LOWEST);
+
+        if (!this.tokenizer.peekTokenIs("Semicolon")) {
+          return null;
+        }
+        this.tokenizer.nextToken();
+
+        const expr = new AssignmentExpression(exprToken, ident, valueExpr);
+        return new ExpressionStatement(identToken, expr);
       }
 
       case "Func": {
@@ -333,11 +350,15 @@ export class Parser {
     const identToken = this.tokenizer.curToken();
 
     let typeAnn: string = "";
-    let typeIdent: IdentToken | null = null;
+    let typeIdent: Token | null = null;
     if (this.tokenizer.peekTokenIs("Colon")) {
       this.tokenizer.nextToken();
       if (this.tokenizer.peekTokenIs("Identifier")) {
         typeIdent = this.tokenizer.peekToken() as IdentToken; // @TODO: Extract actual type token from this.parseTyping
+        typeAnn = typeIdent.literal;
+      } else if (BUILTIN_TYPES.includes(this.tokenizer.peekToken().type)) {
+        typeIdent = this.tokenizer.peekToken();
+        typeAnn = typeIdent.literal.toString();
       }
       this.tokenizer.nextToken(); // consume colon
       const t = this.parseTyping();
@@ -375,7 +396,7 @@ export class Parser {
     const letStmt = new LetStatement(
       statementToken,
       identifier,
-      "",
+      typeAnn,
       value,
       exported
     );
@@ -387,7 +408,7 @@ export class Parser {
     const statementToken = this.tokenizer.curToken();
     this.tokenizer.nextToken();
 
-    const returnValue = this.parseExpression(LOWEST);
+    const returnValue = this.parseExpression(EQUALS);
 
     if (this.tokenizer.peekTokenIs("Semicolon")) {
       this.tokenizer.nextToken();
@@ -438,7 +459,7 @@ export class Parser {
     while (
       !(
         this.tokenizer.peekTokenIs("Semicolon") ||
-        !this.tokenizer.peekTokenIs("Comma")
+        this.tokenizer.peekTokenIs("Comma")
       ) &&
       precendence < this.peekPrecedence()
     ) {

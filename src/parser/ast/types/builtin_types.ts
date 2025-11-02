@@ -11,4 +11,4 @@ export const BUILTIN_TYPES = [
   "f32",
   "f64",
   "bool",
-] as const;
+];

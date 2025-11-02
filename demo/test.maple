@@ -1,4 +1,6 @@
 
-fn _start(a: i32, b: i32): void {
-  return a + b;
+fn _start(): i32 {
+  let x: i32 = 0;
+  x = 5;
+  return x;
 }

@@ -222,7 +222,7 @@ describe("Parser", () => {
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [
       ["a", "i32"],
-      ["a", "i32"],
+      ["b", "i32"],
     ];
     if (
       !assertFunctionSignature(funcStmt, "func_ret", params, "i32", 1, false)
@@ -281,27 +281,30 @@ describe("Parser", () => {
     }
     
     let t: T = {
-      len = 10,
+      apple = 10,
       banana = 20.5,
       _flag = false,
     };`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 2);
-    assertStructStatement(ast.statements[0], "S", {
+    assertStructStatement(ast.statements[0], "T", {
       apple: { name: "apple", offset: 0, size: 4, type: "i32" },
       banana: { name: "banana", offset: 4, size: 4, type: "f32" },
-      _flag: { name: "_flag", offset: 8, size: 4, type: "bool" },
+      _flag: { name: "_flag", offset: 8, size: 4, type: "i32" }, // bool turns into i32
     });
 
     const letStmt = ast.statements[1];
     assert(letStmt instanceof LetStatement);
-    assert(letStmt.identifier.tokenLiteral() === "s");
-    assert(letStmt.identifier.typeAnnotation === "S");
+    assert(letStmt.identifier.tokenLiteral() === "t");
+    assert(
+      letStmt.identifier.typeAnnotation === "T",
+      `Expected type: "T", Got: "${letStmt.identifier.typeAnnotation}`
+    );
     const structLit = letStmt.expression;
     assert(structLit instanceof StructLiteralExpression);
-    assert(structLit.name === "S");
-    assert(Object.keys(structLit.members).length === 2);
+    assert(structLit.name === "T");
+    assert(Object.keys(structLit.members).length === 3);
     assert(!!structLit.members["apple"]);
     assert(!!structLit.members["banana"]);
     assert(!!structLit.members["_flag"]);
@@ -952,11 +955,23 @@ function assertStructStatement(
   );
 
   for (const [key, data] of Object.entries(members)) {
-    assert(!!structStmt.members[key]);
+    assert(
+      !!structStmt.members[key],
+      `Struct: "${name}" expected member does not exist: "${key}"`
+    );
     assert(structStmt.members[key].name === data.name);
-    assert(structStmt.members[key].offset === data.offset);
-    assert(structStmt.members[key].size === data.size);
-    assert(structStmt.members[key].type === data.type);
+    assert(
+      structStmt.members[key].offset === data.offset,
+      `Struct: "${name}" member: "${data.name}" incorrect offset. Expected: "${data.offset}", Got: "${structStmt.members[key].offset}"`
+    );
+    assert(
+      structStmt.members[key].size === data.size,
+      `Struct: "${name}" member: "${data.name}" incorrect size. Expected: "${data.size}", Got: "${structStmt.members[key].size}"`
+    );
+    assert(
+      structStmt.members[key].type === data.type,
+      `Struct: "${name}" member: "${data.name}" incorrect type. Expected: "${data.type}", Got: "${structStmt.members[key].type}"`
+    );
   }
 
   return true;
