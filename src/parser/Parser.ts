@@ -106,7 +106,6 @@ export class Parser {
       if (statement !== null) {
         program.statements.push(statement);
       }
-      this.tokenizer.nextToken();
     }
 
     return program;
@@ -127,6 +126,7 @@ export class Parser {
           });
           return null;
         }
+        this.tokenizer.nextToken(); // consume the semicolon
         return stmt;
       }
       case "Import": {
@@ -203,7 +203,10 @@ export class Parser {
       return null;
     }
 
-    this.identifierTypes.set(ident, expr.returnType ?? "void");
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+    this.tokenizer.nextToken();
 
     return new FunctionStatement(statementToken, expr, ident, exported);
   }
@@ -266,6 +269,8 @@ export class Parser {
       return null;
     }
 
+    this.tokenizer.nextToken(); // consume string literal token
+
     const importPath = new TextDecoder().decode(pathToken.literal);
     return new ImportStatement(tok, imported, importPath);
   }
@@ -305,12 +310,23 @@ export class Parser {
       };
       size += sz;
 
+      // account for last item skipping its comma
+      if (this.tokenizer.peekTokenIs("RBrace")) {
+        this.tokenizer.nextToken();
+        break;
+      }
       if (!this.expectPeek("Comma")) {
         return null;
       }
     }
 
-    this.tokenizer.nextToken();
+    if (this.tokenizer.curTokenIs("Comma")) {
+      this.tokenizer.nextToken(); // consume last comma
+    }
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume RBRACE
 
     return new StructStatement(statementToken, name, members, size, exported);
   }
@@ -390,11 +406,11 @@ export class Parser {
       value = this.parseExpression(LOWEST);
     }
 
-    if (this.tokenizer.peekTokenIs("Semicolon")) {
-      this.tokenizer.nextToken();
+    if (!this.expectPeek("Semicolon")) {
+      return null;
     }
+    this.tokenizer.nextToken(); // consume semicolon
 
-    // @TODO: keep a map of ident types to use here
     const letStmt = new LetStatement(
       statementToken,
       identifier,
@@ -403,6 +419,7 @@ export class Parser {
       exported
     );
     letStmt.typeAnnotation = typeAnn;
+
     return letStmt;
   }
 
@@ -412,9 +429,10 @@ export class Parser {
 
     const returnValue = this.parseExpression(EQUALS);
 
-    if (this.tokenizer.peekTokenIs("Semicolon")) {
-      this.tokenizer.nextToken();
+    if (!this.expectPeek("Semicolon")) {
+      return null;
     }
+    this.tokenizer.nextToken();
 
     return new ReturnStatement(statementToken, returnValue);
   }
@@ -432,10 +450,51 @@ export class Parser {
       if (stmt !== null) {
         block.statements.push(stmt);
       }
-      this.tokenizer.nextToken();
     }
 
     return block;
+  }
+
+  private parseIfStatement(): ASTStatement | null {
+    const exprToken = this.tokenizer.curToken();
+
+    if (!this.expectPeek("LParen")) {
+      return null;
+    }
+
+    this.tokenizer.nextToken();
+    const condition = this.parseExpression(LOWEST);
+
+    if (!this.expectPeek("RParen")) {
+      return null;
+    }
+
+    if (!this.expectPeek("LBrace")) {
+      return null;
+    }
+
+    if (!condition) {
+      return null;
+    }
+
+    const consequence = this.parseBlockStatement();
+    const expression = new IfStatement(exprToken, condition, consequence);
+    if (this.tokenizer.peekTokenIs("Else")) {
+      this.tokenizer.nextToken();
+
+      if (!this.expectPeek("LBrace")) {
+        return null;
+      }
+
+      expression.elseBlock = this.parseBlockStatement();
+    }
+
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    return expression;
   }
 
   private parseForStatement(): ASTStatement | null {
@@ -450,14 +509,6 @@ export class Parser {
     if (!(initBlock instanceof LetStatement)) {
       return null;
     }
-    if (!this.tokenizer.curTokenIs("Semicolon")) {
-      this.errors.push({
-        message: "Parser: semicolon expected after for initializer statement",
-        token: stmtToken,
-      });
-      return null;
-    }
-    this.tokenizer.nextToken();
 
     // conditionExpr
     const conditionExpr = this.parseExpression(LOWEST);
@@ -515,8 +566,7 @@ export class Parser {
     if (!this.tokenizer.curTokenIs("RBrace")) {
       return null;
     }
-
-    this.tokenizer.nextToken(); // consume RBRACE
+    this.tokenizer.nextToken();
 
     return new ForStatement(
       stmtToken,
@@ -554,6 +604,7 @@ export class Parser {
       !(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))
     ) {
       const stmt = this.parseStatement(false);
+
       if (!stmt) {
         return null;
       }
@@ -566,8 +617,7 @@ export class Parser {
     if (!this.tokenizer.curTokenIs("RBrace")) {
       return null;
     }
-
-    this.tokenizer.nextToken(); // consume RBRACE
+    this.tokenizer.nextToken();
 
     return new WhileStatement(stmtToken, conditionExpr, loopBody);
   }
@@ -578,7 +628,8 @@ export class Parser {
     const expression = this.parseExpression(LOWEST);
 
     if (this.tokenizer.peekTokenIs("Semicolon")) {
-      this.tokenizer.nextToken();
+      this.tokenizer.nextToken(); // consume last token of expression
+      this.tokenizer.nextToken(); // consume semicolor
     }
 
     return new ExpressionStatement(statementToken, expression);
@@ -656,43 +707,6 @@ export class Parser {
     this.tokenizer.nextToken(); // consume '=' token
     const valueExpr = this.parseExpression(LOWEST);
     return new AssignmentExpression(exprToken, ident, valueExpr);
-  }
-
-  private parseIfStatement(): ASTStatement | null {
-    const exprToken = this.tokenizer.curToken();
-
-    if (!this.expectPeek("LParen")) {
-      return null;
-    }
-
-    this.tokenizer.nextToken();
-    const condition = this.parseExpression(LOWEST);
-
-    if (!this.expectPeek("RParen")) {
-      return null;
-    }
-
-    if (!this.expectPeek("LBrace")) {
-      return null;
-    }
-
-    if (!condition) {
-      return null;
-    }
-
-    const consequence = this.parseBlockStatement();
-    const expression = new IfStatement(exprToken, condition, consequence);
-    if (this.tokenizer.peekTokenIs("Else")) {
-      this.tokenizer.nextToken();
-
-      if (!this.expectPeek("LBrace")) {
-        return null;
-      }
-
-      expression.elseBlock = this.parseBlockStatement();
-    }
-
-    return expression;
   }
 
   private parseCallExpression(func: ASTExpression): ASTExpression {
@@ -849,12 +863,20 @@ export class Parser {
         members[name] = expr;
       }
 
+      // account for last item skipping its comma
+      if (this.tokenizer.peekTokenIs("RBrace")) {
+        this.tokenizer.nextToken();
+        break;
+      }
       if (!this.expectPeek("Comma")) {
         return null;
       }
     }
 
-    if (!this.expectPeek("RBrace")) {
+    if (this.tokenizer.curTokenIs("Comma")) {
+      this.tokenizer.nextToken(); // consume last comma
+    }
+    if (!this.tokenizer.curTokenIs("RBrace")) {
       return null;
     }
 

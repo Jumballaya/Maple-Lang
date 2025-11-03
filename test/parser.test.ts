@@ -269,7 +269,7 @@ describe("Parser", () => {
   test("can parse a struct definition (no trailing comma)", () => {
     const p = new Parser(`struct S {
       len: i32,
-      next: i32
+      next: f32
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
@@ -288,7 +288,7 @@ describe("Parser", () => {
       banana: f32,
       _flag: bool,
     }
-    
+
     let t: T = {
       apple = 10,
       banana = 20.5,
@@ -334,7 +334,7 @@ describe("Parser", () => {
       len: i32,
       next: f32
     }
-    
+
     let s: S = {
       len = 10,
       next = 20.5
@@ -1278,10 +1278,12 @@ describe("Parser", () => {
     assert(updateExpr.value.operator === "+");
     assert(updateExpr.value.right.value === 1);
 
-    const retStmt = funcStmt.fnExpr.body.statements[1];
+    const retStmt = funcStmt.fnExpr.body.statements[2];
     assert(retStmt instanceof ReturnStatement);
-    assert(retStmt.returnValue instanceof IntegerLiteralExpression);
-    assert(retStmt.returnValue.value === 0);
+    console.log(retStmt);
+    assert(retStmt.returnValue instanceof Identifier);
+    assert(retStmt.returnValue.tokenLiteral() === "i");
+    assert(retStmt.returnValue.typeAnnotation === "i32");
   });
 
   test("can parse a while loop with a break", () => {
@@ -1304,6 +1306,65 @@ describe("Parser", () => {
     ) {
       return;
     }
+
+    const letStmt = funcStmt.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "i");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const whileStmt = funcStmt.fnExpr.body.statements[1];
+    assert(whileStmt instanceof WhileStatement);
+    assert(whileStmt.loopBody.statements.length === 2);
+
+    const condExpr = whileStmt.condExpr;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const ifStmt = whileStmt.loopBody.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    assert(!ifStmt.elseBlock);
+    assert(ifStmt.thenBlock.statements.length == 1);
+
+    const ifCond = ifStmt.conditionExpr;
+    assert(ifCond instanceof InfixExpression);
+    assert(ifCond.left instanceof Identifier);
+    assert(ifCond.operator === ">");
+    assert(ifCond.right instanceof IntegerLiteralExpression);
+    assert(ifCond.left.tokenLiteral() === "i");
+    assert(ifCond.right.value === 9);
+
+    const ifRetStmt = ifStmt.thenBlock.statements[0];
+    assert(ifRetStmt instanceof BreakStatement);
+
+    const updateStmt = whileStmt.loopBody.statements[1];
+    assert(updateStmt instanceof ExpressionStatement);
+    const updateExpr = updateStmt.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
+
+    const retStmt = funcStmt.fnExpr.body.statements[2];
+    assert(retStmt instanceof ReturnStatement);
+    console.log(retStmt);
+    assert(retStmt.returnValue instanceof Identifier);
+    assert(retStmt.returnValue.tokenLiteral() === "i");
+    assert(retStmt.returnValue.typeAnnotation === "i32");
   });
 });
 
