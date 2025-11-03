@@ -22,6 +22,7 @@ import {
 } from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
+import { ForStatement } from "./ast/statements/ForStatement";
 import { FunctionStatement } from "./ast/statements/FunctionStatement";
 import { IfStatement } from "./ast/statements/IfStatement";
 import { ImportStatement } from "./ast/statements/ImportStatement";
@@ -119,41 +120,7 @@ export class Parser {
     const token = this.tokenizer.curToken();
     switch (token.type) {
       case "Identifier": {
-        const isExport = token.literal === "export";
-        const isImport = token.literal === "import";
-        if ((isImport || isExport) && !topLevel) {
-          this.errors.push({
-            message: "Parser: Imports/Exports must be top-level only",
-            token,
-          });
-          return null;
-        }
-        if (isExport) {
-          this.tokenizer.nextToken();
-          return this.parseStatement(true, true);
-        }
-        if (isImport) {
-          return this.parseImportStatement();
-        }
-        const identToken = token;
-        if (!this.expectPeek("Assign")) {
-          return null;
-        }
-        const type = this.identifierTypes.get(identToken.literal);
-        if (!type) {
-          return null;
-        }
-        const ident = new Identifier(identToken, type);
-        const exprToken = this.tokenizer.nextToken();
-        const valueExpr = this.parseExpression(LOWEST);
-
-        if (!this.tokenizer.peekTokenIs("Semicolon")) {
-          return null;
-        }
-        this.tokenizer.nextToken();
-
-        const expr = new AssignmentExpression(exprToken, ident, valueExpr);
-        return new ExpressionStatement(identToken, expr);
+        return this.parseIdentifierStatement(topLevel);
       }
 
       case "Func": {
@@ -176,10 +143,58 @@ export class Parser {
         return this.parseIfStatement();
       }
 
+      case "For": {
+        return this.parseForStatement();
+      }
+
       default: {
         return this.parseExpressionStatement();
       }
     }
+  }
+
+  private parseIdentifierStatement(topLevel = false): ASTStatement | null {
+    const token = this.tokenizer.curToken();
+    const identToken = token as IdentToken;
+    const isExport = token.literal === "export";
+    const isImport = token.literal === "import";
+    if ((isImport || isExport) && !topLevel) {
+      this.errors.push({
+        message: "Parser: Imports/Exports must be top-level only",
+        token,
+      });
+      return null;
+    }
+    if (isExport) {
+      this.tokenizer.nextToken();
+      return this.parseStatement(true, true);
+    }
+    if (isImport) {
+      return this.parseImportStatement();
+    }
+    const type = this.identifierTypes.get(identToken.literal);
+    if (!type) {
+      return null;
+    }
+    let expr: ASTExpression | null = null;
+    if (this.tokenizer.peekTokenIs("Semicolon")) {
+      expr = new Identifier(identToken, type);
+    } else if (this.tokenizer.peekTokenIs("Assign")) {
+      const ident = new Identifier(identToken, type);
+      const exprToken = this.tokenizer.nextToken();
+      this.tokenizer.nextToken(); // consume '=' token
+      const valueExpr = this.parseExpression(LOWEST);
+      expr = new AssignmentExpression(exprToken, ident, valueExpr);
+    }
+
+    if (!(isExport || isImport)) {
+      if (!this.tokenizer.peekTokenIs("Semicolon")) {
+        return null;
+      }
+      this.tokenizer.nextToken();
+    }
+
+    return new ExpressionStatement(identToken, expr);
   }
 
   private parseFunctionStatement(exported = false): ASTStatement | null {
@@ -434,6 +449,90 @@ export class Parser {
     }
 
     return block;
+  }
+
+  private parseForStatement(): ASTStatement | null {
+    const stmtToken = this.tokenizer.curToken(); // save 'for' token
+    if (!this.expectPeek("LParen")) {
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    // init block
+    const initBlock = this.parseLetStatement();
+    if (!(initBlock instanceof LetStatement)) {
+      return null;
+    }
+    if (!this.tokenizer.curTokenIs("Semicolon")) {
+      this.errors.push({
+        message: "Parser: semicolon expected after for initializer statement",
+        token: stmtToken,
+      });
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    // conditionExpr
+    const conditionExpr = this.parseExpression(LOWEST);
+    if (!conditionExpr) {
+      return null;
+    }
+    const conditionStatement = new ExpressionStatement(
+      this.tokenizer.curToken(),
+      conditionExpr
+    );
+    this.tokenizer.nextToken(); // consumes last token from the parseExpression call
+    if (!this.tokenizer.curTokenIs("Semicolon")) {
+      this.errors.push({
+        message: "Parser: semicolon expected after for condition expression",
+        token: stmtToken,
+      });
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    // updateExpr
+    const updateExprStatement = this.parseIdentifierStatement(false);
+    if (!(updateExprStatement instanceof ExpressionStatement)) {
+      return null;
+    }
+
+    if (!this.expectPeek("RParen")) {
+      return null;
+    }
+    if (!this.expectPeek("LBrace")) {
+      return null;
+    }
+
+    // loopBody
+    const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
+    this.tokenizer.nextToken();
+    while (
+      !(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))
+    ) {
+      const stmt = this.parseStatement(false);
+      if (!stmt) {
+        return null;
+      }
+      if (this.tokenizer.curTokenIs("Semicolon")) {
+        this.tokenizer.nextToken();
+      }
+      loopBody.statements.push(stmt);
+    }
+
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // consume RBRACE
+
+    return new ForStatement(
+      stmtToken,
+      initBlock,
+      conditionStatement,
+      updateExprStatement,
+      loopBody
+    );
   }
 
   private parseExpressionStatement(): ASTStatement | null {
@@ -836,7 +935,7 @@ export class Parser {
     let type = curToken.literal.toString();
 
     const isIdent = this.tokenizer.curTokenIs("Identifier");
-    const isBuiltin = BUILTIN_TYPES.includes(type as any);
+    const isBuiltin = BUILTIN_TYPES.includes(curToken.type);
 
     if (!isIdent && !isBuiltin) {
       this.errors.push({

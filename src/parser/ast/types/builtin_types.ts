@@ -1,5 +1,5 @@
 export const BUILTIN_TYPES = [
-  "void",
+  "Void",
   "i8",
   "i16",
   "i32",
@@ -10,5 +10,5 @@ export const BUILTIN_TYPES = [
   "u64",
   "f32",
   "f64",
-  "bool",
+  "Boolean",
 ];

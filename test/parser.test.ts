@@ -69,7 +69,6 @@ describe("Parser", () => {
     const p = new Parser(`import x from "y"`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-
     assert(ast.statements.length === 1);
     const importStmt = ast.statements[0];
     assert(importStmt instanceof ImportStatement);
@@ -673,7 +672,7 @@ describe("Parser", () => {
       return;
     }
 
-    const ifStmt = funcStmt.fnExpr.body.statements[1];
+    const ifStmt = funcStmt.fnExpr.body.statements[0];
     assert(ifStmt instanceof IfStatement);
     const condExp = ifStmt.conditionExpr;
     const thenBlock = ifStmt.thenBlock;
@@ -712,7 +711,7 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    const params: [string, string][] = [["n", "i32"]];
+    const params: [string, string][] = [["b", "bool"]];
     if (
       !assertFunctionSignature(funcStmt, "test_if_5", params, "i32", 1, false)
     ) {
@@ -753,7 +752,7 @@ describe("Parser", () => {
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
-    const params: [string, string][] = [["n", "i32"]];
+    const params: [string, string][] = [["i", "i32"]];
     if (
       !assertFunctionSignature(funcStmt, "test_if_6", params, "i32", 1, false)
     ) {
@@ -785,7 +784,7 @@ describe("Parser", () => {
 
   test("can parse a for loop, empty", () => {
     const p = new Parser(`fn test_for_1(): void {
-      for (let i: i32 = 0; i < 10; i++) {}
+      for (let i: i32 = 0; i < 10; i = i + 1) {}
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
@@ -798,7 +797,7 @@ describe("Parser", () => {
 
   test("can parse a for loop not starting from 0", () => {
     const p = new Parser(`fn test_for_2(): void {
-      for (let i: i32 = 17; i < 22; i++) {}
+      for (let i: i32 = 17; i < 22; i = i + 1) {}
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
@@ -811,7 +810,7 @@ describe("Parser", () => {
 
   test("can parse a for loop starting from negative", () => {
     const p = new Parser(`fn test_for_3(): void {
-      for (let i: i32 = -3; i < 7; i++) {}
+      for (let i: i32 = -3; i < 7; i = i + 1) {}
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
@@ -824,7 +823,7 @@ describe("Parser", () => {
 
   test("can parse a for loop with a body", () => {
     const p = new Parser(`fn test_for_4(): void {
-      for (let i: i32 = 0; i < 10; i++) {
+      for (let i: i32 = 0; i < 10; i = i + 1) {
         let x: i32 = 0;
         x = i;
       }
@@ -840,7 +839,7 @@ describe("Parser", () => {
 
   test("can parse a for loop with a return", () => {
     const p = new Parser(`fn test_for_5(): i32 {
-      for (let i: i32 = 0; i < 10; i++) {
+      for (let i: i32 = 0; i < 10; i = i + 1) {
         if (i > 7) {
           return i;
         }
@@ -858,7 +857,7 @@ describe("Parser", () => {
 
   test("can parse a for loop with a break", () => {
     const p = new Parser(`fn for_for_5(): i32 {
-      for (let i: i32 = 0; i < 10; i++) {
+      for (let i: i32 = 0; i < 10; i = i + 1) {
         if (i > 7) {
           break;
         }
@@ -878,7 +877,7 @@ describe("Parser", () => {
     const p = new Parser(`fn while_loop_1(): void {
       let i: i32 = 0;
       while (i < 10) {
-        i++;
+        i = i + 1;
       }
     }`);
     const ast = p.parse("test");
@@ -899,7 +898,7 @@ describe("Parser", () => {
         if (i > 7) {
           return i;
         }
-        i++;
+        i = i + 1;
       }
     }`);
     const ast = p.parse("test");
@@ -920,7 +919,7 @@ describe("Parser", () => {
         if (i > 9) {
           break;
         }
-        i++;
+        i = i + 1;
       }
       return i;
     }`);
@@ -1002,7 +1001,7 @@ function assertFunctionParams(
 ): void {
   const params = funcStmt.fnExpr.params;
   assert(expectedParams.length === params.length);
-  for (let i = 0; i < params.length; i++) {
+  for (let i = 0; i < params.length; i = i + 1) {
     const p = params[i];
     const lit = p.identifier.tokenLiteral();
     const type = p.type;
