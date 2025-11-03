@@ -62,12 +62,16 @@ export class Parser {
   private precendences: Partial<Record<Token["type"], ParserPrecedence>> = {
     Assign: EQUALS,
     NotEquals: EQUALS,
+    Equals: EQUALS,
+    LogicalAnd: LESSGREATER,
+    LogicalOr: LESSGREATER,
     LessThan: LESSGREATER,
     GreaterThan: LESSGREATER,
     Plus: SUM,
     Minus: SUM,
     Slash: PRODUCT,
     Star: PRODUCT,
+    Percent: PRODUCT,
     LParen: CALL,
   };
 
@@ -91,6 +95,9 @@ export class Parser {
     this.registerInfix("Minus", this.parseInfixExpression.bind(this));
     this.registerInfix("Slash", this.parseInfixExpression.bind(this));
     this.registerInfix("Star", this.parseInfixExpression.bind(this));
+    this.registerInfix("Percent", this.parseInfixExpression.bind(this));
+    this.registerInfix("LogicalAnd", this.parseInfixExpression.bind(this));
+    this.registerInfix("LogicalOr", this.parseInfixExpression.bind(this));
     this.registerInfix("Equals", this.parseInfixExpression.bind(this));
     this.registerInfix("NotEquals", this.parseInfixExpression.bind(this));
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
