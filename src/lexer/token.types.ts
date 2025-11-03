@@ -26,6 +26,8 @@ export type Token =
   | AsToken
   | TrueToken
   | FalseToken
+  | ImportToken
+  | ExportToken
   | I8TypeToken
   | U8TypeToken
   | I16TypeToken
@@ -210,6 +212,16 @@ export type TrueToken = {
 export type FalseToken = {
   type: "False";
   literal: "false";
+} & Pos;
+
+export type ImportToken = {
+  type: "Import";
+  literal: "import";
+} & Pos;
+
+export type ExportToken = {
+  type: "Export";
+  literal: "export";
 } & Pos;
 
 export type NullToken = {

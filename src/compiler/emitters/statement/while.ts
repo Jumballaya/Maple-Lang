@@ -8,8 +8,8 @@ export function emitWhileStatement(
   stmt: WhileStatement,
   emitter: ModuleEmitter
 ) {
-  const br = makeLabel("break");
-  const lp = makeLabel("loop");
+  const br = emitter.makeLabel("break");
+  const lp = emitter.makeLabel("loop");
 
   // break
   emitter.writer.open(`(block ${br}`);
@@ -40,4 +40,7 @@ export function emitWhileStatement(
 
   // end break
   emitter.writer.close(")");
+
+  emitter.destroyLabel("break", br);
+  emitter.destroyLabel("loop", lp);
 }

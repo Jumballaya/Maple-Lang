@@ -866,9 +866,9 @@ describe("Parser", () => {
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-    assert(ast.statements.length === 2);
+    assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "for_for_5", [], "i32", 1, false)) {
+    if (!assertFunctionSignature(funcStmt, "for_for_5", [], "i32", 2, false)) {
       return;
     }
   });

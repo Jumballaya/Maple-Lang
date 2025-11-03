@@ -22,6 +22,7 @@ import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression.j
 import { CallExpression } from "../parser/ast/expressions/CallExpression.js";
 import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression.js";
 import { MemberExpression } from "../parser/ast/expressions/MemberExpression.js";
+import { makeLabel } from "./emitters/emitter.utils.js";
 
 export class ModuleEmitter {
   private writers: IWriter[] = [new Writer()];
@@ -36,6 +37,10 @@ export class ModuleEmitter {
   // Context
   private mod: ModuleMeta;
   private currentFn: FunctionContext | undefined = undefined;
+  private labelStack: Record<"break" | "loop", string[]> = {
+    break: [],
+    loop: [],
+  };
 
   constructor(data: ModuleMeta) {
     this.mod = data;
@@ -51,6 +56,25 @@ export class ModuleEmitter {
       fn: this.currentFn,
       writer: this.writer,
     };
+  }
+
+  // loop labels
+  public makeLabel(type: "break" | "loop"): string {
+    const label = makeLabel(type);
+    this.labelStack[type].push(label);
+    return label;
+  }
+
+  public destroyLabel(type: "break" | "loop", name: string): void {
+    const lastLabel = this.labelStack[type][this.labelStack[type].length - 1];
+    if (lastLabel !== name) {
+      throw new Error(`incorrect label: ${name}, expected: ${lastLabel}`);
+    }
+    this.labelStack[type].pop();
+  }
+
+  public getCurrentLabel(type: "break" | "loop"): string | undefined {
+    return this.labelStack[type][this.labelStack[type].length - 1];
   }
 
   // text API

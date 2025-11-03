@@ -1,6 +1,6 @@
 import { sizeofType } from "../compiler/emitters/emit.types";
 import { StructMember } from "../compiler/emitters/emitter.types";
-import { FloatToken, IdentToken, Token, VoidToken } from "../lexer/token.types";
+import { IdentToken, Token } from "../lexer/token.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
@@ -16,11 +16,9 @@ import { Identifier } from "./ast/expressions/Identifier";
 import { InfixExpression } from "./ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
 import { PrefixExpression } from "./ast/expressions/PrefixExpression";
-import {
-  StructLiteralExpression,
-  StructTable,
-} from "./ast/expressions/StructLiteralExpression";
+import { StructLiteralExpression } from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
+import { BreakStatement } from "./ast/statements/BreakStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
 import { ForStatement } from "./ast/statements/ForStatement";
 import { FunctionStatement } from "./ast/statements/FunctionStatement";
@@ -119,10 +117,39 @@ export class Parser {
   ): ASTStatement | null {
     const token = this.tokenizer.curToken();
     switch (token.type) {
-      case "Identifier": {
-        return this.parseIdentifierStatement(topLevel);
+      case "Break": {
+        const stmt = new BreakStatement(token);
+        if (!this.expectPeek("Semicolon")) {
+          this.errors.push({
+            message: "Parser: semicolon expected after break statement",
+            token,
+          });
+          return null;
+        }
+        this.tokenizer.nextToken();
+        return stmt;
       }
-
+      case "Import": {
+        if (!topLevel) {
+          this.errors.push({
+            message: "Parser: Imports must be top-level only",
+            token,
+          });
+          return null;
+        }
+        return this.parseImportStatement();
+      }
+      case "Export": {
+        if (!topLevel) {
+          this.errors.push({
+            message: "Parser: Exports must be top-level only",
+            token,
+          });
+          return null;
+        }
+        this.tokenizer.nextToken();
+        return this.parseStatement(true, true);
+      }
       case "Func": {
         return this.parseFunctionStatement(exported);
       }
@@ -151,50 +178,6 @@ export class Parser {
         return this.parseExpressionStatement();
       }
     }
-  }
-
-  private parseIdentifierStatement(topLevel = false): ASTStatement | null {
-    const token = this.tokenizer.curToken();
-    const identToken = token as IdentToken;
-    const isExport = token.literal === "export";
-    const isImport = token.literal === "import";
-    if ((isImport || isExport) && !topLevel) {
-      this.errors.push({
-        message: "Parser: Imports/Exports must be top-level only",
-        token,
-      });
-      return null;
-    }
-    if (isExport) {
-      this.tokenizer.nextToken();
-      return this.parseStatement(true, true);
-    }
-    if (isImport) {
-      return this.parseImportStatement();
-    }
-    const type = this.identifierTypes.get(identToken.literal);
-    if (!type) {
-      return null;
-    }
-    let expr: ASTExpression | null = null;
-    if (this.tokenizer.peekTokenIs("Semicolon")) {
-      expr = new Identifier(identToken, type);
-    } else if (this.tokenizer.peekTokenIs("Assign")) {
-      const ident = new Identifier(identToken, type);
-      const exprToken = this.tokenizer.nextToken();
-      this.tokenizer.nextToken(); // consume '=' token
-      const valueExpr = this.parseExpression(LOWEST);
-      expr = new AssignmentExpression(exprToken, ident, valueExpr);
-    }
-
-    if (!(isExport || isImport)) {
-      if (!this.tokenizer.peekTokenIs("Semicolon")) {
-        return null;
-      }
-      this.tokenizer.nextToken();
-    }
-
-    return new ExpressionStatement(identToken, expr);
   }
 
   private parseFunctionStatement(exported = false): ASTStatement | null {
@@ -492,10 +475,15 @@ export class Parser {
     this.tokenizer.nextToken();
 
     // updateExpr
-    const updateExprStatement = this.parseIdentifierStatement(false);
-    if (!(updateExprStatement instanceof ExpressionStatement)) {
+    const updateToken = this.tokenizer.curToken();
+    const updateExpr = this.parseExpression(LOWEST);
+    if (!updateExpr) {
       return null;
     }
+    const updateExprStatement = new ExpressionStatement(
+      updateToken,
+      updateExpr
+    );
 
     if (!this.expectPeek("RParen")) {
       return null;
@@ -606,13 +594,19 @@ export class Parser {
     return expr;
   }
 
-  // @TODO: Keep a map of identifiers so I can map the type here
   private parseIdentifier(): ASTExpression {
     const tok = this.tokenizer.curToken();
     const literal = tok.literal;
     const type = this.getType(literal.toString());
+    const ident = new Identifier(tok, type);
+    if (!this.tokenizer.peekTokenIs("Assign")) {
+      return ident;
+    }
 
-    return new Identifier(tok, type);
+    const exprToken = this.tokenizer.nextToken();
+    this.tokenizer.nextToken(); // consume '=' token
+    const valueExpr = this.parseExpression(LOWEST);
+    return new AssignmentExpression(exprToken, ident, valueExpr);
   }
 
   private parseIfStatement(): ASTStatement | null {

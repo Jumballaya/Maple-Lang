@@ -17,6 +17,8 @@ export const KEYWORDS = new Map<string, Token["type"]>([
   ["struct", "Struct"],
   ["true", "True"],
   ["false", "False"],
+  ["import", "Import"],
+  ["export", "Export"],
   ["null", "Null"],
   ["as", "As"],
   ["void", "Void"],
