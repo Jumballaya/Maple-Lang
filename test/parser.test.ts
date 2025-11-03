@@ -16,10 +16,11 @@ import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentEx
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
 import { IfStatement } from "../src/parser/ast/statements/IfStatement";
 import { ASTStatement } from "../src/parser/ast/types/ast.type";
-import {
-  StructData,
-  StructMember,
-} from "../src/compiler/emitters/emitter.types";
+import { StructMember } from "../src/compiler/emitters/emitter.types";
+import { ForStatement } from "../src/parser/ast/statements/ForStatement";
+import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
+import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
+import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 
 // @TODO:
 //
@@ -32,10 +33,19 @@ import {
 //
 //
 //      Operators:
-//        Math: +, -, /, *, %
-//        Logic: &&, ||, !
-//        Bitwise: &, |, ^, ~
-//        Inc/Dec: ++, --
+//
+//        Infix, Prefix and Postfix
+//
+//          Math: +, -, /, *, %
+//          Logic: &&, ||, !
+//          Bitwise: &, |, ^, ~
+//          Inc/Dec: ++, --
+//
+//
+//      Array Access
+//        1. literals       -- x[3]
+//        2. variables      -- x[y]
+//        3. expressions    -- x[z * 4]
 //
 //      Function calls and nesting
 //        1. a(b(c()))
@@ -793,6 +803,39 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "test_for_1", [], null, 1, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 0);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === 0);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
   });
 
   test("can parse a for loop not starting from 0", () => {
@@ -806,6 +849,39 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "test_for_2", [], null, 1, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 0);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === 17);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 22);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
   });
 
   test("can parse a for loop starting from negative", () => {
@@ -819,6 +895,41 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "test_for_3", [], null, 1, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 0);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof PrefixExpression);
+    assert(initBlock.expression.operator === "-");
+    assert(initBlock.expression.right instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.right.value === 3);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 7);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
   });
 
   test("can parse a for loop with a body", () => {
@@ -835,6 +946,59 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "test_for_4", [], null, 1, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 2);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === 0);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
+
+    const letStmt = forStmt.loopBody.statements[0];
+    const assignStmt = forStmt.loopBody.statements[1];
+    assert(letStmt instanceof LetStatement);
+    assert(assignStmt instanceof ExpressionStatement);
+
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "x");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const assignExpr = assignStmt.expression;
+    assert(assignExpr instanceof AssignmentExpression);
+    assert(assignExpr.left instanceof Identifier);
+    assert(assignExpr.value instanceof Identifier);
+    assert(assignExpr.left.tokenLiteral() === "x");
+    assert(assignExpr.left.typeAnnotation === "i32");
+    assert(assignExpr.value.tokenLiteral() === "i");
+    assert(assignExpr.value.typeAnnotation === "i32");
   });
 
   test("can parse a for loop with a return", () => {
@@ -853,6 +1017,63 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "test_for_5", [], "i32", 2, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 1);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === 0);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
+
+    const ifStmt = forStmt.loopBody.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    assert(!ifStmt.elseBlock);
+    assert(ifStmt.thenBlock.statements.length == 1);
+
+    const ifCond = ifStmt.conditionExpr;
+    assert(ifCond instanceof InfixExpression);
+    assert(ifCond.left instanceof Identifier);
+    assert(ifCond.operator === ">");
+    assert(ifCond.right instanceof IntegerLiteralExpression);
+    assert(ifCond.left.tokenLiteral() === "i");
+    assert(ifCond.right.value === 7);
+
+    const ifRetStmt = ifStmt.thenBlock.statements[0];
+    assert(ifRetStmt instanceof ReturnStatement);
+    assert(ifRetStmt.returnValue instanceof Identifier);
+    assert(ifRetStmt.returnValue.tokenLiteral() === "i");
+    assert(ifRetStmt.returnValue.typeAnnotation === "i32");
+
+    const retStmt = funcStmt.fnExpr.body.statements[1];
+    assert(retStmt instanceof ReturnStatement);
+    assert(retStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(retStmt.returnValue.value === 0);
   });
 
   test("can parse a for loop with a break", () => {
@@ -871,6 +1092,60 @@ describe("Parser", () => {
     if (!assertFunctionSignature(funcStmt, "for_for_5", [], "i32", 2, false)) {
       return;
     }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 1);
+
+    const initBlock = forStmt.initBlock;
+    assert(!initBlock.exported);
+    assert(initBlock.identifier.tokenLiteral() === "i");
+    assert(initBlock.identifier.typeAnnotation === "i32");
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === 0);
+
+    const condExpr = forStmt.conditionExpr.expression;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const updateExpr = forStmt.updateExpr.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
+
+    const ifStmt = forStmt.loopBody.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    assert(!ifStmt.elseBlock);
+    assert(ifStmt.thenBlock.statements.length == 1);
+
+    const ifCond = ifStmt.conditionExpr;
+    assert(ifCond instanceof InfixExpression);
+    assert(ifCond.left instanceof Identifier);
+    assert(ifCond.operator === ">");
+    assert(ifCond.right instanceof IntegerLiteralExpression);
+    assert(ifCond.left.tokenLiteral() === "i");
+    assert(ifCond.right.value === 7);
+
+    const ifBreakStmt = ifStmt.thenBlock.statements[0];
+    assert(ifBreakStmt instanceof BreakStatement);
+
+    const retStmt = funcStmt.fnExpr.body.statements[1];
+    assert(retStmt instanceof ReturnStatement);
+    assert(retStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(retStmt.returnValue.value === 0);
   });
 
   test("can parse a while loop", () => {
@@ -882,13 +1157,49 @@ describe("Parser", () => {
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-    assert(ast.statements.length === 2);
+    assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
     if (
-      !assertFunctionSignature(funcStmt, "while_loop_1", [], null, 1, false)
+      !assertFunctionSignature(funcStmt, "while_loop_1", [], null, 2, false)
     ) {
       return;
     }
+
+    const letStmt = funcStmt.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "i");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const whileStmt = funcStmt.fnExpr.body.statements[1];
+    assert(whileStmt instanceof WhileStatement);
+
+    const condExpr = whileStmt.condExpr;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    assert(whileStmt.loopBody.statements.length === 1);
+    const updateStmt = whileStmt.loopBody.statements[0];
+    assert(updateStmt instanceof ExpressionStatement);
+    const updateExpr = updateStmt.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
   });
 
   test("can parse a while loop with a return", () => {
@@ -900,16 +1211,77 @@ describe("Parser", () => {
         }
         i = i + 1;
       }
+      return i;
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-    assert(ast.statements.length === 2);
+    assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
     if (
-      !assertFunctionSignature(funcStmt, "while_loop_2", [], null, 2, false)
+      !assertFunctionSignature(funcStmt, "while_loop_2", [], null, 3, false)
     ) {
       return;
     }
+
+    const letStmt = funcStmt.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(!letStmt.exported);
+    assert(letStmt.identifier.tokenLiteral() === "i");
+    assert(letStmt.identifier.typeAnnotation === "i32");
+    assert(letStmt.expression instanceof IntegerLiteralExpression);
+    assert(letStmt.expression.value === 0);
+
+    const whileStmt = funcStmt.fnExpr.body.statements[1];
+    assert(whileStmt instanceof WhileStatement);
+    assert(whileStmt.loopBody.statements.length === 2);
+
+    const condExpr = whileStmt.condExpr;
+    assert(condExpr instanceof InfixExpression);
+    assert(condExpr.left instanceof Identifier);
+    assert(condExpr.right instanceof IntegerLiteralExpression);
+    assert(condExpr.left.tokenLiteral() === "i");
+    assert(condExpr.left.typeAnnotation === "i32");
+    assert(condExpr.operator === "<");
+    assert(condExpr.right.value === 10);
+
+    const ifStmt = whileStmt.loopBody.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    assert(!ifStmt.elseBlock);
+    assert(ifStmt.thenBlock.statements.length == 1);
+
+    const ifCond = ifStmt.conditionExpr;
+    assert(ifCond instanceof InfixExpression);
+    assert(ifCond.left instanceof Identifier);
+    assert(ifCond.operator === ">");
+    assert(ifCond.right instanceof IntegerLiteralExpression);
+    assert(ifCond.left.tokenLiteral() === "i");
+    assert(ifCond.right.value === 7);
+
+    const ifRetStmt = ifStmt.thenBlock.statements[0];
+    assert(ifRetStmt instanceof ReturnStatement);
+    assert(ifRetStmt.returnValue instanceof Identifier);
+    assert(ifRetStmt.returnValue.tokenLiteral() === "i");
+    assert(ifRetStmt.returnValue.typeAnnotation === "i32");
+
+    const updateStmt = whileStmt.loopBody.statements[1];
+    assert(updateStmt instanceof ExpressionStatement);
+    const updateExpr = updateStmt.expression;
+    assert(updateExpr instanceof AssignmentExpression);
+    assert(updateExpr.left instanceof Identifier);
+    assert(updateExpr.value instanceof InfixExpression);
+    assert(updateExpr.value.left instanceof Identifier);
+    assert(updateExpr.value.right instanceof IntegerLiteralExpression);
+    assert(updateExpr.left.tokenLiteral() === "i");
+    assert(updateExpr.left.typeAnnotation === "i32");
+    assert(updateExpr.value.left.tokenLiteral() === "i");
+    assert(updateExpr.value.left.typeAnnotation === "i32");
+    assert(updateExpr.value.operator === "+");
+    assert(updateExpr.value.right.value === 1);
+
+    const retStmt = funcStmt.fnExpr.body.statements[1];
+    assert(retStmt instanceof ReturnStatement);
+    assert(retStmt.returnValue instanceof IntegerLiteralExpression);
+    assert(retStmt.returnValue.value === 0);
   });
 
   test("can parse a while loop with a break", () => {
@@ -925,7 +1297,7 @@ describe("Parser", () => {
     }`);
     const ast = p.parse("test");
     assert(p.errors.length === 0);
-    assert(ast.statements.length === 2);
+    assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
     if (
       !assertFunctionSignature(funcStmt, "while_loop_3", [], "i32", 3, false)

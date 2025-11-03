@@ -337,3 +337,84 @@ fn casting_2(a: i32, b: i16): i16 {
 import x from "path"
 import malloc, free from "memory"
 import custom, other from "my/file/path.maple"
+
+////////
+//
+//    Nice to have #1 --> first class functions
+//
+///////
+
+fn fc_fn_1(a: i32): (i32) -> i32 {
+  return (b: i32): i32 {
+    return a + b;
+  }
+}
+
+fn main() {
+  let add4: (i32) -> i32 = fc_fn_1(4);
+}
+
+////////
+//
+//    Nice to have #2 --> type infer
+//
+///////
+
+fn ret_str(): string {
+  return "Hello";
+}
+
+fn ret_func(): () -> i32 {
+  return (): i32 {
+    return 10;
+  }
+}
+
+fn main() {
+  let x = 10;         // inferred i32
+  let y = 3.14;       // inferred to f32
+  let z = "Hello"     // inferred to string
+  let a = { len=10, data=ptr }; // to ambiguous
+  let b = ret_str();  // inferred to string
+  let c = ret_func(); // inferred to '() -> i32'
+}
+
+
+////////
+//
+//    Nice to have #2 --> struct methods
+//
+///////
+
+struct list {
+  size: u32,
+  cap: u32,
+  data: string[],
+}
+
+fn list.append(l: list, item: string): void {
+  if (l.size > l.cap) {
+    // ....
+  }
+  l.data[l.size] = item;
+  l.size++;
+}
+
+fn list.join(del: string): string {
+  // ....
+}
+
+fn list.grow(new_size: u32): void {
+  // ...
+}
+
+fn main() {
+  let message = "Hello World !";
+  let l = message.split(" ");
+  print(l.join(" "));
+  l.grow(3);
+  l.append("And");
+  l.append("Mars");
+  l.append("too!");
+  print(l.join(" "));
+}

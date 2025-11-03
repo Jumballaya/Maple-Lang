@@ -27,6 +27,7 @@ import { ImportStatement } from "./ast/statements/ImportStatement";
 import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
 import { StructStatement } from "./ast/statements/StructStatement";
+import { WhileStatement } from "./ast/statements/WhileStatement";
 import {
   ASTExpression,
   ASTStatement,
@@ -126,7 +127,6 @@ export class Parser {
           });
           return null;
         }
-        this.tokenizer.nextToken();
         return stmt;
       }
       case "Import": {
@@ -172,6 +172,10 @@ export class Parser {
 
       case "For": {
         return this.parseForStatement();
+      }
+
+      case "While": {
+        return this.parseWhileStatement();
       }
 
       default: {
@@ -521,6 +525,51 @@ export class Parser {
       updateExprStatement,
       loopBody
     );
+  }
+
+  private parseWhileStatement(): ASTStatement | null {
+    const stmtToken = this.tokenizer.curToken(); // save 'while' token
+    if (!this.expectPeek("LParen")) {
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    // condition
+    const conditionExpr = this.parseExpression(LOWEST);
+    if (!conditionExpr) {
+      return null;
+    }
+
+    if (!this.expectPeek("RParen")) {
+      return null;
+    }
+    if (!this.expectPeek("LBrace")) {
+      return null;
+    }
+
+    // loopBody
+    const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
+    this.tokenizer.nextToken();
+    while (
+      !(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))
+    ) {
+      const stmt = this.parseStatement(false);
+      if (!stmt) {
+        return null;
+      }
+      if (this.tokenizer.curTokenIs("Semicolon")) {
+        this.tokenizer.nextToken();
+      }
+      loopBody.statements.push(stmt);
+    }
+
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // consume RBRACE
+
+    return new WhileStatement(stmtToken, conditionExpr, loopBody);
   }
 
   private parseExpressionStatement(): ASTStatement | null {
