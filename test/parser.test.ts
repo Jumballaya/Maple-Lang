@@ -25,11 +25,18 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 // @TODO:
 //
 //
-//      Pointers:
-//        parse pointer syntax:     "*T"
+//      Pointers for now: Treat ALL structs as pointers, but hide it from the
+//      end user. They pass around the struct type, and under the hood its
+//      already just a pointer.
+//
+//      Later on I will add pointers, references, pointer-member access and
+//      a function stack and stackframes
+//
+//
+//      Struct Access:
 //        member access             "T.m"
-//        pointer member access     "T->m"
 //        binds pointer and member operations correctly
+//        left side of assign: "T.m = 10";
 //
 //      Array Access
 //        1. literals       -- x[3]
@@ -40,11 +47,11 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 //        1. a(b(c()))
 //
 //        supports chained call, index, and member expressions
-//          1. a.b->c[3](f.g()[4]->h())
+//          1. a.b.c[3](f.g()[4].h())
 //
-//      Strings
+//              Currently only flat structs allowed.
+//                  a.b[3](f.g()[4].h());
 //
-//      Switch
 //
 //      Errors
 //        reports missing items
@@ -1355,355 +1362,668 @@ describe("Parser", () => {
 });
 
 describe("Parser: Operators", () => {
-  test("infix addition: literal + literal", () => {
-    const p = new Parser(`fn infix_add(): i32 {
-      return 10 + 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
-      return;
-    }
+  describe("Infix", () => {
+    test("infix addition: literal + literal", () => {
+      const p = new Parser(`fn infix_add(): i32 {
+        return 10 + 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)
+      ) {
+        return;
+      }
 
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof IntegerLiteralExpression);
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "+");
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "+");
+    });
+
+    test("infix addition: identifier + literal", () => {
+      const p = new Parser(`fn infix_add(n: i32): i32 {
+        return n + 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_add",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof Identifier);
+      assert(left.tokenLiteral() === "n");
+      assert(left.typeAnnotation === "i32");
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "+");
+    });
+
+    test("infix subtraction: literal - literal", () => {
+      const p = new Parser(`fn infix_sub(): i32 {
+        return 10 - 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "infix_sub", [], "i32", 1, false)
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "-");
+    });
+
+    test("infix subtraction: identifier - literal", () => {
+      const p = new Parser(`fn infix_sub(n: i32): i32 {
+        return n - 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_sub",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof Identifier);
+      assert(left.tokenLiteral() === "n");
+      assert(left.typeAnnotation === "i32");
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "-");
+    });
+
+    test("infix multiplication: literal * literal", () => {
+      const p = new Parser(`fn infix_mul(): i32 {
+        return 10 * 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "infix_mul", [], "i32", 1, false)
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "*");
+    });
+
+    test("infix multiplication: identifier * literal", () => {
+      const p = new Parser(`fn infix_mul(n: i32): i32 {
+        return n * 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_mul",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof Identifier);
+      assert(left.tokenLiteral() === "n");
+      assert(left.typeAnnotation === "i32");
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "*");
+    });
+
+    test("infix division: literal / literal", () => {
+      const p = new Parser(`fn infix_div(): i32 {
+        return 10 / 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "infix_div", [], "i32", 1, false)
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "/");
+    });
+
+    test("infix division: identifier / literal", () => {
+      const p = new Parser(`fn infix_div(n: i32): i32 {
+        return n / 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_div",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof Identifier);
+      assert(left.tokenLiteral() === "n");
+      assert(left.typeAnnotation === "i32");
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "/");
+    });
+
+    test("infix modulo: literal % literal", () => {
+      const p = new Parser(`fn infix_mod(): i32 {
+        return 10 % 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "infix_mod", [], "i32", 1, false)
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "%");
+    });
+
+    test("infix modulo: identifier % literal", () => {
+      const p = new Parser(`fn infix_mod(n: i32): i32 {
+        return n % 15;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_mod",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof Identifier);
+      assert(left.tokenLiteral() === "n");
+      assert(left.typeAnnotation === "i32");
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "%");
+    });
+
+    test("infix logic and: literal && literal", () => {
+      const p = new Parser(`fn infix_logic_and(): bool {
+        return true && false;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_logic_and",
+          [],
+          "bool",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof BooleanLiteralExpression);
+      assert(right instanceof BooleanLiteralExpression);
+      assert(left.value === true);
+      assert(operator === "&&");
+      assert(right.value === false);
+    });
+
+    test("infix logic or: literal || literal", () => {
+      const p = new Parser(`fn infix_logic_or(): bool {
+        return true || false;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_logic_or",
+          [],
+          "bool",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof BooleanLiteralExpression);
+      assert(right instanceof BooleanLiteralExpression);
+      assert(left.value === true);
+      assert(operator === "||");
+      assert(right.value === false);
+    });
+
+    test("infix logic equals: literal == literal", () => {
+      const p = new Parser(`fn infix_logic_eq(): bool {
+        return true == false;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_logic_eq",
+          [],
+          "bool",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof BooleanLiteralExpression);
+      assert(right instanceof BooleanLiteralExpression);
+      assert(left.value === true);
+      assert(operator === "==");
+      assert(right.value === false);
+    });
+
+    test("infix bitwise and: literal & literal", () => {
+      const p = new Parser(`fn infix_bitwise_and(): i32 {
+        return 44 & 37;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_bitwise_and",
+          [],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(left.value === 44);
+      assert(operator === "&");
+      assert(right.value === 37);
+    });
+
+    test("infix bitwise or: literal | literal", () => {
+      const p = new Parser(`fn infix_bitwise_or(): i32 {
+        return 44 | 37;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_bitwise_or",
+          [],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(left.value === 44);
+      assert(operator === "|");
+      assert(right.value === 37);
+    });
+
+    test("infix bitwise xor: literal ^ literal", () => {
+      const p = new Parser(`fn infix_bitwise_xor(): i32 {
+        return 44 ^ 37;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "infix_bitwise_xor",
+          [],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(left.value === 44);
+      assert(operator === "^");
+      assert(right.value === 37);
+    });
   });
 
-  test("infix addition: identifier + literal", () => {
-    const p = new Parser(`fn infix_add(n: i32): i32 {
-      return n + 15;
+  describe("Prefix", () => {
+    test("prefix negative - literal", () => {
+      const p = new Parser(`fn prefix_neg(): i32 {
+      return -10;
     }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "infix_add",
-        [["n", "i32"]],
-        "i32",
-        1,
-        false
-      )
-    ) {
-      return;
-    }
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "prefix_neg", [], "i32", 1, false)
+      ) {
+        return;
+      }
 
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof Identifier);
-    assert(left.tokenLiteral() === "n");
-    assert(left.typeAnnotation === "i32");
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "+");
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "-");
+      assert(right.value === 10);
+    });
+
+    test("prefix negative - identifier", () => {
+      const p = new Parser(`fn prefix_neg(n: i32): i32 {
+      return -n;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "prefix_neg",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof Identifier);
+      assert(operator === "-");
+      assert(right.tokenLiteral() === "n");
+      assert(right.typeAnnotation === "i32");
+    });
+
+    test("prefix bitwise not - literal", () => {
+      const p = new Parser(`fn prefix_not(): i32 {
+      return ~10;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(funcStmt, "prefix_not", [], "i32", 1, false)
+      ) {
+        return;
+      }
+
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof IntegerLiteralExpression);
+      assert(operator === "~");
+      assert(right.value === 10);
+    });
+
+    test("prefix bitwise not - identifier", () => {
+      const p = new Parser(`fn prefix_not(n: i32): i32 {
+      return ~n;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "prefix_not",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof Identifier);
+      assert(operator === "~");
+      assert(right.tokenLiteral() === "n");
+      assert(right.typeAnnotation === "i32");
+    });
+
+    test("prefix logical not - literal", () => {
+      const p = new Parser(`fn prefix_logical_not(): bool {
+      return !true;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "prefix_logical_not",
+          [],
+          "bool",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof BooleanLiteralExpression);
+      assert(operator === "!");
+      assert(right.value === true);
+    });
+
+    test("prefix logical not - identifier", () => {
+      const p = new Parser(`fn prefix_logical_not(b: bool): bool {
+      return !b;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "prefix_logical_not",
+          [["b", "bool"]],
+          "bool",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const prefixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(prefixStmt instanceof ReturnStatement);
+      const prefixExpr = prefixStmt.returnValue;
+      assert(prefixExpr instanceof PrefixExpression);
+      const { right, operator } = prefixExpr;
+      assert(right instanceof Identifier);
+      assert(operator === "!");
+      assert(right.tokenLiteral() === "b");
+      assert(right.typeAnnotation === "bool");
+    });
   });
 
-  test("infix subtraction: literal - literal", () => {
-    const p = new Parser(`fn infix_add(): i32 {
-      return 10 - 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof IntegerLiteralExpression);
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "-");
-  });
-
-  test("infix subtraction: identifier - literal", () => {
-    const p = new Parser(`fn infix_add(n: i32): i32 {
-      return n - 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "infix_add",
-        [["n", "i32"]],
-        "i32",
-        1,
-        false
-      )
-    ) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof Identifier);
-    assert(left.tokenLiteral() === "n");
-    assert(left.typeAnnotation === "i32");
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "-");
-  });
-
-  test("infix multiplication: literal * literal", () => {
-    const p = new Parser(`fn infix_add(): i32 {
-      return 10 * 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof IntegerLiteralExpression);
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "*");
-  });
-
-  test("infix multiplication: identifier * literal", () => {
-    const p = new Parser(`fn infix_add(n: i32): i32 {
-      return n * 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "infix_add",
-        [["n", "i32"]],
-        "i32",
-        1,
-        false
-      )
-    ) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof Identifier);
-    assert(left.tokenLiteral() === "n");
-    assert(left.typeAnnotation === "i32");
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "*");
-  });
-
-  test("infix division: literal / literal", () => {
-    const p = new Parser(`fn infix_add(): i32 {
-      return 10 / 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof IntegerLiteralExpression);
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "/");
-  });
-
-  test("infix division: identifier / literal", () => {
-    const p = new Parser(`fn infix_add(n: i32): i32 {
-      return n / 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "infix_add",
-        [["n", "i32"]],
-        "i32",
-        1,
-        false
-      )
-    ) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof Identifier);
-    assert(left.tokenLiteral() === "n");
-    assert(left.typeAnnotation === "i32");
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "/");
-  });
-
-  test("infix modulo: literal % literal", () => {
-    const p = new Parser(`fn infix_add(): i32 {
-      return 10 % 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof IntegerLiteralExpression);
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "%");
-  });
-
-  test("infix modulo: identifier % literal", () => {
-    const p = new Parser(`fn infix_add(n: i32): i32 {
-      return n % 15;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "infix_add",
-        [["n", "i32"]],
-        "i32",
-        1,
-        false
-      )
-    ) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof Identifier);
-    assert(left.tokenLiteral() === "n");
-    assert(left.typeAnnotation === "i32");
-    assert(right instanceof IntegerLiteralExpression);
-    assert(operator === "%");
-  });
-
-  test("infix logic and: literal && literal", () => {
-    const p = new Parser(`fn infix_add(): bool {
-      return true && false;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "bool", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof BooleanLiteralExpression);
-    assert(right instanceof BooleanLiteralExpression);
-    assert(left.value === true);
-    assert(operator === "&&");
-    assert(right.value === false);
-  });
-
-  test("infix logic or: literal || literal", () => {
-    const p = new Parser(`fn infix_add(): bool {
-      return true || false;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "bool", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof BooleanLiteralExpression);
-    assert(right instanceof BooleanLiteralExpression);
-    assert(left.value === true);
-    assert(operator === "||");
-    assert(right.value === false);
-  });
-
-  test("infix logic equals: literal == literal", () => {
-    const p = new Parser(`fn infix_add(): bool {
-      return true == false;
-    }`);
-    const ast = p.parse("test");
-    assert(p.errors.length === 0);
-    assert(ast.statements.length === 1);
-    const funcStmt = ast.statements[0];
-    if (!assertFunctionSignature(funcStmt, "infix_add", [], "bool", 1, false)) {
-      return;
-    }
-
-    const infixStmt = funcStmt.fnExpr.body.statements[0];
-    assert(infixStmt instanceof ReturnStatement);
-    const infixExpr = infixStmt.returnValue;
-    assert(infixExpr instanceof InfixExpression);
-    const { left, right, operator } = infixExpr;
-    assert(left instanceof BooleanLiteralExpression);
-    assert(right instanceof BooleanLiteralExpression);
-    assert(left.value === true);
-    assert(operator === "==");
-    assert(right.value === false);
-  });
-
-  //  Logic: !
-  //  Bitwise: &, |, ^, ~
   //  Inc/Dec: ++, --
 });
 

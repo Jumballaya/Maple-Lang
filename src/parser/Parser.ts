@@ -61,10 +61,13 @@ export class Parser {
 
   private precendences: Partial<Record<Token["type"], ParserPrecedence>> = {
     Assign: EQUALS,
-    NotEquals: EQUALS,
-    Equals: EQUALS,
+    NotEquals: LESSGREATER,
+    Equals: LESSGREATER,
     LogicalAnd: LESSGREATER,
     LogicalOr: LESSGREATER,
+    Ampersand: LESSGREATER,
+    Pipe: LESSGREATER,
+    Caret: LESSGREATER,
     LessThan: LESSGREATER,
     GreaterThan: LESSGREATER,
     Plus: SUM,
@@ -83,6 +86,7 @@ export class Parser {
     this.registerPrefix("FloatLiteral", this.parseFloatLiteral.bind(this));
     this.registerPrefix("IntegerLiteral", this.parseIntegerLiteral.bind(this));
 
+    this.registerPrefix("Tilde", this.parsePrefixExpression.bind(this));
     this.registerPrefix("Bang", this.parsePrefixExpression.bind(this));
     this.registerPrefix("Minus", this.parsePrefixExpression.bind(this));
     this.registerPrefix("True", this.parseBooleanLiteral.bind(this));
@@ -91,6 +95,9 @@ export class Parser {
     this.registerPrefix("Func", this.parseFunctionLiteral.bind(this));
 
     // Infix
+    // @TODO: Move Assign logic to here
+    // this.registerInfix("Assign", this.parseAssignExpression.bind(this));
+    //
     this.registerInfix("Plus", this.parseInfixExpression.bind(this));
     this.registerInfix("Minus", this.parseInfixExpression.bind(this));
     this.registerInfix("Slash", this.parseInfixExpression.bind(this));
@@ -98,6 +105,9 @@ export class Parser {
     this.registerInfix("Percent", this.parseInfixExpression.bind(this));
     this.registerInfix("LogicalAnd", this.parseInfixExpression.bind(this));
     this.registerInfix("LogicalOr", this.parseInfixExpression.bind(this));
+    this.registerInfix("Ampersand", this.parseInfixExpression.bind(this));
+    this.registerInfix("Pipe", this.parseInfixExpression.bind(this));
+    this.registerInfix("Caret", this.parseInfixExpression.bind(this));
     this.registerInfix("Equals", this.parseInfixExpression.bind(this));
     this.registerInfix("NotEquals", this.parseInfixExpression.bind(this));
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
