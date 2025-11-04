@@ -116,6 +116,7 @@ export class Parser {
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
     this.registerInfix("GreaterThan", this.parseInfixExpression.bind(this));
     this.registerInfix("LParen", this.parseCallExpression.bind(this));
+    this.registerInfix("Assign", this.parseAssignmentExpression.bind(this));
     this.registerInfix("Period", this.parseInfixExpression.bind(this));
 
     // Postfix
@@ -745,14 +746,16 @@ export class Parser {
     const literal = tok.literal;
     const type = this.getType(literal.toString());
     const ident = new Identifier(tok, type);
-    if (!this.tokenizer.peekTokenIs("Assign")) {
-      return ident;
-    }
+    return ident;
+  }
 
+  private parseAssignmentExpression(left: ASTExpression): ASTExpression | null {
     const exprToken = this.tokenizer.nextToken();
-    this.tokenizer.nextToken(); // consume '=' token
     const valueExpr = this.parseExpression(LOWEST);
-    return new AssignmentExpression(exprToken, ident, valueExpr);
+    if (!valueExpr) {
+      return null;
+    }
+    return new AssignmentExpression(exprToken, left, valueExpr);
   }
 
   private parseCallExpression(func: ASTExpression): ASTExpression {

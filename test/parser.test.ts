@@ -27,6 +27,9 @@ import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression
 // @TODO:
 //
 //
+//      Make sure .toString() is working as well, create tests for different scenarios
+//
+//
 //      Pointers for now: Treat ALL structs as pointers, but hide it from the
 //      end user. They pass around the struct type, and under the hood its
 //      already just a pointer.
@@ -2099,17 +2102,12 @@ let t: T = {
   c = false
 };`;
 
-  //  member access             "T.m"
-  //  binds pointer and member operations correctly
-  //  left side of assign: "T.m = 10";
-
   test("struct member access", () => {
     const p = new Parser(`${struct_def}
     fn member_access(): i32 {
       return t.a;
     }`);
     const ast = p.parse("test");
-    console.log(p.errors);
     assert(p.errors.length === 0);
     assert(ast.statements.length === 3);
     const funcStmt = ast.statements[2];
@@ -2126,6 +2124,120 @@ let t: T = {
     assert(memberExpr.parent instanceof Identifier);
     assert(memberExpr.parent.tokenLiteral() === "t");
     assert(memberExpr.member === "a");
+  });
+
+  test("struct member assign", () => {
+    const p = new Parser(`${struct_def}
+    fn member_access(): i32 {
+      t.a = 14;
+      return t.a;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 3);
+    const funcStmt = ast.statements[2];
+    if (
+      !assertFunctionSignature(funcStmt, "member_access", [], "i32", 2, false)
+    ) {
+      return;
+    }
+
+    const updateStmt = funcStmt.fnExpr.body.statements[0];
+    assert(updateStmt instanceof ExpressionStatement);
+    assert(updateStmt.expression instanceof AssignmentExpression);
+    assert(updateStmt.expression.left instanceof MemberExpression);
+    assert(updateStmt.expression.value instanceof IntegerLiteralExpression);
+    assert(updateStmt.expression.left.parent instanceof Identifier);
+    assert(updateStmt.expression.left.member === "a");
+    assert(updateStmt.expression.left.parent.typeAnnotation === "T");
+    assert(updateStmt.expression.left.parent.tokenLiteral() === "t");
+    assert(updateStmt.expression.value.value === 14);
+
+    const retStmt = funcStmt.fnExpr.body.statements[1];
+    assert(retStmt instanceof ReturnStatement);
+    const memberExpr = retStmt.returnValue;
+    assert(memberExpr instanceof MemberExpression);
+    assert(memberExpr.parent instanceof Identifier);
+    assert(memberExpr.parent.tokenLiteral() === "t");
+    assert(memberExpr.parent.typeAnnotation === "T");
+    assert(memberExpr.member === "a");
+  });
+});
+
+describe.skip("Parser: Array Access", () => {
+  const array_def = `let arr: i32[] = [1,2,3,4,5,6];`;
+
+  // let arr: i32[] = [...];
+  test("can parse array literal", () => {
+    const p = new Parser(array_def);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+  });
+
+  // let x: i32 = arr[3];
+  test("can parse array access: literal", () => {
+    const p = new Parser(`${array_def}
+fn test_arr(): void {
+  let x: i32 = arr[3];
+}
+`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+  });
+
+  // let x: i32 = 3;
+  // let z: i32 = arr[x];
+  test("can parse array access: variable", () => {
+    const p = new Parser(`${array_def}
+fn test_arr(): void {
+  let x: i32 = 3;
+  let z: i32 = arr[x];
+}
+`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+  });
+
+  // let x: i32 = 2;
+  // let y: i32 = 1;
+  // let z: i32 = arr[x + y];
+  test("can parse array access: infix expression", () => {
+    const p = new Parser(`${array_def}
+fn test_arr(): void {
+  let x: i32 = 2;
+  let y: i32 = 1;
+  let z: i32 = arr[x + y];
+}
+`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+  });
+
+  // let x: i32 = 3;
+  // let z: i32 = arr[x++];
+  test("can parse array access: postfix expression", () => {
+    const p = new Parser(`${array_def}
+fn test_arr(): void {
+  let x: i32 = 3;
+  let z: i32 = arr[x++];
+}
+`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+  });
+
+  // fn test(): i32 { return 3; }
+  // let z: i32 = arr[test()];
+  test("can parse array access: function call", () => {
+    const p = new Parser(`${array_def}
+fn test(): i32 { return 3; }
+
+fn test_arr(): void {
+  let z: i32 = arr[test()];
+}
+`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
   });
 });
 

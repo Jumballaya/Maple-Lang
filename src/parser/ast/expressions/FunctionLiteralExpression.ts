@@ -37,8 +37,8 @@ export class FunctionLiteralExpression implements ASTExpression {
       .map((p) => `${p.identifier.toString()}: ${p.type}`)
       .join(", ");
     const lit = this.tokenLiteral();
-    return `${"\t".repeat(tab_level)}${lit}(${params}) {\n${this.body.toString(
-      tab_level + 1
-    )}}`;
+    return `${"\t".repeat(tab_level)}${lit}(${params}): ${
+      this.returnType ?? "void"
+    } {\n${this.body.toString(tab_level + 1)}}`;
   }
 }
