@@ -39,6 +39,9 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 //      Function calls and nesting
 //        1. a(b(c()))
 //
+//        supports chained call, index, and member expressions
+//          1. a.b->c[3](f.g()[4]->h())
+//
 //      Strings
 //
 //      Switch
@@ -49,10 +52,6 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 //        expression precedence
 //        respects logical operator precedence
 //
-//
-//      General
-//        supports chained call, index, and member expressions
-//          1. a.b->c[3](f.g()[4]->h())
 //
 
 describe("Parser", () => {

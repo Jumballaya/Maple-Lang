@@ -52,3 +52,37 @@ export fn add(a: i32, b: i32):i32 {
 ```
 
 To compile, run: `npm start -- demo/demo1/main.maple` and you will find your `app.wasm` in the build folder that was created.
+
+# Language Features
+
+## Imports
+
+Import any exported function, struct or global variable from the module. You can import via a local file, or using the builtin stdlib.
+
+```ts
+import _fn, _struct, _global from "./local/path.maple"
+import single from "stdlib"
+```
+
+## Exports
+
+Functions, structs and global variables can be exported. You can only export from the module's global scope, and not from inside a function. You can just put 'export' in front of the declaration.
+
+```ts
+// global variable
+export let PI: f32 = 3.1415926535;
+
+// struct
+export struct vec2 {
+  x: f32,
+  y: f32
+}
+
+// function
+export fn add_vec2(a: vec2, b: vec2): vec2 {
+  let v: vec2 = malloc(vec2);
+  v.x = a.x + b.x;
+  v.y = a.y + b.y;
+  return v;
+}
+```
