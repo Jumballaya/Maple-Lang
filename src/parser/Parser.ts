@@ -15,6 +15,8 @@ import {
 import { Identifier } from "./ast/expressions/Identifier";
 import { InfixExpression } from "./ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
+import { MemberExpression } from "./ast/expressions/MemberExpression";
+import { PostfixExpression } from "./ast/expressions/PostfixExpression";
 import { PrefixExpression } from "./ast/expressions/PrefixExpression";
 import { StructLiteralExpression } from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
@@ -76,6 +78,7 @@ export class Parser {
     Star: PRODUCT,
     Percent: PRODUCT,
     LParen: CALL,
+    Period: CALL,
   };
 
   constructor(source: string) {
@@ -113,6 +116,11 @@ export class Parser {
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
     this.registerInfix("GreaterThan", this.parseInfixExpression.bind(this));
     this.registerInfix("LParen", this.parseCallExpression.bind(this));
+    this.registerInfix("Period", this.parseInfixExpression.bind(this));
+
+    // Postfix
+    this.registerPostfix("Increment", this.parsePostfixExpression.bind(this));
+    this.registerPostfix("Decrement", this.parsePostfixExpression.bind(this));
   }
 
   public parse(name: string): ASTProgram {
@@ -677,6 +685,14 @@ export class Parser {
       }
     }
 
+    const postfix = this.postfixParseFns.get(this.tokenizer.peekToken().type);
+    if (postfix && !leftExpr) {
+      return null;
+    } else if (postfix && leftExpr) {
+      this.tokenizer.nextToken();
+      return postfix(leftExpr);
+    }
+
     return leftExpr;
   }
 
@@ -690,7 +706,8 @@ export class Parser {
 
   private parseInfixExpression(left: ASTExpression): ASTExpression {
     const exprToken = this.tokenizer.curToken();
-    const op = this.tokenizer.curToken().literal.toString();
+    const opToken = this.tokenizer.curToken();
+    const op = opToken.literal.toString();
     const precedence = this.curPrecedence();
     this.tokenizer.nextToken();
     const right = this.parseExpression(precedence);
@@ -699,7 +716,19 @@ export class Parser {
       this.errors.push({ message, token: exprToken });
       throw new Error(this.errors.join("\n"));
     }
+    if (op === ".") {
+      if (right instanceof Identifier) {
+        const member = right.tokenLiteral();
+        return new MemberExpression(exprToken, left, member);
+      }
+    }
     return new InfixExpression(exprToken, left, op, right);
+  }
+
+  private parsePostfixExpression(left: ASTExpression): ASTExpression {
+    const exprToken = this.tokenizer.curToken();
+    const op = this.tokenizer.curToken().literal.toString();
+    return new PostfixExpression(exprToken, left, op);
   }
 
   private parseGroupedExpression(): ASTExpression | null {
@@ -1045,10 +1074,6 @@ export class Parser {
   private getType(ident: string): string {
     const type = this.identifierTypes.get(ident);
     if (!type) {
-      this.errors.push({
-        message: `Parser: Identifier not found: ${ident}`,
-        token: this.tokenizer.curToken(),
-      });
       return "";
     }
     return type;

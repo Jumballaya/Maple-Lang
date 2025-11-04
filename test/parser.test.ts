@@ -21,6 +21,8 @@ import { ForStatement } from "../src/parser/ast/statements/ForStatement";
 import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
 import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
 import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
+import { PostfixExpression } from "../src/parser/ast/expressions/PostfixExpression";
+import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
 
 // @TODO:
 //
@@ -32,11 +34,6 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 //      Later on I will add pointers, references, pointer-member access and
 //      a function stack and stackframes
 //
-//
-//      Struct Access:
-//        member access             "T.m"
-//        binds pointer and member operations correctly
-//        left side of assign: "T.m = 10";
 //
 //      Array Access
 //        1. literals       -- x[3]
@@ -61,7 +58,7 @@ import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 //
 //
 
-describe("Parser", () => {
+describe("Parser: Control Flow", () => {
   test("can parse an empty program", () => {
     const p = new Parser(``);
     const ast = p.parse("test");
@@ -2024,7 +2021,112 @@ describe("Parser: Operators", () => {
     });
   });
 
-  //  Inc/Dec: ++, --
+  describe("Postfix", () => {
+    test("postfix increment", () => {
+      const p = new Parser(`fn post_inc(n: i32): i32 {
+      return n++;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "post_inc",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const retStmt = funcStmt.fnExpr.body.statements[0];
+      assert(retStmt instanceof ReturnStatement);
+      const postStmt = retStmt.returnValue;
+      assert(postStmt instanceof PostfixExpression);
+      assert(postStmt.left instanceof Identifier);
+      assert(postStmt.left.tokenLiteral() === "n");
+      assert(postStmt.left.typeAnnotation === "i32");
+      assert(postStmt.operator === "++");
+    });
+
+    test("postfix decrement", () => {
+      const p = new Parser(`fn post_dec(n: i32): i32 {
+      return n--;
+    }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (
+        !assertFunctionSignature(
+          funcStmt,
+          "post_dec",
+          [["n", "i32"]],
+          "i32",
+          1,
+          false
+        )
+      ) {
+        return;
+      }
+
+      const retStmt = funcStmt.fnExpr.body.statements[0];
+      assert(retStmt instanceof ReturnStatement);
+      const postStmt = retStmt.returnValue;
+      assert(postStmt instanceof PostfixExpression);
+      assert(postStmt.left instanceof Identifier);
+      assert(postStmt.left.tokenLiteral() === "n");
+      assert(postStmt.left.typeAnnotation === "i32");
+      assert(postStmt.operator === "--");
+    });
+  });
+});
+
+describe("Parser: Struct Access", () => {
+  const struct_def = `
+struct T {
+  a: i32,
+  b: f32,
+  c: bool
+}
+let t: T = {
+  a = 10,
+  b = 3.14,
+  c = false
+};`;
+
+  //  member access             "T.m"
+  //  binds pointer and member operations correctly
+  //  left side of assign: "T.m = 10";
+
+  test("struct member access", () => {
+    const p = new Parser(`${struct_def}
+    fn member_access(): i32 {
+      return t.a;
+    }`);
+    const ast = p.parse("test");
+    console.log(p.errors);
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 3);
+    const funcStmt = ast.statements[2];
+    if (
+      !assertFunctionSignature(funcStmt, "member_access", [], "i32", 1, false)
+    ) {
+      return;
+    }
+
+    const retStmt = funcStmt.fnExpr.body.statements[0];
+    assert(retStmt instanceof ReturnStatement);
+    const memberExpr = retStmt.returnValue;
+    assert(memberExpr instanceof MemberExpression);
+    assert(memberExpr.parent instanceof Identifier);
+    assert(memberExpr.parent.tokenLiteral() === "t");
+    assert(memberExpr.member === "a");
+  });
 });
 
 /// Utils
