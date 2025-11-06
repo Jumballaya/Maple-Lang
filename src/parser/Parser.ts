@@ -39,8 +39,11 @@ import {
 } from "./ast/types/ast.type";
 import { BUILTIN_TYPES } from "./ast/types/builtin_types";
 import {
+  ASSIGN,
   CALL,
+  COMPARE,
   EQUALS,
+  INDEX,
   LESSGREATER,
   LOWEST,
   ParserPrecedence,
@@ -62,23 +65,42 @@ export class Parser {
   private locals: string[] = []; // all of the variables local to the current scope
 
   private precendences: Partial<Record<Token["type"], ParserPrecedence>> = {
-    Assign: EQUALS,
-    NotEquals: LESSGREATER,
     Equals: LESSGREATER,
-    LogicalAnd: LESSGREATER,
-    LogicalOr: LESSGREATER,
-    Ampersand: LESSGREATER,
-    Pipe: LESSGREATER,
-    Caret: LESSGREATER,
+    NotEquals: LESSGREATER,
     LessThan: LESSGREATER,
     GreaterThan: LESSGREATER,
+    LessThanEquals: LESSGREATER,
+    GreaterThanEquals: LESSGREATER,
+    LogicalOr: LESSGREATER,
+    LogicalAnd: LESSGREATER,
     Plus: SUM,
     Minus: SUM,
     Slash: PRODUCT,
     Star: PRODUCT,
     Percent: PRODUCT,
+
+    Ampersand: PRODUCT,
+    Caret: PRODUCT,
+    Pipe: PRODUCT,
+    LeftShift: PRODUCT,
+    RightShift: PRODUCT,
+
     LParen: CALL,
-    Period: CALL,
+
+    LBracket: INDEX,
+    Period: INDEX,
+
+    Assign: ASSIGN,
+    AddAssign: ASSIGN,
+    MinusAssign: ASSIGN,
+    MulAssign: ASSIGN,
+    DivAssign: ASSIGN,
+    ModuloAssign: ASSIGN,
+    BitwiseOrAssign: ASSIGN,
+    BitwiseAndAssign: ASSIGN,
+    BitwiseXorAssign: ASSIGN,
+    LeftShiftAssign: ASSIGN,
+    RightShiftAssign: ASSIGN,
   };
 
   constructor(source: string) {

@@ -1361,6 +1361,19 @@ describe("Parser: Control Flow", () => {
   });
 });
 
+//
+//  @TODO:
+//
+//    Compare:
+//        >=, <=,
+//
+//    Bitwise:
+//      >>, <<,
+//
+//    Assignment:
+//    +=, -=, *=, /=, %=, |=, &=, ^=, >>=, <<=
+//
+//
 describe("Parser: Operators", () => {
   describe("Infix", () => {
     test("infix addition: literal + literal", () => {
