@@ -89,7 +89,8 @@ function parseFile(name: string, text: string): ASTProgram | null {
 export async function compiler(
   entryPoint: string,
   entryMod: string,
-  cwd: string
+  cwd: string,
+  outputPath = "build/app.wasm"
 ) {
   const entrySrc = await openFile(entryPoint);
   if (!entrySrc) {
@@ -191,21 +192,9 @@ export async function compiler(
     await run(`cp src/compiler/stdlib/${bin.name}.o build/${bin.name}.o`);
   }
   await run(
-    "wasm-ld --no-gc-sections --no-check-features build/*.o -o build/app.wasm"
+    `wasm-ld --no-gc-sections --no-check-features build/*.o -o ${outputPath}`
   );
-  ////// Run
-  const binary = await readFile("build/app.wasm");
-  const wasm = (await WebAssembly.instantiate(binary, {})) as any as {
-    module: WebAssembly.Module;
-    instance: WebAssembly.Instance;
-  };
-  const module = wasm.instance.exports as {
-    memory: WebAssembly.Memory;
-    _start: (a: number, b: number) => number;
-  };
-  console.log(module._start.toString());
-  const memory = module.memory;
-  console.log(`Answer: ${module._start(13, 14)}`);
+  console.log(`Compiled: ${outputPath}`);
 }
 
 function run(cmd: string): Promise<void> {

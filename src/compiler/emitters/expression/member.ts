@@ -13,7 +13,7 @@ export function getPointerMemberData(
   //         only, and dont bother with an expression, but I also
   //         want chaining: x->y->z[0]->a etc. etc.
   //
-  if (expr.parent instanceof Identifier) {
+  if (!(expr.parent instanceof Identifier)) {
     throw new Error(
       "[expression pointer_member/member] only identifier expressions on the lhs of an assignment supported"
     );

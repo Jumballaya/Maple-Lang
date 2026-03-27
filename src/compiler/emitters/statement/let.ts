@@ -13,7 +13,7 @@ export function emitLetStatement(stmt: LetStatement, emitter: ModuleEmitter) {
     for (const [field, data] of Object.entries(stmt.expression.members)) {
       const isNumber =
         data instanceof IntegerLiteralExpression ||
-        data instanceof IntegerLiteralExpression;
+        data instanceof FloatLiteralExpression;
       const isString = data instanceof StringLiteralExpression;
       const isBool = data instanceof BooleanLiteralExpression;
 

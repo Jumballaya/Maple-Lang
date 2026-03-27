@@ -31,7 +31,6 @@ export function emitFunction(
         const name = p.identifier.tokenLiteral();
         const type = p.type;
         emitter.defParam({ name, type, scope: "param" });
-        params.push({ name, type });
       }
 
       // start writing func

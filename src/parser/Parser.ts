@@ -13,6 +13,7 @@ import {
   FunctionParam,
 } from "./ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "./ast/expressions/Identifier";
+import { IndexExpression } from "./ast/expressions/IndexExpression";
 import { InfixExpression } from "./ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
 import { MemberExpression } from "./ast/expressions/MemberExpression";
@@ -140,6 +141,7 @@ export class Parser {
     this.registerInfix("LParen", this.parseCallExpression.bind(this));
     this.registerInfix("Assign", this.parseAssignmentExpression.bind(this));
     this.registerInfix("Period", this.parseInfixExpression.bind(this));
+    this.registerInfix("LBracket", this.parseIndexExpression.bind(this));
 
     // Postfix
     this.registerPostfix("Increment", this.parsePostfixExpression.bind(this));
@@ -780,6 +782,19 @@ export class Parser {
     return new AssignmentExpression(exprToken, left, valueExpr);
   }
 
+  private parseIndexExpression(left: ASTExpression): ASTExpression | null {
+    const token = this.tokenizer.curToken();
+    this.tokenizer.nextToken();
+    const index = this.parseExpression(LOWEST);
+    if (!index) {
+      return null;
+    }
+    if (!this.expectPeek("RBracket")) {
+      return null;
+    }
+    return new IndexExpression(token, left, index);
+  }
+
   private parseCallExpression(func: ASTExpression): ASTExpression {
     return new CallExpression(
       this.tokenizer.curToken(),
@@ -885,8 +900,6 @@ export class Parser {
     if (!this.tokenizer.curTokenIs("RBracket")) {
       return null;
     }
-
-    this.tokenizer.nextToken(); // consume RBracket
 
     return new ArrayLiteralExpression(literalToken, type, value);
   }

@@ -13,15 +13,22 @@ Examples:
 `;
 
 async function main() {
-  const entry = process.argv[2];
+  const args = process.argv.slice(2);
+  const entry = args[0];
   if (!entry) {
     console.log(usage);
     return;
   }
 
+  let outputPath = "build/app.wasm";
+  const oIndex = args.indexOf("-o") !== -1 ? args.indexOf("-o") : args.indexOf("--output");
+  if (oIndex !== -1 && args[oIndex + 1]) {
+    outputPath = args[oIndex + 1];
+  }
+
   const parsed = path.parse(entry);
   try {
-    await compiler(entry, parsed.name, parsed.dir);
+    await compiler(entry, parsed.name, parsed.dir, outputPath);
   } catch (e) {
     console.log("Error: ", e);
   }
