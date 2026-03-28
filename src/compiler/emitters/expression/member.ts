@@ -1,11 +1,11 @@
 import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
-import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
-import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
+import type { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
+import type { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 
 export function getPointerMemberData(
   expr: PointerMemberExpression | MemberExpression,
-  emitter: ModuleEmitter
+  emitter: ModuleEmitter,
 ) {
   //
   //  @TODO: figure out a way to always be able to get the
@@ -15,7 +15,7 @@ export function getPointerMemberData(
   //
   if (!(expr.parent instanceof Identifier)) {
     throw new Error(
-      "[expression pointer_member/member] only identifier expressions on the lhs of an assignment supported"
+      "[expression pointer_member/member] only identifier expressions on the lhs of an assignment supported",
     );
   }
 
@@ -51,9 +51,7 @@ export function getPointerMemberData(
   const structData = emitter.ctx.mod.structs[structName];
   const memberData = structData?.members[member];
   if (!memberData) {
-    throw new Error(
-      `[member] struct "${structName}" has no member "${member}"`
-    );
+    throw new Error(`[member] struct "${structName}" has no member "${member}"`);
   }
 
   return {

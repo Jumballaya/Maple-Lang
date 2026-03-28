@@ -1,11 +1,18 @@
-import { ASTProgram } from "../../parser/ast/ASTProgram.js";
+import type { ASTProgram } from "../../parser/ast/ASTProgram.js";
+import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
+import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
+import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
+import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
+import { ImportStatement } from "../../parser/ast/statements/ImportStatement.js";
 import { LetStatement } from "../../parser/ast/statements/LetStatement.js";
-import type { ModuleMeta } from "./emitter.types.js";
+import { StructStatement } from "../../parser/ast/statements/StructStatement.js";
 import type { MapleModule } from "../MapleModule.js";
 import { ModuleBuilder } from "../ModuleBuilder.js";
 import { ModuleEmitter } from "../ModuleEmitter.js";
 import { extractGlobalData } from "./emit.data.js";
 import { valueTypeToWasm } from "./emit.types.js";
+import type { ModuleMeta } from "./emitter.types.js";
+import { emitNumberGet } from "./expression/core.js";
 import { emitExpression } from "./expression/expression.js";
 import {
   emitFunction,
@@ -13,13 +20,6 @@ import {
   extractFunctionSignature,
   generateFunctionSignature,
 } from "./statement/function.js";
-import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
-import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
-import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
-import { StructStatement } from "../../parser/ast/statements/StructStatement.js";
-import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
-import { ImportStatement } from "../../parser/ast/statements/ImportStatement.js";
-import { emitNumberGet } from "./expression/core.js";
 
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const name = stmt.identifier.tokenLiteral();
@@ -34,9 +34,7 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
     expr instanceof StructLiteralExpression
   ) {
     const num = emitNumberGet(expr.location, "i32");
-    emitter.addGlobalWat(
-      `(global $${name} (mut ${valueTypeToWasm(type)}) ${num})`
-    );
+    emitter.addGlobalWat(`(global $${name} (mut ${valueTypeToWasm(type)}) ${num})`);
     if (stmt.exported) {
       emitter.addGlobalWat(`(export "${name}" (global $${name}))`);
     }
@@ -158,11 +156,9 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
           const sig = extractFunctionSignature(info.signature);
           const [params, results, typeName] = sig;
           emitter.addImportWat(
-            `(import "${stmt.importPath}" "${imp}" (func $${imp} (type ${typeName})))`
+            `(import "${stmt.importPath}" "${imp}" (func $${imp} (type ${typeName})))`,
           );
-          emitter.addSignatureWat(
-            emitFunctionSignature(typeName, params, results)
-          );
+          emitter.addSignatureWat(emitFunctionSignature(typeName, params, results));
         }
       }
     }

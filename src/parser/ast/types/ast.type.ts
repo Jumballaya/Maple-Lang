@@ -12,14 +12,8 @@ export type ASTExpression = {
   toString(): string;
 };
 
-export type PrefixParseFn = {
-  (): ASTExpression | null;
-};
+export type PrefixParseFn = () => ASTExpression | null;
 
-export type InfixParseFn = {
-  (expr: ASTExpression): ASTExpression | null;
-};
+export type InfixParseFn = (expr: ASTExpression) => ASTExpression | null;
 
-export type PostfixParseFn = {
-  (expr: ASTExpression): ASTExpression | null;
-};
+export type PostfixParseFn = (expr: ASTExpression) => ASTExpression | null;

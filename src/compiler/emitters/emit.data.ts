@@ -13,7 +13,7 @@ import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement
 import { IfStatement } from "../../parser/ast/statements/IfStatement.js";
 import { LetStatement } from "../../parser/ast/statements/LetStatement.js";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement.js";
-import { ASTStatement } from "../../parser/ast/types/ast.type.js";
+import type { ASTStatement } from "../../parser/ast/types/ast.type.js";
 import type { ModuleBuilder } from "../ModuleBuilder.js";
 import type { ModuleEmitter } from "../ModuleEmitter.js";
 import { baseScalar, sizeofType } from "./emit.types.js";
@@ -96,10 +96,7 @@ export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
   }
 }
 
-function extractArrayLiteral(
-  expr: ArrayLiteralExpression,
-  builder: ModuleBuilder
-) {
+function extractArrayLiteral(expr: ArrayLiteralExpression, builder: ModuleBuilder) {
   const memberType = baseScalar(expr.memberType);
   const memberSize = sizeofType(memberType);
   const total = expr.elements.length * memberSize;
@@ -108,10 +105,7 @@ function extractArrayLiteral(
   expr.location = addr;
 }
 
-function extractStringLiteral(
-  expr: StringLiteralExpression,
-  builder: ModuleBuilder
-) {
+function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuilder) {
   const lit = expr.value;
   const len = lit.length;
 
@@ -127,10 +121,7 @@ function extractStringLiteral(
   expr.location = hdrAddr; // string pointer points to header
 }
 
-function extractStructLiteral(
-  expr: StructLiteralExpression,
-  builder: ModuleBuilder
-) {
+function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuilder) {
   // @TODO -- This needs to go into a 3rd pass: validation
   // const sd = builder.getStruct(expr.tokenLiteral());
   // if (!sd) {
@@ -149,16 +140,10 @@ function extractStructLiteral(
       !(value instanceof FloatLiteralExpression) &&
       !(value instanceof BooleanLiteralExpression)
     ) {
-      throw new Error(
-        "[struct literal member] non-number/boolean literal values not supported"
-      );
+      throw new Error("[struct literal member] non-number/boolean literal values not supported");
     }
-    const val =
-      typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
-    encoded += numToLittleEndian(
-      [val],
-      value instanceof FloatLiteralExpression ? "f32" : "i32"
-    );
+    const val = typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
+    encoded += numToLittleEndian([val], value instanceof FloatLiteralExpression ? "f32" : "i32");
   }
 
   const addr = builder.addBytes(encoded);
@@ -195,11 +180,7 @@ export function alignup(value: number, alignment = 4) {
   return value + (alignment - (value % alignment));
 }
 
-function defStructLocalFields(
-  emitter: ModuleEmitter,
-  base: string,
-  structName: string
-) {
+function defStructLocalFields(emitter: ModuleEmitter, base: string, structName: string) {
   const sd = emitter.getStruct(structName);
   if (!sd) throw new Error(`unknown struct: "${structName}"`);
   for (const [m, md] of Object.entries(sd.members)) {
@@ -214,11 +195,7 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   }
   if (s instanceof LetStatement) {
     if (s.expression instanceof StructLiteralExpression) {
-      defStructLocalFields(
-        builder,
-        s.identifier.tokenLiteral(),
-        s.expression.name
-      );
+      defStructLocalFields(builder, s.identifier.tokenLiteral(), s.expression.name);
       return;
     }
     builder.defLocal({
@@ -248,11 +225,7 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   if (s instanceof ForStatement) {
     const init = s.initBlock;
     if (init.expression instanceof StructLiteralExpression) {
-      defStructLocalFields(
-        builder,
-        init.identifier.tokenLiteral(),
-        init.expression.name
-      );
+      defStructLocalFields(builder, init.identifier.tokenLiteral(), init.expression.name);
     } else {
       builder.defLocal({
         name: s.initBlock.identifier.tokenLiteral(),

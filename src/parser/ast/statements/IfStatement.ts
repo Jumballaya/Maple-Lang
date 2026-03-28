@@ -1,7 +1,7 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTExpression, ASTStatement } from "../types/ast.type";
-import { BlockStatement } from "./BlockStatement";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTExpression, ASTStatement } from "../types/ast.type";
+import type { BlockStatement } from "./BlockStatement";
 
 export class IfStatement implements ASTStatement {
   public readonly type = "statement";
@@ -14,7 +14,7 @@ export class IfStatement implements ASTStatement {
     token: Token,
     conditionExpr: ASTExpression,
     thenBlock: BlockStatement,
-    elseBlock?: BlockStatement
+    elseBlock?: BlockStatement,
   ) {
     this.token = token;
     this.conditionExpr = conditionExpr;

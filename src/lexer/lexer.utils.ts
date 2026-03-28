@@ -21,7 +21,7 @@ export const isFloat = (word: string): boolean => {
 };
 
 export const isIdentifier = (word: string): boolean => {
-  return /^[a-zA-Z_][a-zA-Z0-9_\-]*$/.test(word);
+  return /^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(word);
 };
 
 const decoder = new TextDecoder();

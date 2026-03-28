@@ -1,28 +1,28 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { Parser } from "../src/parser/Parser";
-import { ImportStatement } from "../src/parser/ast/statements/ImportStatement";
-import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatement";
-import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
-import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
-import { Identifier } from "../src/parser/ast/expressions/Identifier";
-import { StructStatement } from "../src/parser/ast/statements/StructStatement";
-import { LetStatement } from "../src/parser/ast/statements/LetStatement";
-import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
-import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
-import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiteralExpression";
-import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
+import { describe, test } from "node:test";
+import type { StructMember } from "../src/compiler/emitters/emitter.types";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
-import { IfStatement } from "../src/parser/ast/statements/IfStatement";
-import { ASTStatement } from "../src/parser/ast/types/ast.type";
-import { StructMember } from "../src/compiler/emitters/emitter.types";
-import { ForStatement } from "../src/parser/ast/statements/ForStatement";
-import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
-import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
-import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
-import { PostfixExpression } from "../src/parser/ast/expressions/PostfixExpression";
+import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiteralExpression";
+import { Identifier } from "../src/parser/ast/expressions/Identifier";
+import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
+import { PostfixExpression } from "../src/parser/ast/expressions/PostfixExpression";
+import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
+import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
+import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
+import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../src/parser/ast/statements/ForStatement";
+import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatement";
+import { IfStatement } from "../src/parser/ast/statements/IfStatement";
+import { ImportStatement } from "../src/parser/ast/statements/ImportStatement";
+import { LetStatement } from "../src/parser/ast/statements/LetStatement";
+import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
+import { StructStatement } from "../src/parser/ast/statements/StructStatement";
+import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
+import type { ASTStatement } from "../src/parser/ast/types/ast.type";
+import { Parser } from "../src/parser/Parser";
 
 // @TODO:
 //
@@ -138,14 +138,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    assertFunctionSignature(
-      ast.statements[0],
-      "test_bool",
-      [],
-      "bool",
-      0,
-      false
-    );
+    assertFunctionSignature(ast.statements[0], "test_bool", [], "bool", 0, false);
   });
 
   test("can parse a function that returns a struct", () => {
@@ -154,14 +147,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    assertFunctionSignature(
-      ast.statements[0],
-      "test_struct",
-      [],
-      "Color",
-      0,
-      false
-    );
+    assertFunctionSignature(ast.statements[0], "test_struct", [], "Color", 0, false);
   });
 
   test("can parse a function that returns an array", () => {
@@ -170,14 +156,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
 
     assert(ast.statements.length === 1);
-    assertFunctionSignature(
-      ast.statements[0],
-      "test_arr",
-      [],
-      "i32[]",
-      0,
-      false
-    );
+    assertFunctionSignature(ast.statements[0], "test_arr", [], "i32[]", 0, false);
   });
 
   test("can parse a function that takes params", () => {
@@ -193,9 +172,7 @@ describe("Parser: Control Flow", () => {
   });
 
   test("can parse a function that takes many different types of params", () => {
-    const p = new Parser(
-      "fn multi_func(a: i32, b: f32, c: Color, d: bool): i32 {}"
-    );
+    const p = new Parser("fn multi_func(a: i32, b: f32, c: Color, d: bool): i32 {}");
     const ast = p.parse("test");
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
@@ -205,14 +182,7 @@ describe("Parser: Control Flow", () => {
       ["c", "Color"],
       ["d", "bool"],
     ];
-    assertFunctionSignature(
-      ast.statements[0],
-      "multi_func",
-      params,
-      "i32",
-      0,
-      false
-    );
+    assertFunctionSignature(ast.statements[0], "multi_func", params, "i32", 0, false);
   });
 
   test("can parse a function that returns", () => {
@@ -228,9 +198,7 @@ describe("Parser: Control Flow", () => {
       ["a", "i32"],
       ["b", "i32"],
     ];
-    if (
-      !assertFunctionSignature(funcStmt, "func_ret", params, "i32", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "func_ret", params, "i32", 1, false)) {
       return;
     }
 
@@ -303,18 +271,18 @@ describe("Parser: Control Flow", () => {
     assert(letStmt.identifier.tokenLiteral() === "t");
     assert(
       letStmt.identifier.typeAnnotation === "T",
-      `Expected type: "T", Got: "${letStmt.identifier.typeAnnotation}`
+      `Expected type: "T", Got: "${letStmt.identifier.typeAnnotation}`,
     );
     const structLit = letStmt.expression;
     assert(structLit instanceof StructLiteralExpression);
     assert(structLit.name === "T");
     assert(Object.keys(structLit.members).length === 3);
-    assert(!!structLit.members["apple"]);
-    assert(!!structLit.members["banana"]);
-    assert(!!structLit.members["_flag"]);
-    const appleExpr = structLit.members["apple"];
-    const banExpr = structLit.members["banana"];
-    const flagExpr = structLit.members["_flag"];
+    assert(!!structLit.members.apple);
+    assert(!!structLit.members.banana);
+    assert(!!structLit.members._flag);
+    const appleExpr = structLit.members.apple;
+    const banExpr = structLit.members.banana;
+    const flagExpr = structLit.members._flag;
     assert(appleExpr instanceof IntegerLiteralExpression);
     assert(banExpr instanceof FloatLiteralExpression);
     assert(flagExpr instanceof BooleanLiteralExpression);
@@ -350,10 +318,10 @@ describe("Parser: Control Flow", () => {
     assert(structLit instanceof StructLiteralExpression);
     assert(structLit.name === "S");
     assert(Object.keys(structLit.members).length === 2);
-    assert(!!structLit.members["len"]);
-    assert(!!structLit.members["next"]);
-    const lenExpr = structLit.members["len"];
-    const nextExpr = structLit.members["next"];
+    assert(!!structLit.members.len);
+    assert(!!structLit.members.next);
+    const lenExpr = structLit.members.len;
+    const nextExpr = structLit.members.next;
     assert(lenExpr instanceof IntegerLiteralExpression);
     assert(nextExpr instanceof FloatLiteralExpression);
     assert(lenExpr.value === 10);
@@ -370,9 +338,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_assign_i32", [], "i32", 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_assign_i32", [], "i32", 3, false)) {
       return;
     }
 
@@ -409,9 +375,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "test_assign_f32", [], "f32", 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_assign_f32", [], "f32", 3, false)) {
       return;
     }
 
@@ -448,16 +412,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(
-        funcStmt,
-        "test_assign_bool",
-        [],
-        "bool",
-        3,
-        false
-      )
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_assign_bool", [], "bool", 3, false)) {
       return;
     }
 
@@ -496,9 +451,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["n", "i32"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_1", params, "i32", 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_1", params, "i32", 3, false)) {
       return;
     }
 
@@ -551,9 +504,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["n", "i32"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_2", params, "i32", 2, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_2", params, "i32", 2, false)) {
       return;
     }
 
@@ -599,9 +550,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["n", "i32"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_3", params, "i32", 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_3", params, "i32", 3, false)) {
       return;
     }
 
@@ -671,9 +620,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["n", "i32"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_4", params, "i32", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_4", params, "i32", 1, false)) {
       return;
     }
 
@@ -717,9 +664,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["b", "bool"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_5", params, "i32", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_5", params, "i32", 1, false)) {
       return;
     }
 
@@ -758,9 +703,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     const funcStmt = ast.statements[0];
     const params: [string, string][] = [["i", "i32"]];
-    if (
-      !assertFunctionSignature(funcStmt, "test_if_6", params, "i32", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "test_if_6", params, "i32", 1, false)) {
       return;
     }
 
@@ -1049,7 +992,7 @@ describe("Parser: Control Flow", () => {
     const ifStmt = forStmt.loopBody.statements[0];
     assert(ifStmt instanceof IfStatement);
     assert(!ifStmt.elseBlock);
-    assert(ifStmt.thenBlock.statements.length == 1);
+    assert(ifStmt.thenBlock.statements.length === 1);
 
     const ifCond = ifStmt.conditionExpr;
     assert(ifCond instanceof InfixExpression);
@@ -1124,7 +1067,7 @@ describe("Parser: Control Flow", () => {
     const ifStmt = forStmt.loopBody.statements[0];
     assert(ifStmt instanceof IfStatement);
     assert(!ifStmt.elseBlock);
-    assert(ifStmt.thenBlock.statements.length == 1);
+    assert(ifStmt.thenBlock.statements.length === 1);
 
     const ifCond = ifStmt.conditionExpr;
     assert(ifCond instanceof InfixExpression);
@@ -1154,9 +1097,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "while_loop_1", [], null, 2, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "while_loop_1", [], null, 2, false)) {
       return;
     }
 
@@ -1212,9 +1153,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "while_loop_2", [], null, 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "while_loop_2", [], null, 3, false)) {
       return;
     }
 
@@ -1242,7 +1181,7 @@ describe("Parser: Control Flow", () => {
     const ifStmt = whileStmt.loopBody.statements[0];
     assert(ifStmt instanceof IfStatement);
     assert(!ifStmt.elseBlock);
-    assert(ifStmt.thenBlock.statements.length == 1);
+    assert(ifStmt.thenBlock.statements.length === 1);
 
     const ifCond = ifStmt.conditionExpr;
     assert(ifCond instanceof InfixExpression);
@@ -1295,9 +1234,7 @@ describe("Parser: Control Flow", () => {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 1);
     const funcStmt = ast.statements[0];
-    if (
-      !assertFunctionSignature(funcStmt, "while_loop_3", [], "i32", 3, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "while_loop_3", [], "i32", 3, false)) {
       return;
     }
 
@@ -1325,7 +1262,7 @@ describe("Parser: Control Flow", () => {
     const ifStmt = whileStmt.loopBody.statements[0];
     assert(ifStmt instanceof IfStatement);
     assert(!ifStmt.elseBlock);
-    assert(ifStmt.thenBlock.statements.length == 1);
+    assert(ifStmt.thenBlock.statements.length === 1);
 
     const ifCond = ifStmt.conditionExpr;
     assert(ifCond instanceof InfixExpression);
@@ -1384,9 +1321,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_add", [], "i32", 1, false)) {
         return;
       }
 
@@ -1408,16 +1343,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_add",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_add", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1441,9 +1367,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "infix_sub", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_sub", [], "i32", 1, false)) {
         return;
       }
 
@@ -1465,16 +1389,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_sub",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_sub", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1498,9 +1413,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "infix_mul", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_mul", [], "i32", 1, false)) {
         return;
       }
 
@@ -1522,16 +1435,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_mul",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_mul", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1555,9 +1459,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "infix_div", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_div", [], "i32", 1, false)) {
         return;
       }
 
@@ -1579,16 +1481,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_div",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_div", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1612,9 +1505,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "infix_mod", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_mod", [], "i32", 1, false)) {
         return;
       }
 
@@ -1636,16 +1527,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_mod",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_mod", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1669,16 +1551,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_logic_and",
-          [],
-          "bool",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_logic_and", [], "bool", 1, false)) {
         return;
       }
 
@@ -1702,16 +1575,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_logic_or",
-          [],
-          "bool",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_logic_or", [], "bool", 1, false)) {
         return;
       }
 
@@ -1735,16 +1599,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_logic_eq",
-          [],
-          "bool",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_logic_eq", [], "bool", 1, false)) {
         return;
       }
 
@@ -1768,16 +1623,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_bitwise_and",
-          [],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_bitwise_and", [], "i32", 1, false)) {
         return;
       }
 
@@ -1801,16 +1647,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_bitwise_or",
-          [],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_bitwise_or", [], "i32", 1, false)) {
         return;
       }
 
@@ -1834,16 +1671,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "infix_bitwise_xor",
-          [],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "infix_bitwise_xor", [], "i32", 1, false)) {
         return;
       }
 
@@ -1869,9 +1697,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "prefix_neg", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "prefix_neg", [], "i32", 1, false)) {
         return;
       }
 
@@ -1893,16 +1719,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "prefix_neg",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "prefix_neg", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1925,9 +1742,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(funcStmt, "prefix_not", [], "i32", 1, false)
-      ) {
+      if (!assertFunctionSignature(funcStmt, "prefix_not", [], "i32", 1, false)) {
         return;
       }
 
@@ -1949,16 +1764,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "prefix_not",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "prefix_not", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -1981,16 +1787,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "prefix_logical_not",
-          [],
-          "bool",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "prefix_logical_not", [], "bool", 1, false)) {
         return;
       }
 
@@ -2013,14 +1810,7 @@ describe("Parser: Operators", () => {
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
       if (
-        !assertFunctionSignature(
-          funcStmt,
-          "prefix_logical_not",
-          [["b", "bool"]],
-          "bool",
-          1,
-          false
-        )
+        !assertFunctionSignature(funcStmt, "prefix_logical_not", [["b", "bool"]], "bool", 1, false)
       ) {
         return;
       }
@@ -2046,16 +1836,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "post_inc",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "post_inc", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -2077,16 +1858,7 @@ describe("Parser: Operators", () => {
       assert(p.errors.length === 0);
       assert(ast.statements.length === 1);
       const funcStmt = ast.statements[0];
-      if (
-        !assertFunctionSignature(
-          funcStmt,
-          "post_dec",
-          [["n", "i32"]],
-          "i32",
-          1,
-          false
-        )
-      ) {
+      if (!assertFunctionSignature(funcStmt, "post_dec", [["n", "i32"]], "i32", 1, false)) {
         return;
       }
 
@@ -2124,9 +1896,7 @@ let t: T = {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 3);
     const funcStmt = ast.statements[2];
-    if (
-      !assertFunctionSignature(funcStmt, "member_access", [], "i32", 1, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "member_access", [], "i32", 1, false)) {
       return;
     }
 
@@ -2149,9 +1919,7 @@ let t: T = {
     assert(p.errors.length === 0);
     assert(ast.statements.length === 3);
     const funcStmt = ast.statements[2];
-    if (
-      !assertFunctionSignature(funcStmt, "member_access", [], "i32", 2, false)
-    ) {
+    if (!assertFunctionSignature(funcStmt, "member_access", [], "i32", 2, false)) {
       return;
     }
 
@@ -2183,7 +1951,7 @@ describe("Parser: Array Access", () => {
   // let arr: i32[] = [...];
   test("can parse array literal", () => {
     const p = new Parser(array_def);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 
@@ -2194,7 +1962,7 @@ fn test_arr(): void {
   let x: i32 = arr[3];
 }
 `);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 
@@ -2207,7 +1975,7 @@ fn test_arr(): void {
   let z: i32 = arr[x];
 }
 `);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 
@@ -2222,7 +1990,7 @@ fn test_arr(): void {
   let z: i32 = arr[x + y];
 }
 `);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 
@@ -2235,7 +2003,7 @@ fn test_arr(): void {
   let z: i32 = arr[x++];
 }
 `);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 
@@ -2249,7 +2017,7 @@ fn test_arr(): void {
   let z: i32 = arr[test()];
 }
 `);
-    const ast = p.parse("test");
+    const _ast = p.parse("test");
     assert(p.errors.length === 0);
   });
 });
@@ -2289,31 +2057,26 @@ function floatEquals(a: number, b: number): boolean {
 function assertStructStatement(
   structStmt: ASTStatement,
   name: string,
-  members: Record<string, StructMember>
+  members: Record<string, StructMember>,
 ): structStmt is StructStatement {
   assert(structStmt instanceof StructStatement);
   assert(structStmt.name === name);
-  assert(
-    Object.keys(structStmt.members).length === Object.keys(members).length
-  );
+  assert(Object.keys(structStmt.members).length === Object.keys(members).length);
 
   for (const [key, data] of Object.entries(members)) {
-    assert(
-      !!structStmt.members[key],
-      `Struct: "${name}" expected member does not exist: "${key}"`
-    );
+    assert(!!structStmt.members[key], `Struct: "${name}" expected member does not exist: "${key}"`);
     assert(structStmt.members[key].name === data.name);
     assert(
       structStmt.members[key].offset === data.offset,
-      `Struct: "${name}" member: "${data.name}" incorrect offset. Expected: "${data.offset}", Got: "${structStmt.members[key].offset}"`
+      `Struct: "${name}" member: "${data.name}" incorrect offset. Expected: "${data.offset}", Got: "${structStmt.members[key].offset}"`,
     );
     assert(
       structStmt.members[key].size === data.size,
-      `Struct: "${name}" member: "${data.name}" incorrect size. Expected: "${data.size}", Got: "${structStmt.members[key].size}"`
+      `Struct: "${name}" member: "${data.name}" incorrect size. Expected: "${data.size}", Got: "${structStmt.members[key].size}"`,
     );
     assert(
       structStmt.members[key].type === data.type,
-      `Struct: "${name}" member: "${data.name}" incorrect type. Expected: "${data.type}", Got: "${structStmt.members[key].type}"`
+      `Struct: "${name}" member: "${data.name}" incorrect type. Expected: "${data.type}", Got: "${structStmt.members[key].type}"`,
     );
   }
 
@@ -2326,7 +2089,7 @@ function assertFunctionSignature(
   params: Array<[string, string]>,
   returnType: string | null,
   bodyLength: number,
-  exported: boolean
+  exported: boolean,
 ): funcStmt is FunctionStatement {
   assert(funcStmt instanceof FunctionStatement);
   assert(funcStmt.name === name);
@@ -2341,7 +2104,7 @@ function assertFunctionSignature(
 // params: Array<[name, type]>
 function assertFunctionParams(
   funcStmt: FunctionStatement,
-  expectedParams: Array<[string, string]>
+  expectedParams: Array<[string, string]>,
 ): void {
   const params = funcStmt.fnExpr.params;
   assert(expectedParams.length === params.length);

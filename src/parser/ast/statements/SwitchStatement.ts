@@ -1,7 +1,7 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTExpression, ASTStatement } from "../types/ast.type";
-import { BlockStatement } from "./BlockStatement";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTExpression, ASTStatement } from "../types/ast.type";
+import type { BlockStatement } from "./BlockStatement";
 
 export class SwitchStatement implements ASTStatement {
   public readonly type = "statement";
@@ -14,7 +14,7 @@ export class SwitchStatement implements ASTStatement {
     token: Token,
     switchExpr: ASTExpression,
     cases: Array<{ test: number; body: BlockStatement }>,
-    def?: BlockStatement
+    def?: BlockStatement,
   ) {
     this.token = token;
     this.switchExpr = switchExpr;
@@ -28,8 +28,8 @@ export class SwitchStatement implements ASTStatement {
     return extractTokenLiteral(this.token);
   }
 
-  public toString(tab_level = 0): string {
-    let out = "";
+  public toString(_tab_level = 0): string {
+    const out = "";
     return out;
   }
 }

@@ -1,6 +1,6 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTStatement } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTStatement } from "../types/ast.type";
 
 export type StructMember = {
   name: string;
@@ -23,7 +23,7 @@ export class StructStatement implements ASTStatement {
     name: string,
     members: Record<string, StructMember>,
     size: number,
-    exported = false
+    exported = false,
   ) {
     this.token = token;
     this.name = name;

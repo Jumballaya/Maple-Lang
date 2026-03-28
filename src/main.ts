@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import { compiler } from "./compiler/compiler";
 
 const usage = `Usage: maple <file> [optional_arg]

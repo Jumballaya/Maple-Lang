@@ -1,4 +1,4 @@
-import { IfStatement } from "../../../parser/ast/statements/IfStatement.js";
+import type { IfStatement } from "../../../parser/ast/statements/IfStatement.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { extractNeedsReturn } from "../analysis/flow.js";
 import { emitExpression } from "../expression/expression.js";

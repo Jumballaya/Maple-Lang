@@ -1,4 +1,16 @@
-import { ASTExpression } from "../parser/ast/types/ast.type.js";
+import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression.js";
+import { CallExpression } from "../parser/ast/expressions/CallExpression.js";
+import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression.js";
+import { Identifier } from "../parser/ast/expressions/Identifier.js";
+import { IndexExpression } from "../parser/ast/expressions/IndexExpression.js";
+import { InfixExpression } from "../parser/ast/expressions/InfixExpression.js";
+import { IntegerLiteralExpression } from "../parser/ast/expressions/IntegerLiteral.js";
+import { MemberExpression } from "../parser/ast/expressions/MemberExpression.js";
+import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression.js";
+import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression.js";
+import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression.js";
+import type { ASTExpression } from "../parser/ast/types/ast.type.js";
+import { baseScalar, cmpOps } from "./emitters/emit.types.js";
 import type {
   FunctionContext,
   FunctionMeta,
@@ -6,23 +18,11 @@ import type {
   StructData,
   VariableMeta,
 } from "./emitters/emitter.types.js";
-import { baseScalar, cmpOps } from "./emitters/emit.types.js";
+import { makeLabel } from "./emitters/emitter.utils.js";
 import { MapleModule } from "./MapleModule.js";
 import { FuncWriter } from "./writer/FuncWriter.js";
 import { Writer } from "./writer/Writer.js";
 import type { IWriter } from "./writer/writer.type.js";
-import { IntegerLiteralExpression } from "../parser/ast/expressions/IntegerLiteral.js";
-import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression.js";
-import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression.js";
-import { Identifier } from "../parser/ast/expressions/Identifier.js";
-import { IndexExpression } from "../parser/ast/expressions/IndexExpression.js";
-import { InfixExpression } from "../parser/ast/expressions/InfixExpression.js";
-import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression.js";
-import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression.js";
-import { CallExpression } from "../parser/ast/expressions/CallExpression.js";
-import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression.js";
-import { MemberExpression } from "../parser/ast/expressions/MemberExpression.js";
-import { makeLabel } from "./emitters/emitter.utils.js";
 
 export class ModuleEmitter {
   private writers: IWriter[] = [new Writer()];
@@ -106,17 +106,13 @@ export class ModuleEmitter {
   // Add Definitions
   public defParam(meta: VariableMeta): void {
     if (!this.currentFn) {
-      throw new Error(
-        "[param definition] no active function to define params for"
-      );
+      throw new Error("[param definition] no active function to define params for");
     }
     this.currentFn.params[meta.name] = meta;
   }
   public defLocal(meta: VariableMeta): void {
     if (!this.currentFn) {
-      throw new Error(
-        "[local definition] no active function to define locals for"
-      );
+      throw new Error("[local definition] no active function to define locals for");
     }
     this.currentFn.locals[meta.name] = meta;
   }
@@ -175,14 +171,10 @@ export class ModuleEmitter {
       return lt === "f32" || rt === "f32" ? "f32" : "i32";
     }
     if (expr instanceof PrefixExpression) {
-      throw new Error(
-        `[get expression type] prefix expression not implemented`
-      );
+      throw new Error(`[get expression type] prefix expression not implemented`);
     }
     if (expr instanceof PostfixExpression) {
-      throw new Error(
-        `[get expression type] postfix expression not implemented`
-      );
+      throw new Error(`[get expression type] postfix expression not implemented`);
     }
     if (expr instanceof CallExpression) {
       const internal = this.mod.functions[expr.func];
@@ -202,13 +194,8 @@ export class ModuleEmitter {
       }
       throw new Error(`[function call expression] unable to determine type`);
     }
-    if (
-      expr instanceof PointerMemberExpression ||
-      expr instanceof MemberExpression
-    ) {
-      throw new Error(
-        `[get expression type] member/pointer member expression not implemented`
-      );
+    if (expr instanceof PointerMemberExpression || expr instanceof MemberExpression) {
+      throw new Error(`[get expression type] member/pointer member expression not implemented`);
     }
 
     return "i32";
@@ -216,7 +203,7 @@ export class ModuleEmitter {
 
   public resolveBinaryOpTypes(
     left: ASTExpression,
-    right: ASTExpression
+    right: ASTExpression,
   ): ["f32", "f32"] | ["i32", "i32"] {
     const l = this.getExprType(left);
     const r = this.getExprType(right);

@@ -1,6 +1,5 @@
-import { ForStatement } from "../../../parser/ast/statements/ForStatement.js";
+import type { ForStatement } from "../../../parser/ast/statements/ForStatement.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { makeLabel } from "../emitter.utils.js";
 import { emitExpression } from "../expression/expression.js";
 import { emitStatement } from "./statement.js";
 
@@ -21,8 +20,8 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
     t === "bool"
       ? cond
       : t === "i32"
-      ? `(i32.ne ${cond} (i32.const 0))`
-      : `(f32.ne ${cond} (f32.const 0))`;
+        ? `(i32.ne ${cond} (i32.const 0))`
+        : `(f32.ne ${cond} (f32.const 0))`;
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
   // body

@@ -40,10 +40,7 @@ export function wasmStoreOp(t: string): string {
   return "i32.store"; // i32/u32/ptr/bool
 }
 
-export function i32CompareOp(
-  op: "<" | "<=" | ">" | ">=" | "==" | "!=",
-  signed: boolean
-): string {
+export function i32CompareOp(op: "<" | "<=" | ">" | ">=" | "==" | "!=", signed: boolean): string {
   switch (op) {
     case "<": {
       return signed ? "i32.lt_s" : "i32.lt_u";

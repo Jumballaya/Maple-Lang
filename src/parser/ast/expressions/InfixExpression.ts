@@ -1,6 +1,6 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTExpression } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTExpression } from "../types/ast.type";
 
 export class InfixExpression implements ASTExpression {
   public readonly type = "expression";
@@ -9,12 +9,7 @@ export class InfixExpression implements ASTExpression {
   public right: ASTExpression;
   public operator: string;
 
-  constructor(
-    token: Token,
-    left: ASTExpression,
-    operator: string,
-    right: ASTExpression
-  ) {
+  constructor(token: Token, left: ASTExpression, operator: string, right: ASTExpression) {
     this.token = token;
     this.left = left;
     this.operator = operator;

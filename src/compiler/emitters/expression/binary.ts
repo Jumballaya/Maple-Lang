@@ -1,5 +1,5 @@
-import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
-import { ASTExpression } from "../../../parser/ast/types/ast.type.js";
+import type { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { i32CompareOp } from "../emit.types.js";
 import { emitExpression } from "./expression.js";
@@ -10,7 +10,7 @@ import { emitExpression } from "./expression.js";
 export function emitOperand(
   e: ASTExpression,
   target: "i32" | "f32",
-  emitter: ModuleEmitter
+  emitter: ModuleEmitter,
 ): string {
   const raw = emitExpression(e, emitter);
   let src = emitter.getExprType(e);
@@ -27,10 +27,7 @@ export function emitOperand(
 //
 //  @TODO: use correct operations
 //
-export function emitBinaryOp(
-  expr: InfixExpression,
-  emitter: ModuleEmitter
-): string {
+export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): string {
   const [numType] = emitter.resolveBinaryOpTypes(expr.left, expr.right);
   const l = emitOperand(expr.left, numType, emitter);
   const r = emitOperand(expr.right, numType, emitter);

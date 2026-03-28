@@ -1,6 +1,6 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTExpression } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTExpression } from "../types/ast.type";
 
 export class BooleanLiteralExpression implements ASTExpression {
   public readonly type = "expression";

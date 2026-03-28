@@ -1,12 +1,12 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { Lexer } from "../src/lexer/Lexer";
 
 describe("Lexer", () => {
   test("can accept source text", () => {
     const src = "let x: i32 = 1 + 1;";
     assert.doesNotThrow(() => {
-      const lexer = new Lexer(src);
+      const _lexer = new Lexer(src);
     });
   });
   test("can lex integers", () => {
@@ -59,17 +59,7 @@ describe("Lexer", () => {
     }
   });
   test("can lex identifiers", () => {
-    const sources = [
-      `x`,
-      `_x`,
-      `_value123`,
-      `foo_bar`,
-      `Vec2`,
-      `x1`,
-      `fn1`,
-      `leta`,
-      `const4`,
-    ];
+    const sources = [`x`, `_x`, `_value123`, `foo_bar`, `Vec2`, `x1`, `fn1`, `leta`, `const4`];
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
@@ -155,11 +145,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(
-        tokens[0].type,
-        expected,
-        `Type: ${tokens[0].type}, Expected: ${expected}`
-      );
+      assert.equal(tokens[0].type, expected, `Type: ${tokens[0].type}, Expected: ${expected}`);
     }
   });
   test("Operators", () => {

@@ -1,7 +1,7 @@
 import { sizeofType } from "../compiler/emitters/emit.types";
-import { StructMember } from "../compiler/emitters/emitter.types";
-import { IdentToken, Token } from "../lexer/token.types";
+import type { StructMember } from "../compiler/emitters/emitter.types";
 import { Tokenizer } from "../lexer/Tokenizer";
+import type { IdentToken, Token } from "../lexer/token.types";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
@@ -10,7 +10,7 @@ import { CallExpression } from "./ast/expressions/CallExpression";
 import { FloatLiteralExpression } from "./ast/expressions/FloatLiteralExpression";
 import {
   FunctionLiteralExpression,
-  FunctionParam,
+  type FunctionParam,
 } from "./ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "./ast/expressions/Identifier";
 import { IndexExpression } from "./ast/expressions/IndexExpression";
@@ -31,7 +31,7 @@ import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
 import { StructStatement } from "./ast/statements/StructStatement";
 import { WhileStatement } from "./ast/statements/WhileStatement";
-import {
+import type {
   ASTExpression,
   ASTStatement,
   InfixParseFn,
@@ -42,12 +42,11 @@ import { BUILTIN_TYPES } from "./ast/types/builtin_types";
 import {
   ASSIGN,
   CALL,
-  COMPARE,
   EQUALS,
   INDEX,
   LESSGREATER,
   LOWEST,
-  ParserPrecedence,
+  type ParserPrecedence,
   PREFIX,
   PRODUCT,
   SUM,
@@ -161,10 +160,7 @@ export class Parser {
     return program;
   }
 
-  private parseStatement(
-    exported = false,
-    topLevel = false
-  ): ASTStatement | null {
+  private parseStatement(exported = false, topLevel = false): ASTStatement | null {
     const token = this.tokenizer.curToken();
     switch (token.type) {
       case "Break": {
@@ -246,8 +242,7 @@ export class Parser {
     const ident = identToken.literal.toString();
 
     // Get the function expression: (): {}
-    const expr =
-      this.parseFunctionLiteral() as FunctionLiteralExpression | null;
+    const expr = this.parseFunctionLiteral() as FunctionLiteralExpression | null;
 
     if (!expr) {
       return null;
@@ -461,13 +456,7 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume semicolon
 
-    const letStmt = new LetStatement(
-      statementToken,
-      identifier,
-      typeAnn,
-      value,
-      exported
-    );
+    const letStmt = new LetStatement(statementToken, identifier, typeAnn, value, exported);
     letStmt.typeAnnotation = typeAnn;
 
     return letStmt;
@@ -492,10 +481,7 @@ export class Parser {
 
     this.tokenizer.nextToken();
 
-    while (
-      !this.tokenizer.curTokenIs("RBrace") &&
-      !this.tokenizer.curTokenIs("EOF")
-    ) {
+    while (!this.tokenizer.curTokenIs("RBrace") && !this.tokenizer.curTokenIs("EOF")) {
       const stmt = this.parseStatement();
       if (stmt !== null) {
         block.statements.push(stmt);
@@ -565,10 +551,7 @@ export class Parser {
     if (!conditionExpr) {
       return null;
     }
-    const conditionStatement = new ExpressionStatement(
-      this.tokenizer.curToken(),
-      conditionExpr
-    );
+    const conditionStatement = new ExpressionStatement(this.tokenizer.curToken(), conditionExpr);
     this.tokenizer.nextToken(); // consumes last token from the parseExpression call
     if (!this.tokenizer.curTokenIs("Semicolon")) {
       this.errors.push({
@@ -585,10 +568,7 @@ export class Parser {
     if (!updateExpr) {
       return null;
     }
-    const updateExprStatement = new ExpressionStatement(
-      updateToken,
-      updateExpr
-    );
+    const updateExprStatement = new ExpressionStatement(updateToken, updateExpr);
 
     if (!this.expectPeek("RParen")) {
       return null;
@@ -600,9 +580,7 @@ export class Parser {
     // loopBody
     const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
     this.tokenizer.nextToken();
-    while (
-      !(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))
-    ) {
+    while (!(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))) {
       const stmt = this.parseStatement(false);
       if (!stmt) {
         return null;
@@ -623,7 +601,7 @@ export class Parser {
       initBlock,
       conditionStatement,
       updateExprStatement,
-      loopBody
+      loopBody,
     );
   }
 
@@ -650,9 +628,7 @@ export class Parser {
     // loopBody
     const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
     this.tokenizer.nextToken();
-    while (
-      !(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))
-    ) {
+    while (!(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))) {
       const stmt = this.parseStatement(false);
 
       if (!stmt) {
@@ -694,10 +670,7 @@ export class Parser {
     let leftExpr = prefix();
 
     while (
-      !(
-        this.tokenizer.peekTokenIs("Semicolon") ||
-        this.tokenizer.peekTokenIs("Comma")
-      ) &&
+      !(this.tokenizer.peekTokenIs("Semicolon") || this.tokenizer.peekTokenIs("Comma")) &&
       precendence < this.peekPrecedence()
     ) {
       const infix = this.infixParseFns.get(this.tokenizer.peekToken().type);
@@ -723,7 +696,7 @@ export class Parser {
 
   private parsePrefixExpression(): ASTExpression {
     const exprToken = this.tokenizer.curToken();
-    let literal: string | number = exprToken.literal.toString();
+    const literal: string | number = exprToken.literal.toString();
     this.tokenizer.nextToken();
     const right = this.parseExpression(PREFIX);
     return new PrefixExpression(exprToken, literal.toString(), right);
@@ -799,7 +772,7 @@ export class Parser {
     return new CallExpression(
       this.tokenizer.curToken(),
       func.tokenLiteral(),
-      this.parseCallArguments()
+      this.parseCallArguments(),
     );
   }
 
@@ -837,10 +810,8 @@ export class Parser {
       return null;
     }
     const value = literalToken.literal;
-    if (isNaN(value)) {
-      const message = `Parser: Could not parse ${
-        this.tokenizer.curToken().literal
-      } as a number`;
+    if (Number.isNaN(value)) {
+      const message = `Parser: Could not parse ${this.tokenizer.curToken().literal} as a number`;
       this.errors.push({ message, token: this.tokenizer.curToken() });
       return null;
     }
@@ -854,10 +825,8 @@ export class Parser {
       return null;
     }
     const value = literalToken.literal;
-    if (isNaN(value)) {
-      const message = `Parser: Could not parse ${
-        this.tokenizer.curToken().literal
-      } as a number`;
+    if (Number.isNaN(value)) {
+      const message = `Parser: Could not parse ${this.tokenizer.curToken().literal} as a number`;
       this.errors.push({ message, token: this.tokenizer.curToken() });
       return null;
     }
@@ -867,7 +836,7 @@ export class Parser {
   private parseBooleanLiteral(): ASTExpression {
     return new BooleanLiteralExpression(
       this.tokenizer.curToken(),
-      this.tokenizer.curTokenIs("True")
+      this.tokenizer.curTokenIs("True"),
     );
   }
 
@@ -918,8 +887,7 @@ export class Parser {
     const isBool = p instanceof BooleanLiteralExpression;
     if (!(isFloat || isInt || isBool)) {
       this.errors.push({
-        message:
-          "Parser: only float, integer and bool literals in an array literal are supported",
+        message: "Parser: only float, integer and bool literals in an array literal are supported",
         token: this.tokenizer.curToken(),
       });
       return null;

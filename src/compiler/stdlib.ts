@@ -1,4 +1,4 @@
-import { ModuleMeta } from "./emitters/emitter.types";
+import type { ModuleMeta } from "./emitters/emitter.types";
 
 const math: ModuleMeta = {
   name: "math",

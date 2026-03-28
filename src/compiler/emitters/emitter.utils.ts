@@ -1,8 +1,8 @@
-import { Token } from "../../lexer/token.types.js";
+import type { Token } from "../../lexer/token.types.js";
 import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression.js";
 import { Identifier } from "../../parser/ast/expressions/Identifier.js";
 import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral.js";
-import { ASTExpression } from "../../parser/ast/types/ast.type.js";
+import type { ASTExpression } from "../../parser/ast/types/ast.type.js";
 import type { VariableMeta } from "./emitter.types.js";
 
 // @TODO: Eventually this information will get captured and not infered like this
@@ -10,7 +10,7 @@ export function asExpr(x: string | number): ASTExpression {
   if (typeof x === "string") {
     return new Identifier(
       { type: "Identifier", literal: x, col: 0, line: 0, end: 0, start: 0 },
-      "i32"
+      "i32",
     );
   }
   if (Number.isInteger(x)) {

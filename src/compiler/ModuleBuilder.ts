@@ -1,13 +1,13 @@
+import { alignup } from "./emitters/emit.data.js";
 import type {
   ExportMeta,
+  FunctionMeta,
+  ImportMeta,
   ModuleDataMeta,
   ModuleMeta,
   StructData,
   VariableMeta,
-  ImportMeta,
-  FunctionMeta,
 } from "./emitters/emitter.types.js";
-import { alignup } from "./emitters/emit.data.js";
 
 export class ModuleBuilder {
   public readonly name: string;
@@ -26,17 +26,7 @@ export class ModuleBuilder {
   }
 
   public build(): ModuleMeta {
-    const {
-      name,
-      globals,
-      functions,
-      exports,
-      structs,
-      data,
-      stringPool,
-      dataPtr,
-      imports,
-    } = this;
+    const { name, globals, functions, exports, structs, data, stringPool, dataPtr, imports } = this;
 
     return {
       name,

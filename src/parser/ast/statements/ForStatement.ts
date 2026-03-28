@@ -1,9 +1,9 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTStatement } from "../types/ast.type";
-import { BlockStatement } from "./BlockStatement";
-import { ExpressionStatement } from "./ExpressionStatement";
-import { LetStatement } from "./LetStatement";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTStatement } from "../types/ast.type";
+import type { BlockStatement } from "./BlockStatement";
+import type { ExpressionStatement } from "./ExpressionStatement";
+import type { LetStatement } from "./LetStatement";
 
 export class ForStatement implements ASTStatement {
   public readonly type = "statement";
@@ -18,7 +18,7 @@ export class ForStatement implements ASTStatement {
     initBlock: LetStatement,
     conditionExpr: ExpressionStatement,
     updateExpr: ExpressionStatement,
-    loopBody: BlockStatement
+    loopBody: BlockStatement,
   ) {
     this.token = token;
     this.initBlock = initBlock;
@@ -32,7 +32,7 @@ export class ForStatement implements ASTStatement {
   }
 
   public toString(tab_level = 0): string {
-    let out = `for (${this.initBlock.toString()} ${this.conditionExpr.toString()} ${this.updateExpr.toString()}) {
+    const out = `for (${this.initBlock.toString()} ${this.conditionExpr.toString()} ${this.updateExpr.toString()}) {
 ${this.loopBody.toString(tab_level)}
     }
 `;

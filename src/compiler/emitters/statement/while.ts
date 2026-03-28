@@ -1,13 +1,9 @@
-import { WhileStatement } from "../../../parser/ast/statements/WhileStatement.js";
+import type { WhileStatement } from "../../../parser/ast/statements/WhileStatement.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { makeLabel } from "../emitter.utils.js";
 import { emitExpression } from "../expression/expression.js";
 import { emitStatement } from "./statement.js";
 
-export function emitWhileStatement(
-  stmt: WhileStatement,
-  emitter: ModuleEmitter
-) {
+export function emitWhileStatement(stmt: WhileStatement, emitter: ModuleEmitter) {
   const br = emitter.makeLabel("break");
   const lp = emitter.makeLabel("loop");
 
@@ -23,8 +19,8 @@ export function emitWhileStatement(
     t === "bool"
       ? condTxt
       : t === "i32"
-      ? `(i32.ne ${condTxt} (i32.const 0))`
-      : `(f32.ne ${condTxt} (f32.const 0))`;
+        ? `(i32.ne ${condTxt} (i32.const 0))`
+        : `(f32.ne ${condTxt} (f32.const 0))`;
 
   // loop condition
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);

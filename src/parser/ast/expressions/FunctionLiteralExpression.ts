@@ -1,8 +1,8 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { BlockStatement } from "../statements/BlockStatement";
-import { ASTExpression } from "../types/ast.type";
-import { Identifier } from "./Identifier";
+import type { Token } from "../../../lexer/token.types";
+import type { BlockStatement } from "../statements/BlockStatement";
+import type { ASTExpression } from "../types/ast.type";
+import type { Identifier } from "./Identifier";
 
 export type FunctionParam = {
   identifier: Identifier;
@@ -20,7 +20,7 @@ export class FunctionLiteralExpression implements ASTExpression {
     token: Token,
     params: FunctionParam[],
     body: BlockStatement,
-    returnType: string | null
+    returnType: string | null,
   ) {
     this.token = token;
     this.params = params;
@@ -33,9 +33,7 @@ export class FunctionLiteralExpression implements ASTExpression {
   }
 
   public toString(tab_level = 0): string {
-    const params = this.params
-      .map((p) => `${p.identifier.toString()}: ${p.type}`)
-      .join(", ");
+    const params = this.params.map((p) => `${p.identifier.toString()}: ${p.type}`).join(", ");
     const lit = this.tokenLiteral();
     return `${"\t".repeat(tab_level)}${lit}(${params}): ${
       this.returnType ?? "void"

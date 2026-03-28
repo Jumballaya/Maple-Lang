@@ -1,16 +1,11 @@
-import { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement.js";
+import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { extractLocals } from "../emit.data.js";
 import { valueTypeToWasm } from "../emit.types.js";
 import { emitStatement } from "./statement.js";
 
-export function emitFunction(
-  fn: FunctionStatement,
-  emitter: ModuleEmitter
-): void {
-  const rType = fn.fnExpr.returnType
-    ? valueTypeToWasm(fn.fnExpr.returnType)
-    : "void";
+export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): void {
+  const rType = fn.fnExpr.returnType ? valueTypeToWasm(fn.fnExpr.returnType) : "void";
   const params: Array<{ name: string; type: string }> = [];
   for (const p of fn.fnExpr.params) {
     params.push({ name: p.identifier.tokenLiteral(), type: p.type });
@@ -68,14 +63,14 @@ export function emitFunction(
       // close
       w.close(")");
       w.line();
-    }
+    },
   );
 }
 
 // returns: [params, results, typeName]
 // ['void', 'void', $v_v_type] or [['i32'], ['i32'], $i_i_type]
 export function extractFunctionSignature(
-  signature: string
+  signature: string,
 ): [Array<"i32" | "f32"> | "void", Array<"i32" | "f32"> | "void", string] {
   const typeName = `$${signature}_type`;
   const params = signature.split("_")[0]?.split("") ?? [];
@@ -112,7 +107,7 @@ export function extractFunctionSignature(
 export function emitFunctionSignature(
   typeName: string,
   params: ("i32" | "f32")[] | "void",
-  result: ("i32" | "f32")[] | "void"
+  result: ("i32" | "f32")[] | "void",
 ): string {
   let func = `(func`;
   for (const p of params) {
@@ -158,9 +153,7 @@ export function generateFunctionSignature(fn: FunctionStatement): string {
   }
   signature += "_";
 
-  const rType = fn.fnExpr.returnType
-    ? valueTypeToWasm(fn.fnExpr.returnType)
-    : "void";
+  const rType = fn.fnExpr.returnType ? valueTypeToWasm(fn.fnExpr.returnType) : "void";
   signature += `${rType.slice(0, 1)}`;
 
   return signature;

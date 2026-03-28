@@ -1,33 +1,30 @@
-import { Writer } from "../../writer/Writer.js";
-import { emitGet, emitNumberGet } from "./core.js";
-import { emitAssignmentExpression } from "./assignment.js";
-import { emitBinaryOp } from "./binary.js";
-import { emitFunctionCall } from "./function-call.js";
-import { emitIndexExpression } from "./index.js";
-import { wasmLoadOp } from "../emit.types.js";
-import { getPointerMemberData } from "./member.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { ASTExpression } from "../../../parser/ast/types/ast.type.js";
-import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
-import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
-import { CallExpression } from "../../../parser/ast/expressions/CallExpression.js";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
-import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression.js";
-import { CharLiteralExpression } from "../../../parser/ast/expressions/CharLiteralExpression.js";
-import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral.js";
 import { ArrayLiteralExpression } from "../../../parser/ast/expressions/ArrayLiteralExpression.js";
-import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression.js";
-import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression.js";
 import { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression.js";
+import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression.js";
+import { CallExpression } from "../../../parser/ast/expressions/CallExpression.js";
+import { CharLiteralExpression } from "../../../parser/ast/expressions/CharLiteralExpression.js";
+import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression.js";
+import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
 import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression.js";
+import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
 import { PrefixExpression } from "../../../parser/ast/expressions/PrefixExpression.js";
+import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral.js";
+import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression.js";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type.js";
+import type { ModuleEmitter } from "../../ModuleEmitter.js";
+import { Writer } from "../../writer/Writer.js";
+import { wasmLoadOp } from "../emit.types.js";
+import { emitAssignmentExpression } from "./assignment.js";
+import { emitBinaryOp } from "./binary.js";
+import { emitGet, emitNumberGet } from "./core.js";
+import { emitFunctionCall } from "./function-call.js";
+import { emitIndexExpression } from "./index.js";
+import { getPointerMemberData } from "./member.js";
 
-export function emitExpression(
-  expression: ASTExpression,
-  emitter: ModuleEmitter
-): string {
+export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter): string {
   const writer = new Writer();
 
   if (expression instanceof Identifier) {
@@ -85,9 +82,7 @@ export function emitExpression(
     writer.append(`(i32.eqz ${emitExpression(expression.right!, emitter)})`);
     //
   } else {
-    throw new Error(
-      `[expression emitter] "${expression.constructor}" emit not implemented`
-    );
+    throw new Error(`[expression emitter] "${expression.constructor}" emit not implemented`);
   }
 
   return writer.toString();

@@ -1,6 +1,6 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTStatement } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTStatement } from "../types/ast.type";
 
 export class ImportStatement implements ASTStatement {
   public readonly type = "statement";
@@ -18,7 +18,7 @@ export class ImportStatement implements ASTStatement {
     return extractTokenLiteral(this.token);
   }
 
-  public toString(tab_level = 0): string {
+  public toString(_tab_level = 0): string {
     return `import ${this.imported.join(", ")} from "${this.importPath}"`;
   }
 }

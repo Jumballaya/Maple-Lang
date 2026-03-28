@@ -1,21 +1,17 @@
-import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { Parser } from "../src/parser/Parser";
+import { describe, test } from "node:test";
+import { compiler } from "../src/compiler/compiler";
+import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
+import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
+import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
-import { extractModuleMeta, emitModule } from "../src/compiler/emitters/module";
-import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
-import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
-import { compiler } from "../src/compiler/compiler";
+import { Parser } from "../src/parser/Parser";
 
 function compile(src: string) {
   const p = new Parser(src);
   const ast = p.parse("test");
-  assert.equal(
-    p.errors.length,
-    0,
-    `Parse errors: ${p.errors.map((e) => e.message).join(", ")}`
-  );
+  assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join(", ")}`);
   const meta = extractModuleMeta(ast);
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
@@ -71,9 +67,7 @@ describe("Emission: Functions", () => {
   });
 
   test("function call emits call instruction", () => {
-    const { wat } = compile(
-      "fn callee(): i32 { return 1; } fn caller(): i32 { return callee(); }"
-    );
+    const { wat } = compile("fn callee(): i32 { return 1; } fn caller(): i32 { return callee(); }");
     assert(/\(call \$callee\s*\)/.test(wat));
   });
 
@@ -123,10 +117,10 @@ describe("Emission: Variables", () => {
 describe("Emission: Structs", () => {
   test("struct metadata includes members and size", () => {
     const { meta } = compile("struct S { a: i32, b: f32 }");
-    assert(meta.structs["S"] !== undefined);
-    assert(meta.structs["S"].members["a"] !== undefined);
-    assert(meta.structs["S"].members["b"] !== undefined);
-    assert.equal(meta.structs["S"].size, 8);
+    assert(meta.structs.S !== undefined);
+    assert(meta.structs.S.members.a !== undefined);
+    assert(meta.structs.S.members.b !== undefined);
+    assert.equal(meta.structs.S.size, 8);
   });
 
   test("struct let with mixed i32 and f32 members emits both", () => {
@@ -326,13 +320,17 @@ describe("Emission: Index Access", () => {
   });
 
   test("variable index emits computed offset load", () => {
-    const { wat } = compile("fn test(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x]; }");
+    const { wat } = compile(
+      "fn test(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x]; }",
+    );
     assert(wat.includes("i32.mul"));
     assert(wat.includes("i32.add"));
   });
 
   test("expression index emits computed offset load", () => {
-    const { wat } = compile("fn test(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x + 1]; }");
+    const { wat } = compile(
+      "fn test(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x + 1]; }",
+    );
     assert(wat.includes("i32.add"));
     assert(wat.includes("i32.load"));
   });
@@ -360,9 +358,7 @@ describe("Emission: Literals", () => {
     p.parse("test");
     assert(p.errors.length > 0);
     assert(
-      p.errors.some((e) =>
-        e.message.includes("No prefix parse function found for StringLiteral")
-      )
+      p.errors.some((e) => e.message.includes("No prefix parse function found for StringLiteral")),
     );
   });
 
@@ -371,9 +367,7 @@ describe("Emission: Literals", () => {
     p.parse("test");
     assert(p.errors.length > 0);
     assert(
-      p.errors.some((e) =>
-        e.message.includes("No prefix parse function found for CharLiteral")
-      )
+      p.errors.some((e) => e.message.includes("No prefix parse function found for CharLiteral")),
     );
   });
 });
@@ -381,14 +375,14 @@ describe("Emission: Literals", () => {
 describe("Module Metadata", () => {
   test("single import populates metadata", () => {
     const { meta } = compile('import foo from "mod"');
-    assert(meta.imports["foo"] !== undefined);
-    assert.equal(meta.imports["foo"].module, "mod");
+    assert(meta.imports.foo !== undefined);
+    assert.equal(meta.imports.foo.module, "mod");
   });
 
   test("multi import populates metadata entries", () => {
     const { meta } = compile('import a, b from "mod"');
-    assert(meta.imports["a"] !== undefined);
-    assert(meta.imports["b"] !== undefined);
+    assert(meta.imports.a !== undefined);
+    assert(meta.imports.b !== undefined);
   });
 
   test("import emission includes import and type when import is resolved as function", () => {
@@ -396,8 +390,8 @@ describe("Module Metadata", () => {
     const ast = p.parse("test");
     assert.equal(p.errors.length, 0);
     const meta = extractModuleMeta(ast);
-    meta.imports["foo"].resolved = true;
-    meta.imports["foo"].info = {
+    meta.imports.foo.resolved = true;
+    meta.imports.foo.info = {
       kind: "func",
       signature: "i_i",
     } as any;
@@ -408,33 +402,33 @@ describe("Module Metadata", () => {
 
   test("exported function appears in exports metadata", () => {
     const { meta } = compile("export fn test(): void {}");
-    assert(meta.exports["test"] !== undefined);
-    assert.equal(meta.exports["test"].kind, "func");
+    assert(meta.exports.test !== undefined);
+    assert.equal(meta.exports.test.kind, "func");
   });
 
   test("exported global appears in exports metadata", () => {
     const { meta } = compile("export let x: i32 = 0;");
-    assert(meta.exports["x"] !== undefined);
-    assert.equal(meta.exports["x"].kind, "global");
+    assert(meta.exports.x !== undefined);
+    assert.equal(meta.exports.x.kind, "global");
   });
 
   test("exported struct appears in exports", () => {
     const { meta } = compile("export struct Visible { x: i32 }");
-    assert(meta.exports["Visible"] !== undefined);
-    assert.equal(meta.exports["Visible"].kind, "struct");
+    assert(meta.exports.Visible !== undefined);
+    assert.equal(meta.exports.Visible.kind, "struct");
   });
 
   test("non-exported struct does not appear in exports", () => {
     const { meta } = compile("struct Hidden { x: i32 }");
-    assert.equal(meta.exports["Hidden"], undefined);
+    assert.equal(meta.exports.Hidden, undefined);
   });
 
   test("mixed exported and non-exported structs keep struct metadata but only export public", () => {
     const { meta } = compile("export struct Pub { x: i32 } struct Priv { y: f32 }");
-    assert(meta.exports["Pub"] !== undefined);
-    assert.equal(meta.exports["Priv"], undefined);
-    assert(meta.structs["Pub"] !== undefined);
-    assert(meta.structs["Priv"] !== undefined);
+    assert(meta.exports.Pub !== undefined);
+    assert.equal(meta.exports.Priv, undefined);
+    assert(meta.structs.Pub !== undefined);
+    assert(meta.structs.Priv !== undefined);
   });
 });
 
@@ -450,7 +444,7 @@ describe("Compiler Pipeline", () => {
       (err: Error) => {
         assert(err.message.includes("ENOENT"));
         return true;
-      }
+      },
     );
   });
 

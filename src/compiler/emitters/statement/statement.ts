@@ -6,7 +6,7 @@ import { IfStatement } from "../../../parser/ast/statements/IfStatement.js";
 import { LetStatement } from "../../../parser/ast/statements/LetStatement.js";
 import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement.js";
 import { WhileStatement } from "../../../parser/ast/statements/WhileStatement.js";
-import { ASTStatement } from "../../../parser/ast/types/ast.type.js";
+import type { ASTStatement } from "../../../parser/ast/types/ast.type.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { emitExpression } from "../expression/expression.js";
 import { emitBreakStatement } from "./break.js";
@@ -15,10 +15,7 @@ import { emitIfStatement } from "./if.js";
 import { emitLetStatement } from "./let.js";
 import { emitWhileStatement } from "./while.js";
 
-export function emitStatement(
-  stmt: ASTStatement,
-  emitter: ModuleEmitter
-): void {
+export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void {
   if (stmt instanceof BlockStatement) {
     for (const s of stmt.statements) {
       emitStatement(s, emitter);
@@ -28,9 +25,7 @@ export function emitStatement(
 
   if (stmt instanceof ReturnStatement) {
     if (stmt.returnValue) {
-      emitter.writer.line(
-        `(return ${emitExpression(stmt.returnValue, emitter)})`
-      );
+      emitter.writer.line(`(return ${emitExpression(stmt.returnValue, emitter)})`);
       return;
     }
     emitter.writer.line(`(return)`);
@@ -61,7 +56,5 @@ export function emitStatement(
     return;
   }
 
-  throw new Error(
-    `[statement emitter] statement type: ${stmt.tokenLiteral()} not implemented`
-  );
+  throw new Error(`[statement emitter] statement type: ${stmt.tokenLiteral()} not implemented`);
 }

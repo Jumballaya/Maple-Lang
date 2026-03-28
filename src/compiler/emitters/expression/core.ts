@@ -1,4 +1,4 @@
-import { ASTExpression } from "../../../parser/ast/types/ast.type.js";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { valueTypeToWasm, wasmLoadOp, wasmStoreOp } from "../emit.types.js";
 import { addrOf } from "../emitter.utils.js";
@@ -28,11 +28,7 @@ export function emitGet(ident: string, emitter: ModuleEmitter): string {
   }
 }
 
-export function emitSet(
-  ident: string,
-  expr: ASTExpression,
-  emitter: ModuleEmitter
-): string {
+export function emitSet(ident: string, expr: ASTExpression, emitter: ModuleEmitter): string {
   const v = emitter.getVar(ident);
   if (!v) throw new Error(`variable not found: "${ident}"`);
 

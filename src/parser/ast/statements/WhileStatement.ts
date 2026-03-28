@@ -1,7 +1,7 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { ASTExpression, ASTStatement } from "../types/ast.type";
-import { BlockStatement } from "./BlockStatement";
+import type { Token } from "../../../lexer/token.types";
+import type { ASTExpression, ASTStatement } from "../types/ast.type";
+import type { BlockStatement } from "./BlockStatement";
 
 export class WhileStatement implements ASTStatement {
   public readonly type = "statement";
@@ -20,9 +20,7 @@ export class WhileStatement implements ASTStatement {
   }
 
   public toString(tab_level = 0): string {
-    let out = `${"\t".repeat(
-      tab_level
-    )}while (${this.condExpr.toString()}) {\n`;
+    let out = `${"\t".repeat(tab_level)}while (${this.condExpr.toString()}) {\n`;
     tab_level++;
     out += this.loopBody.toString(tab_level);
     tab_level--;

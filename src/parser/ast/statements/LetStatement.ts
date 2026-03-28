@@ -1,7 +1,7 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { Identifier } from "../expressions/Identifier";
-import { ASTExpression, ASTStatement } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { Identifier } from "../expressions/Identifier";
+import type { ASTExpression, ASTStatement } from "../types/ast.type";
 
 export class LetStatement implements ASTStatement {
   public readonly type = "statement";
@@ -16,7 +16,7 @@ export class LetStatement implements ASTStatement {
     ident: Identifier,
     typeAnnotation: string,
     expr: ASTExpression | null = null,
-    exported = false
+    exported = false,
   ) {
     this.token = token;
     this.identifier = ident;

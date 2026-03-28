@@ -1,12 +1,12 @@
-import { readFile, writeFile } from "fs/promises";
-import { emitModule, extractModuleMeta } from "./emitters/module.js";
-import { exec } from "child_process";
-import type { ModuleMeta } from "./emitters/emitter.types.js";
-import path from "path";
-import type { MapleModule } from "./MapleModule.js";
-import { ASTProgram } from "../parser/ast/ASTProgram.js";
-import { stdlib } from "./stdlib.js";
+import { exec } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { ASTProgram } from "../parser/ast/ASTProgram.js";
 import { Parser } from "../parser/Parser.js";
+import type { ModuleMeta } from "./emitters/emitter.types.js";
+import { emitModule, extractModuleMeta } from "./emitters/module.js";
+import type { MapleModule } from "./MapleModule.js";
+import { stdlib } from "./stdlib.js";
 
 //
 //    Next idea:
@@ -75,7 +75,7 @@ function parseFile(name: string, text: string): ASTProgram | null {
       const { message, token } = error;
       const { line, col } = token;
       console.error(
-        `Maple Error:\nline: ${line}, col: ${col}\nMessage: "${message}"\nToken: "${token.literal}"\n`
+        `Maple Error:\nline: ${line}, col: ${col}\nMessage: "${message}"\nToken: "${token.literal}"\n`,
       );
     }
   }
@@ -90,7 +90,7 @@ export async function compiler(
   entryPoint: string,
   entryMod: string,
   cwd: string,
-  outputPath = "build/app.wasm"
+  outputPath = "build/app.wasm",
 ) {
   const entrySrc = await openFile(entryPoint);
   if (!entrySrc) {
@@ -115,10 +115,7 @@ export async function compiler(
       stdLibList[imp.module] = stdMod;
       continue;
     }
-    const userMod = parseFile(
-      imp.module,
-      await openFile(path.join(cwd, imp.module))
-    );
+    const userMod = parseFile(imp.module, await openFile(path.join(cwd, imp.module)));
     if (!userMod) {
       throw new Error(`unable to find module: ${imp.module}`);
     }
@@ -137,9 +134,7 @@ export async function compiler(
       if (stdLibEntry) {
         const entry = stdLibEntry.exports[impName];
         if (!entry) {
-          throw new Error(
-            `no function "${impName}" exported from stdlib "${imp.module}"`
-          );
+          throw new Error(`no function "${impName}" exported from stdlib "${imp.module}"`);
         }
         // hook up the export -> import
         imp.info = entry;
@@ -153,9 +148,7 @@ export async function compiler(
       }
       const entry = userEntry.data.exports[impName];
       if (!entry) {
-        throw new Error(
-          `no function "${impName}" exported from stdlib "${imp.module}"`
-        );
+        throw new Error(`no function "${impName}" exported from stdlib "${imp.module}"`);
       }
       // hook up the export -> import
       imp.info = entry;
@@ -191,9 +184,7 @@ export async function compiler(
   for (const bin of Object.values(stdLibList)) {
     await run(`cp src/compiler/stdlib/${bin.name}.o build/${bin.name}.o`);
   }
-  await run(
-    `wasm-ld --no-gc-sections --no-check-features build/*.o -o ${outputPath}`
-  );
+  await run(`wasm-ld --no-gc-sections --no-check-features build/*.o -o ${outputPath}`);
   console.log(`Compiled: ${outputPath}`);
 }
 

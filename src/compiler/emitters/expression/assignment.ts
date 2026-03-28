@@ -1,4 +1,4 @@
-import { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression.js";
+import type { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression.js";
 import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
@@ -11,7 +11,7 @@ import { getPointerMemberData } from "./member.js";
 
 export function emitAssignmentExpression(
   expression: AssignmentExpression,
-  emitter: ModuleEmitter
+  emitter: ModuleEmitter,
 ): string {
   const writer = new Writer();
 
@@ -22,10 +22,7 @@ export function emitAssignmentExpression(
     expression.left instanceof MemberExpression ||
     expression.left instanceof PointerMemberExpression
   ) {
-    const { identData, memberData } = getPointerMemberData(
-      expression.left,
-      emitter
-    );
+    const { identData, memberData } = getPointerMemberData(expression.left, emitter);
     if (memberData) {
       const t = memberData.type;
       const off = memberData.offset;
@@ -39,7 +36,7 @@ export function emitAssignmentExpression(
     }
   } else {
     throw new Error(
-      `[expression emitter] Assignment expression type: "${expression.left.toString()}" not supported`
+      `[expression emitter] Assignment expression type: "${expression.left.toString()}" not supported`,
     );
   }
 

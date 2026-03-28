@@ -5,14 +5,14 @@ import { IfStatement } from "../../../parser/ast/statements/IfStatement";
 import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement";
 import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
-import { ASTStatement } from "../../../parser/ast/types/ast.type.js";
+import type { ASTStatement } from "../../../parser/ast/types/ast.type.js";
 
 export function stmtDefinitelyReturns(stmt: ASTStatement): boolean {
   if (stmt instanceof ReturnStatement) {
     return true;
   }
   if (stmt instanceof BlockStatement) {
-    for (let s of stmt.statements) {
+    for (const s of stmt.statements) {
       if (stmtDefinitelyReturns(s)) {
         return true;
       }
@@ -21,9 +21,7 @@ export function stmtDefinitelyReturns(stmt: ASTStatement): boolean {
   }
   if (stmt instanceof IfStatement) {
     const thenHas = stmtDefinitelyReturns(stmt.thenBlock);
-    const elseHas = stmt.elseBlock
-      ? stmtDefinitelyReturns(stmt.elseBlock)
-      : false;
+    const elseHas = stmt.elseBlock ? stmtDefinitelyReturns(stmt.elseBlock) : false;
     return thenHas && elseHas;
   }
 

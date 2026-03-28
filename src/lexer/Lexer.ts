@@ -31,9 +31,7 @@ export class Lexer {
   }
 
   private peekChar(): string {
-    return this.readPos < this.text.length
-      ? this.text.charAt(this.readPos)
-      : "\0";
+    return this.readPos < this.text.length ? this.text.charAt(this.readPos) : "\0";
   }
 
   private nextToken(): Token {
@@ -478,6 +476,11 @@ export class Lexer {
           this.readChar();
           return tok;
         }
+        const literalToken = this.parseLiteral(mark);
+        if (literalToken) {
+          return literalToken;
+        }
+        break;
       }
 
       default: {
@@ -525,12 +528,7 @@ export class Lexer {
   private skipWhitespace(): void {
     while (true) {
       // whitespace
-      while (
-        this.char === " " ||
-        this.char === "\t" ||
-        this.char === "\n" ||
-        this.char === "\r"
-      ) {
+      while (this.char === " " || this.char === "\t" || this.char === "\n" || this.char === "\r") {
         this.readChar();
       }
 
@@ -697,8 +695,7 @@ export class Lexer {
             this.readChar();
             const v1 = this.hexVal(h1),
               v2 = this.hexVal(h2);
-            if (v1 < 0 || v2 < 0)
-              throw new Error("Invalid \\x escape (need two hex digits)");
+            if (v1 < 0 || v2 < 0) throw new Error("Invalid \\x escape (need two hex digits)");
             bytes.push((v1 << 4) | v2);
             break;
           }
@@ -717,9 +714,7 @@ export class Lexer {
     }
 
     if (this.char !== '"') {
-      throw new Error(
-        `String not terminated: ${this.text.slice(start, this.pos)}`
-      );
+      throw new Error(`String not terminated: ${this.text.slice(start, this.pos)}`);
     }
     this.readChar(); // consume closing "
 
@@ -790,21 +785,16 @@ export class Lexer {
     }
 
     if (this.char !== "'") {
-      throw new Error(
-        `Char not terminated: ${this.text.slice(start, this.pos)}`
-      );
+      throw new Error(`Char not terminated: ${this.text.slice(start, this.pos)}`);
     }
     this.readChar(); // consume closing '
 
     return { ...mark, type: "CharLiteral", literal: code };
   }
 
-  private parseNumberLiteral(mark: Pos, start: number): Token | undefined {
+  private parseNumberLiteral(mark: Pos, _start: number): Token | undefined {
     // Fast reject: if current char isn't a digit nor a dot followed by digit, bail.
-    if (
-      !isDigit(this.char) &&
-      !(this.char === "." && isDigit(this.peekChar()))
-    ) {
+    if (!isDigit(this.char) && !(this.char === "." && isDigit(this.peekChar()))) {
       return undefined;
     }
 
@@ -820,9 +810,8 @@ export class Lexer {
         const digitsStart = this.pos;
         while (this.isHex(this.char)) this.readChar();
         const digits = this.text.slice(digitsStart, this.pos);
-        if (digits.length === 0)
-          throw new Error("Malformed hex literal: missing digits");
-        const lexeme = this.text.slice(begin, this.pos);
+        if (digits.length === 0) throw new Error("Malformed hex literal: missing digits");
+        const _lexeme = this.text.slice(begin, this.pos);
         const value = Number.parseInt(digits, 16);
         return { ...mark, type: "IntegerLiteral", literal: value };
       }
@@ -833,8 +822,7 @@ export class Lexer {
         const digitsStart = this.pos;
         while (this.isBin(this.char)) this.readChar();
         const digits = this.text.slice(digitsStart, this.pos);
-        if (digits.length === 0)
-          throw new Error("Malformed binary literal: missing digits");
+        if (digits.length === 0) throw new Error("Malformed binary literal: missing digits");
         const value = Number.parseInt(digits, 2);
         return { ...mark, type: "IntegerLiteral", literal: value };
       }
@@ -872,10 +860,8 @@ export class Lexer {
     if (this.char === "e" || this.char === "E") {
       sawExp = true;
       this.readChar(); // consume 'e'
-      if ((this.char as string) === "+" || (this.char as string) === "-")
-        this.readChar();
-      if (!isDigit(this.char))
-        throw new Error("Malformed float exponent: missing digits");
+      if ((this.char as string) === "+" || (this.char as string) === "-") this.readChar();
+      if (!isDigit(this.char)) throw new Error("Malformed float exponent: missing digits");
       while (isDigit(this.char)) this.readChar();
     }
 
@@ -896,9 +882,7 @@ export class Lexer {
   // Helpers
 
   private isHex(c: string): boolean {
-    return (
-      (c >= "0" && c <= "9") || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")
-    );
+    return (c >= "0" && c <= "9") || (c >= "a" && c <= "f") || (c >= "A" && c <= "F");
   }
   private isBin(c: string): boolean {
     return c === "0" || c === "1";

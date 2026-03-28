@@ -1,7 +1,7 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
-import { Token } from "../../../lexer/token.types";
-import { FunctionLiteralExpression } from "../expressions/FunctionLiteralExpression";
-import { ASTStatement } from "../types/ast.type";
+import type { Token } from "../../../lexer/token.types";
+import type { FunctionLiteralExpression } from "../expressions/FunctionLiteralExpression";
+import type { ASTStatement } from "../types/ast.type";
 
 export class FunctionStatement implements ASTStatement {
   public readonly type = "statement";
@@ -10,12 +10,7 @@ export class FunctionStatement implements ASTStatement {
   public name: string;
   public exported: boolean;
 
-  constructor(
-    token: Token,
-    fnExpr: FunctionLiteralExpression,
-    name: string,
-    exported = false
-  ) {
+  constructor(token: Token, fnExpr: FunctionLiteralExpression, name: string, exported = false) {
     this.token = token;
     this.fnExpr = fnExpr;
     this.name = name;
