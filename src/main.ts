@@ -22,8 +22,9 @@ async function main() {
 
   let outputPath = "build/app.wasm";
   const oIndex = args.indexOf("-o") !== -1 ? args.indexOf("-o") : args.indexOf("--output");
-  if (oIndex !== -1 && args[oIndex + 1]) {
-    outputPath = args[oIndex + 1];
+  const outputArg = oIndex !== -1 ? args[oIndex + 1] : undefined;
+  if (outputArg !== undefined) {
+    outputPath = outputArg;
   }
 
   const parsed = path.parse(entry);
