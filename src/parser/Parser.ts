@@ -133,12 +133,24 @@ export class Parser {
     this.registerInfix("Ampersand", this.parseInfixExpression.bind(this));
     this.registerInfix("Pipe", this.parseInfixExpression.bind(this));
     this.registerInfix("Caret", this.parseInfixExpression.bind(this));
+    this.registerInfix("LeftShift", this.parseInfixExpression.bind(this));
+    this.registerInfix("RightShift", this.parseInfixExpression.bind(this));
     this.registerInfix("Equals", this.parseInfixExpression.bind(this));
     this.registerInfix("NotEquals", this.parseInfixExpression.bind(this));
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
     this.registerInfix("GreaterThan", this.parseInfixExpression.bind(this));
     this.registerInfix("LParen", this.parseCallExpression.bind(this));
     this.registerInfix("Assign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("AddAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("MinusAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("MulAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("DivAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("ModuloAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("BitwiseOrAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("BitwiseAndAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("BitwiseXorAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("LeftShiftAssign", this.parseAssignmentExpression.bind(this));
+    this.registerInfix("RightShiftAssign", this.parseAssignmentExpression.bind(this));
     this.registerInfix("Period", this.parseInfixExpression.bind(this));
     this.registerInfix("LBracket", this.parseIndexExpression.bind(this));
 
@@ -747,12 +759,14 @@ export class Parser {
   }
 
   private parseAssignmentExpression(left: ASTExpression): ASTExpression | null {
-    const exprToken = this.tokenizer.nextToken();
+    const exprToken = this.tokenizer.curToken();
+    const op = exprToken.literal.toString();
+    this.tokenizer.nextToken();
     const valueExpr = this.parseExpression(LOWEST);
     if (!valueExpr) {
       return null;
     }
-    return new AssignmentExpression(exprToken, left, valueExpr);
+    return new AssignmentExpression(exprToken, left, valueExpr, op);
   }
 
   private parseIndexExpression(left: ASTExpression): ASTExpression | null {

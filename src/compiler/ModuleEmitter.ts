@@ -171,10 +171,26 @@ export class ModuleEmitter {
       return lt === "f32" || rt === "f32" ? "f32" : "i32";
     }
     if (expr instanceof PrefixExpression) {
-      throw new Error(`[get expression type] prefix expression not implemented`);
+      if (!expr.right) {
+        throw new Error(`[get expression type] prefix expression missing rhs`);
+      }
+      if (expr.operator === "!") {
+        return "bool";
+      }
+      if (expr.operator === "~") {
+        return "i32";
+      }
+      if (expr.operator === "-") {
+        const t = this.getExprType(expr.right);
+        return t === "f32" ? "f32" : "i32";
+      }
+      return "i32";
     }
     if (expr instanceof PostfixExpression) {
-      throw new Error(`[get expression type] postfix expression not implemented`);
+      if (!expr.left) {
+        throw new Error(`[get expression type] postfix expression missing lhs`);
+      }
+      return this.getExprType(expr.left);
     }
     if (expr instanceof CallExpression) {
       const internal = this.mod.functions[expr.func];

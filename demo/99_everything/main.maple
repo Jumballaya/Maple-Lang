@@ -14,6 +14,7 @@ export fn _start(seed: i32): i32 {
   let nums: i32[] = [10, 20, 30, 40];
   let idx: i32 = 0;
   let total: i32 = add(base.left, base.right);
+  let tweak: i32 = seed % 3;
 
   if (seed > 0) {
     total = total + nums[idx + 2];
@@ -32,5 +33,17 @@ export fn _start(seed: i32): i32 {
     }
   }
 
-  return total;
+  tweak <<= 1;
+  tweak |= 1;
+  total += tweak;
+
+  idx++;
+  total = total + idx--;
+
+  let flipped: i32 = ~tweak;
+  if (!(seed == 0)) {
+    total = total + (seed >> 1);
+  }
+
+  return total + flipped + (-tweak);
 }

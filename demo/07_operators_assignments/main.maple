@@ -1,0 +1,36 @@
+export fn _start(seed: i32): i32 {
+  let x: i32 = seed;
+  let y: i32 = 6;
+  let f: f32 = 1.25;
+  let b: i32 = 1;
+
+  x += 2;
+  x -= 1;
+  x *= 3;
+  x /= 2;
+  x %= 5;
+  x |= 4;
+  x &= 7;
+  x ^= 1;
+  x <<= 2;
+  x >>= 1;
+
+  let eq: i32 = x == y;
+  let ne: i32 = x != y;
+  let logic: i32 = (b && eq) || ne;
+  let bits: i32 = (x & y) | (x ^ y);
+  let shifted: i32 = (bits << 1) >> 1;
+
+  let post: i32 = x++;
+  post = post + x--;
+
+  let neg_i32: i32 = -x;
+  f = -f;
+  let inv: i32 = ~y;
+
+  if (!logic) {
+    x = x + 1;
+  }
+
+  return x + eq + ne + shifted + post + neg_i32 + inv;
+}

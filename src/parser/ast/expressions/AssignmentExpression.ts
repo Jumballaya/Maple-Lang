@@ -6,11 +6,18 @@ export class AssignmentExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public left: ASTExpression;
+  public operator: string;
   public value: ASTExpression | null = null;
 
-  constructor(token: Token, left: ASTExpression, value: ASTExpression | null = null) {
+  constructor(
+    token: Token,
+    left: ASTExpression,
+    value: ASTExpression | null = null,
+    operator = "=",
+  ) {
     this.token = token;
     this.left = left;
+    this.operator = operator;
     this.value = value;
   }
 
@@ -19,7 +26,7 @@ export class AssignmentExpression implements ASTExpression {
   }
 
   public toString(): string {
-    const { left, value } = this;
-    return `${left.toString()} = ${value?.toString() ?? ""}`;
+    const { left, value, operator } = this;
+    return `${left.toString()} ${operator} ${value?.toString() ?? ""}`;
   }
 }

@@ -439,6 +439,42 @@ describe("Parser: Control Flow", () => {
     assert(returnStmt.returnValue.tokenLiteral() === "x");
   });
 
+  test("can parse compound assignment operators", () => {
+    const p = new Parser(`fn test_compound_assign(x: i32): i32 {
+      x += 2;
+      x -= 1;
+      x *= 3;
+      x /= 2;
+      x %= 5;
+      x |= 4;
+      x &= 7;
+      x ^= 1;
+      x <<= 2;
+      x >>= 1;
+      return x;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const funcStmt = ast.statements[0];
+    if (
+      !assertFunctionSignature(funcStmt, "test_compound_assign", [["x", "i32"]], "i32", 11, false)
+    ) {
+      return;
+    }
+
+    const expectedOperators = ["+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "<<=", ">>="];
+    for (let i = 0; i < expectedOperators.length; i = i + 1) {
+      const stmt = funcStmt.fnExpr.body.statements[i];
+      assert(stmt instanceof ExpressionStatement);
+      assert(stmt.expression instanceof AssignmentExpression);
+      assert(stmt.expression.left instanceof Identifier);
+      assert(stmt.expression.left.tokenLiteral() === "x");
+      assert(stmt.expression.operator === expectedOperators[i]);
+      assert(stmt.expression.value instanceof IntegerLiteralExpression);
+    }
+  });
+
   test("can parse if statement - no else", () => {
     const p = new Parser(`fn test_if_1(n: i32): i32 {
       let x: i32 = 0;
@@ -1685,6 +1721,54 @@ describe("Parser: Operators", () => {
       assert(left.value === 44);
       assert(operator === "^");
       assert(right.value === 37);
+    });
+
+    test("infix left shift: literal << literal", () => {
+      const p = new Parser(`fn infix_shift_left(): i32 {
+        return 44 << 2;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (!assertFunctionSignature(funcStmt, "infix_shift_left", [], "i32", 1, false)) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(left.value === 44);
+      assert(operator === "<<");
+      assert(right.value === 2);
+    });
+
+    test("infix right shift: literal >> literal", () => {
+      const p = new Parser(`fn infix_shift_right(): i32 {
+        return 44 >> 2;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      assert(ast.statements.length === 1);
+      const funcStmt = ast.statements[0];
+      if (!assertFunctionSignature(funcStmt, "infix_shift_right", [], "i32", 1, false)) {
+        return;
+      }
+
+      const infixStmt = funcStmt.fnExpr.body.statements[0];
+      assert(infixStmt instanceof ReturnStatement);
+      const infixExpr = infixStmt.returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      const { left, right, operator } = infixExpr;
+      assert(left instanceof IntegerLiteralExpression);
+      assert(right instanceof IntegerLiteralExpression);
+      assert(left.value === 44);
+      assert(operator === ">>");
+      assert(right.value === 2);
     });
   });
 

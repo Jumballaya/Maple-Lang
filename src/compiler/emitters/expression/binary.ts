@@ -31,6 +31,8 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
   const [numType] = emitter.resolveBinaryOpTypes(expr.left, expr.right);
   const l = emitOperand(expr.left, numType, emitter);
   const r = emitOperand(expr.right, numType, emitter);
+  const li32 = emitOperand(expr.left, "i32", emitter);
+  const ri32 = emitOperand(expr.right, "i32", emitter);
 
   switch (expr.operator) {
     case "+": {
@@ -45,6 +47,17 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
     case "/": {
       const op = numType === "f32" ? "div" : "div_s";
       return `(${numType}.${op} ${l} ${r})`;
+    }
+    case "%": {
+      return `(i32.rem_s ${li32} ${ri32})`;
+    }
+    case "==": {
+      const op = numType === "f32" ? "f32.eq" : "i32.eq";
+      return `(${op} ${l} ${r})`;
+    }
+    case "!=": {
+      const op = numType === "f32" ? "f32.ne" : "i32.ne";
+      return `(${op} ${l} ${r})`;
     }
     case ">": {
       const op = i32CompareOp(">", numType !== "f32");
@@ -61,6 +74,27 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
     case "<=": {
       const op = i32CompareOp("<=", numType !== "f32");
       return `(${op} ${l} ${r})`;
+    }
+    case "&&": {
+      return `(i32.and ${li32} ${ri32})`;
+    }
+    case "||": {
+      return `(i32.or ${li32} ${ri32})`;
+    }
+    case "&": {
+      return `(i32.and ${li32} ${ri32})`;
+    }
+    case "|": {
+      return `(i32.or ${li32} ${ri32})`;
+    }
+    case "^": {
+      return `(i32.xor ${li32} ${ri32})`;
+    }
+    case "<<": {
+      return `(i32.shl ${li32} ${ri32})`;
+    }
+    case ">>": {
+      return `(i32.shr_s ${li32} ${ri32})`;
     }
     default: {
       throw new Error("not implemented");

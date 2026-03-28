@@ -10,6 +10,7 @@ import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression
 import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
+import { PostfixExpression } from "../../../parser/ast/expressions/PostfixExpression.js";
 import { PrefixExpression } from "../../../parser/ast/expressions/PrefixExpression.js";
 import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral.js";
 import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression.js";
@@ -23,6 +24,61 @@ import { emitGet, emitNumberGet } from "./core.js";
 import { emitFunctionCall } from "./function-call.js";
 import { emitIndexExpression } from "./index.js";
 import { getPointerMemberData } from "./member.js";
+
+function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitter): string {
+  const right = expression.right;
+  if (!right) {
+    throw new Error("[expression emitter] prefix expression missing rhs");
+  }
+
+  const rhs = emitExpression(right, emitter);
+  switch (expression.operator) {
+    case "!": {
+      return `(i32.eqz ${rhs})`;
+    }
+    case "-": {
+      const t = emitter.getExprType(right);
+      if (t === "f32") {
+        return `(f32.neg ${rhs})`;
+      }
+      return `(i32.sub (i32.const 0) ${rhs})`;
+    }
+    case "~": {
+      return `(i32.xor ${rhs} (i32.const -1))`;
+    }
+    default: {
+      throw new Error(`[expression emitter] unsupported prefix operator "${expression.operator}"`);
+    }
+  }
+}
+
+function emitPostfixExpression(expression: PostfixExpression, emitter: ModuleEmitter): string {
+  if (!(expression.left instanceof Identifier)) {
+    throw new Error("[expression emitter] postfix only supports identifiers");
+  }
+  if (expression.operator !== "++" && expression.operator !== "--") {
+    throw new Error(`[expression emitter] unsupported postfix operator "${expression.operator}"`);
+  }
+
+  const name = expression.left.tokenLiteral();
+  const v = emitter.getVar(name);
+  if (!v) {
+    throw new Error(`variable not found: "${name}"`);
+  }
+  if (v.scope === "memory") {
+    throw new Error("[expression emitter] postfix on memory variables not implemented");
+  }
+
+  const getVal = emitGet(name, emitter);
+  const delta = expression.operator === "++" ? 1 : -1;
+  const updated = `(i32.add ${getVal} (i32.const ${delta}))`;
+  const setOp = v.scope === "global" ? "global.set" : "local.set";
+
+  if (expression.operator === "++") {
+    return `(block (result i32) (${setOp} $${name} ${updated}) (i32.sub ${emitGet(name, emitter)} (i32.const 1)))`;
+  }
+  return `(block (result i32) (${setOp} $${name} ${updated}) (i32.add ${emitGet(name, emitter)} (i32.const 1)))`;
+}
 
 export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter): string {
   const writer = new Writer();
@@ -79,7 +135,10 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
       writer.append(emitGet(identData.name, emitter));
     }
   } else if (expression instanceof PrefixExpression) {
-    writer.append(`(i32.eqz ${emitExpression(expression.right!, emitter)})`);
+    writer.append(emitPrefixExpression(expression, emitter));
+    //
+  } else if (expression instanceof PostfixExpression) {
+    writer.append(emitPostfixExpression(expression, emitter));
     //
   } else {
     throw new Error(`[expression emitter] "${expression.constructor}" emit not implemented`);

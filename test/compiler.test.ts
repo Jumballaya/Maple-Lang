@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { compiler } from "../src/compiler/compiler";
+import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
 import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
+import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
 
 function compile(src: string) {
@@ -16,16 +18,6 @@ function compile(src: string) {
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
   return { ast, meta, mod, wat };
-}
-
-function compileThrows(src: string, pattern?: RegExp): void {
-  if (pattern) {
-    assert.throws(() => compile(src), {
-      message: pattern,
-    });
-    return;
-  }
-  assert.throws(() => compile(src));
 }
 
 describe("Emission: Functions", () => {
@@ -201,6 +193,11 @@ describe("Emission: Arithmetic", () => {
     assert(wat.includes("f32.mul"));
     assert(wat.includes("f32.div"));
   });
+
+  test("i32 % emits i32.rem_s", () => {
+    const { wat } = compile("fn test(a: i32, b: i32): i32 { return a % b; }");
+    assert(wat.includes("i32.rem_s"));
+  });
 });
 
 describe("Emission: Comparisons", () => {
@@ -221,35 +218,43 @@ describe("Emission: Comparisons", () => {
     assert(wat.includes("i32.gt_u"));
     assert(wat.includes("i32.lt_u"));
   });
+
+  test("== and != emit eq/ne opcodes", () => {
+    const { wat } = compile(`
+      fn eqi(a: i32, b: i32): i32 { return a == b; }
+      fn nei(a: i32, b: i32): i32 { return a != b; }
+      fn eqf(a: f32, b: f32): i32 { return a == b; }
+      fn nef(a: f32, b: f32): i32 { return a != b; }
+    `);
+    assert(wat.includes("i32.eq"));
+    assert(wat.includes("i32.ne"));
+    assert(wat.includes("f32.eq"));
+    assert(wat.includes("f32.ne"));
+  });
 });
 
-describe("Emission: Unimplemented Ops", () => {
-  test("modulo throws not implemented", () => {
-    compileThrows("fn test(): i32 { return 10 % 3; }", /not implemented/);
+describe("Emission: Bitwise / Logical / Shift Ops", () => {
+  test("&& and || emit i32.and / i32.or", () => {
+    const { wat } = compile(`
+      fn test(a: i32, b: i32): i32 {
+        return (a && b) || (a && 1);
+      }
+    `);
+    assert(wat.includes("i32.and"));
+    assert(wat.includes("i32.or"));
   });
 
-  test("equals throws not implemented", () => {
-    compileThrows("fn test(): i32 { return 1 == 1; }", /not implemented/);
+  test("& | ^ emit bitwise opcodes", () => {
+    const { wat } = compile("fn test(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }");
+    assert(wat.includes("i32.and"));
+    assert(wat.includes("i32.or"));
+    assert(wat.includes("i32.xor"));
   });
 
-  test("not equals throws not implemented", () => {
-    compileThrows("fn test(): i32 { return 1 != 2; }", /not implemented/);
-  });
-
-  test("logical and/or throw not implemented", () => {
-    compileThrows("fn test(): i32 { return (1 < 2) && (2 < 3); }", /not implemented/);
-    compileThrows("fn test(): i32 { return (1 < 2) || (2 < 3); }", /not implemented/);
-  });
-
-  test("bitwise ops throw not implemented", () => {
-    compileThrows("fn test(): i32 { return 1 & 2; }", /not implemented/);
-    compileThrows("fn test(): i32 { return 1 | 2; }", /not implemented/);
-    compileThrows("fn test(): i32 { return 1 ^ 2; }", /not implemented/);
-  });
-
-  test("postfix increment/decrement throw not implemented", () => {
-    compileThrows("fn test(): i32 { let x: i32 = 0; x++; return x; }", /emit not implemented/);
-    compileThrows("fn test(): i32 { let x: i32 = 0; x--; return x; }", /emit not implemented/);
+  test("<< and >> emit shift opcodes", () => {
+    const { wat } = compile("fn test(a: i32): i32 { return (a << 1) >> 1; }");
+    assert(wat.includes("i32.shl"));
+    assert(wat.includes("i32.shr_s"));
   });
 });
 
@@ -259,14 +264,65 @@ describe("Emission: Prefix/Postfix", () => {
     assert(wat.includes("i32.eqz"));
   });
 
-  test("prefix minus currently emits i32.eqz", () => {
+  test("prefix minus emits arithmetic negation", () => {
     const { wat } = compile("fn test(x: i32): i32 { return -x; }");
-    assert(wat.includes("i32.eqz"));
+    assert(wat.includes("(i32.sub (i32.const 0)"));
   });
 
-  test("bitwise not currently emits i32.eqz", () => {
+  test("prefix minus emits f32.neg for floats", () => {
+    const { wat } = compile("fn test(x: f32): f32 { return -x; }");
+    assert(wat.includes("f32.neg"));
+  });
+
+  test("bitwise not emits xor -1", () => {
     const { wat } = compile("fn test(x: i32): i32 { return ~x; }");
-    assert(wat.includes("i32.eqz"));
+    assert(wat.includes("i32.xor"));
+    assert(wat.includes("(i32.const -1)"));
+  });
+
+  test("postfix increment/decrement emit updates", () => {
+    const { wat } = compile(`
+      fn test(): i32 {
+        let x: i32 = 3;
+        x++;
+        x--;
+        return x;
+      }
+    `);
+    assert(wat.includes("local.set $x"));
+    assert(wat.includes("i32.add"));
+    assert(wat.includes("i32.sub"));
+  });
+});
+
+describe("Emission: Compound Assignments", () => {
+  test("compound assigns are desugared through binary ops", () => {
+    const { wat } = compile(`
+      fn test(): i32 {
+        let x: i32 = 10;
+        x += 2;
+        x -= 1;
+        x *= 3;
+        x /= 2;
+        x %= 5;
+        x |= 4;
+        x &= 7;
+        x ^= 1;
+        x <<= 2;
+        x >>= 1;
+        return x;
+      }
+    `);
+    assert(wat.includes("i32.add"));
+    assert(wat.includes("i32.sub"));
+    assert(wat.includes("i32.mul"));
+    assert(wat.includes("i32.div_s"));
+    assert(wat.includes("i32.rem_s"));
+    assert(wat.includes("i32.or"));
+    assert(wat.includes("i32.and"));
+    assert(wat.includes("i32.xor"));
+    assert(wat.includes("i32.shl"));
+    assert(wat.includes("i32.shr_s"));
   });
 });
 
@@ -290,8 +346,13 @@ describe("Emission: Member Access", () => {
       end: 0,
       start: 0,
     };
-    const nonIdent = new InfixExpression(token, "dummy" as any, "+", "dummy" as any);
-    const memberExpr = new MemberExpression(token, nonIdent as any, "field");
+    const nonIdent = new InfixExpression(
+      token,
+      "dummy" as unknown as ASTExpression,
+      "+",
+      "dummy" as unknown as ASTExpression,
+    );
+    const memberExpr = new MemberExpression(token, nonIdent as unknown as ASTExpression, "field");
     const meta = extractModuleMeta(new Parser("").parse("test"));
     const emitter = new ModuleEmitter(meta);
 
@@ -394,7 +455,7 @@ describe("Module Metadata", () => {
     meta.imports.foo.info = {
       kind: "func",
       signature: "i_i",
-    } as any;
+    } as ExportMeta;
     const wat = emitModule(ast, meta).buildWat();
     assert(wat.includes('(import "mod" "foo" (func $foo (type $i_i_type)))'));
     assert(wat.includes("(type $i_i_type (func (param i32) (result i32)))"));

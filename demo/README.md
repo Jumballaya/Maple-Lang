@@ -8,6 +8,7 @@ Each folder contains a `main.maple` entrypoint showing one major language area.
 - `04_structs_members`: struct declarations, struct literals, and member access
 - `05_arrays_indexing`: array literals and index expressions
 - `06_stdlib_memory`: stdlib import usage (`malloc`, `free`)
+- `07_operators_assignments`: binary/prefix/postfix operators and compound assignments
 - `99_everything`: combined example using most implemented compiler features
 
 ## Compile Example
