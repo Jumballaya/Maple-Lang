@@ -1,0 +1,10 @@
+export fn _start(seed: i32): i32 {
+  let arr: i32[] = [10, 20, 30, 40];
+  let i: i32 = seed;
+
+  if (i < 0) {
+    i = 0;
+  }
+
+  return arr[i + 1];
+}

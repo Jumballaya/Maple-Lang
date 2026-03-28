@@ -1,0 +1,36 @@
+import add from "./math.maple"
+
+struct Pair {
+  left: i32,
+  right: i32,
+}
+
+let base: Pair = {
+  left = 2,
+  right = 3,
+};
+
+export fn _start(seed: i32): i32 {
+  let nums: i32[] = [10, 20, 30, 40];
+  let idx: i32 = 0;
+  let total: i32 = add(base.left, base.right);
+
+  if (seed > 0) {
+    total = total + nums[idx + 2];
+  } else {
+    total = total + nums[0];
+  }
+
+  for (let i: i32 = 0; i < 3; i = i + 1) {
+    total = total + i;
+  }
+
+  while (total > 50) {
+    total = total - 5;
+    if (total < 40) {
+      break;
+    }
+  }
+
+  return total;
+}

@@ -1,0 +1,20 @@
+export fn _start(limit: i32): i32 {
+  let total: i32 = 0;
+
+  for (let i: i32 = 0; i < limit; i = i + 1) {
+    if (i > 6) {
+      break;
+    }
+    total = total + i;
+  }
+
+  while (total < 20) {
+    total = total + 2;
+  }
+
+  if (total > 25) {
+    return total - 5;
+  } else {
+    return total + 5;
+  }
+}

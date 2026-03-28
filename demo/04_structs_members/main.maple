@@ -1,0 +1,15 @@
+struct Point {
+  x: i32,
+  y: i32,
+}
+
+let p: Point = {
+  x = 9,
+  y = 4,
+};
+
+export fn _start(): i32 {
+  let x: i32 = p.x;
+  let y: i32 = p.y;
+  return x + y;
+}

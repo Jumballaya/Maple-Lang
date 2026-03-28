@@ -1,4 +1,4 @@
-import add from "./test.maple"
+import add from "./math.maple"
 
 export fn _start(a: i32, b: i32): i32 {
   return add(a, b);
