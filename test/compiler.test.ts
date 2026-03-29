@@ -63,6 +63,16 @@ describe("Emission: Functions", () => {
     assert(/\(call \$callee\s*\)/.test(wat));
   });
 
+  test("function call with arguments emits args before call", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn caller(): i32 { return add(3, 4); }
+    `);
+    assert(wat.includes("(i32.const 3)"));
+    assert(wat.includes("(i32.const 4)"));
+    assert(wat.includes("(call $add"));
+  });
+
   test("param count is not duplicated", () => {
     const { wat } = compile("export fn quad(a: i32, b: i32, c: f32, d: i32): i32 { return a; }");
     const params = wat.match(/\(param \$/g);
@@ -88,6 +98,11 @@ describe("Emission: Variables", () => {
     const { wat } = compile("fn test(): void { let x: bool = true; }");
     assert(wat.includes("(local $x i32)"));
     assert(wat.includes("(local.set $x (i32.const 1))"));
+  });
+
+  test("global f32 let emits mutable f32 global", () => {
+    const { wat } = compile("let rate: f32 = 1.5;");
+    assert(wat.includes("(global $rate (mut f32) (f32.const 1.5))"));
   });
 
   test("global i32 let emits mutable global", () => {
@@ -210,13 +225,31 @@ describe("Emission: Comparisons", () => {
     assert(wat.includes("i32.lt_s"));
   });
 
-  test("f32 > and < currently lower to unsigned i32 comparisons", () => {
+  test("f32 > and < emit f32 comparison opcodes", () => {
     const { wat } = compile(`
       fn gt(a: f32, b: f32): i32 { return a > b; }
       fn lt(a: f32, b: f32): i32 { return a < b; }
     `);
-    assert(wat.includes("i32.gt_u"));
-    assert(wat.includes("i32.lt_u"));
+    assert(wat.includes("f32.gt"));
+    assert(wat.includes("f32.lt"));
+  });
+
+  test("i32 >= and <= emit signed ge/le opcodes", () => {
+    const { wat } = compile(`
+      fn gte(a: i32, b: i32): i32 { return a >= b; }
+      fn lte(a: i32, b: i32): i32 { return a <= b; }
+    `);
+    assert(wat.includes("i32.ge_s"));
+    assert(wat.includes("i32.le_s"));
+  });
+
+  test("f32 >= and <= emit f32 ge/le opcodes", () => {
+    const { wat } = compile(`
+      fn gte(a: f32, b: f32): i32 { return a >= b; }
+      fn lte(a: f32, b: f32): i32 { return a <= b; }
+    `);
+    assert(wat.includes("f32.ge"));
+    assert(wat.includes("f32.le"));
   });
 
   test("== and != emit eq/ne opcodes", () => {

@@ -60,20 +60,20 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
       return `(${op} ${l} ${r})`;
     }
     case ">": {
-      const op = i32CompareOp(">", numType !== "f32");
-      return `(${op} ${l} ${r})`;
+      if (numType === "f32") return `(f32.gt ${l} ${r})`;
+      return `(${i32CompareOp(">", true)} ${l} ${r})`;
     }
     case "<": {
-      const op = i32CompareOp("<", numType !== "f32");
-      return `(${op} ${l} ${r})`;
+      if (numType === "f32") return `(f32.lt ${l} ${r})`;
+      return `(${i32CompareOp("<", true)} ${l} ${r})`;
     }
     case ">=": {
-      const op = i32CompareOp(">=", numType !== "f32");
-      return `(${op} ${l} ${r})`;
+      if (numType === "f32") return `(f32.ge ${l} ${r})`;
+      return `(${i32CompareOp(">=", true)} ${l} ${r})`;
     }
     case "<=": {
-      const op = i32CompareOp("<=", numType !== "f32");
-      return `(${op} ${l} ${r})`;
+      if (numType === "f32") return `(f32.le ${l} ${r})`;
+      return `(${i32CompareOp("<=", true)} ${l} ${r})`;
     }
     case "&&": {
       return `(i32.and ${li32} ${ri32})`;
