@@ -1,16 +1,16 @@
-import type { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression.js";
-import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
-import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression.js";
-import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
-import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
-import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { Writer } from "../../writer/Writer.js";
-import { baseScalar, sizeofType, wasmStoreOp } from "../emit.types.js";
-import { emitGet, emitSet } from "./core.js";
-import { emitExpression } from "./expression.js";
-import { getPointerMemberData } from "./member.js";
+import type { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression";
+import { Identifier } from "../../../parser/ast/expressions/Identifier";
+import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
+import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
+import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { Writer } from "../../writer/Writer";
+import { baseScalar, sizeofType, wasmStoreOp } from "../emit.types";
+import { emitGet, emitSet } from "./core";
+import { emitExpression } from "./expression";
+import { getPointerMemberData } from "./member";
 
 const compoundOps: Record<string, string> = {
   "+=": "+",

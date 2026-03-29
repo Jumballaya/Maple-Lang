@@ -1,5 +1,5 @@
-import { Writer } from "./Writer.js";
-import type { IWriter } from "./writer.type.js";
+import { Writer } from "./Writer";
+import type { IWriter } from "./writer.type";
 
 export class FuncWriter extends Writer implements IWriter {
   private onEnd?: undefined | ((wat: string) => void);

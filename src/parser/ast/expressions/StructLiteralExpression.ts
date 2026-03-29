@@ -1,6 +1,6 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import type { Token } from "../../../lexer/token.types";
-import type { StructMember } from "../statements/StructStatement";
+import type { StructMember } from "../../../shared/types";
 import type { ASTExpression } from "../types/ast.type";
 
 export type StructTable = {

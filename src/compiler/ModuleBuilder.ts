@@ -1,4 +1,4 @@
-import { alignup } from "./emitters/emit.data.js";
+import { alignup } from "./emitters/emit.data";
 import type {
   ExportMeta,
   FunctionMeta,
@@ -7,7 +7,7 @@ import type {
   ModuleMeta,
   StructData,
   VariableMeta,
-} from "./emitters/emitter.types.js";
+} from "./emitters/emitter.types";
 
 export class ModuleBuilder {
   public readonly name: string;

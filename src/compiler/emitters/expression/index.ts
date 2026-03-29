@@ -1,10 +1,10 @@
-import type { IndexExpression } from "../../../parser/ast/expressions/IndexExpression.js";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { Writer } from "../../writer/Writer.js";
-import { baseScalar, sizeofType, wasmLoadOp } from "../emit.types.js";
-import { emitGet } from "./core.js";
-import { emitExpression } from "./expression.js";
+import type { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { Writer } from "../../writer/Writer";
+import { baseScalar, sizeofType, wasmLoadOp } from "../emit.types";
+import { emitGet } from "./core";
+import { emitExpression } from "./expression";
 
 export function emitIndexExpression(expression: IndexExpression, emitter: ModuleEmitter): string {
   const writer = new Writer();

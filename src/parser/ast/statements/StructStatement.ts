@@ -1,13 +1,9 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import type { Token } from "../../../lexer/token.types";
+import type { StructMember } from "../../../shared/types";
 import type { ASTStatement } from "../types/ast.type";
 
-export type StructMember = {
-  name: string;
-  type: string;
-  offset: number;
-  size: number;
-};
+export type { StructMember };
 
 export class StructStatement implements ASTStatement {
   public readonly type = "statement";

@@ -1,7 +1,7 @@
-import type { ForStatement } from "../../../parser/ast/statements/ForStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { emitExpression } from "../expression/expression.js";
-import { emitStatement } from "./statement.js";
+import type { ForStatement } from "../../../parser/ast/statements/ForStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { emitExpression } from "../expression/expression";
+import { emitStatement } from "./statement";
 
 export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   const br = emitter.makeLabel("break");

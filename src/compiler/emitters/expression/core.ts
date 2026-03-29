@@ -1,8 +1,8 @@
-import type { ASTExpression } from "../../../parser/ast/types/ast.type.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { valueTypeToWasm, wasmLoadOp, wasmStoreOp } from "../emit.types.js";
-import { addrOf } from "../emitter.utils.js";
-import { emitExpression } from "./expression.js";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { valueTypeToWasm, wasmLoadOp, wasmStoreOp } from "../emit.types";
+import { addrOf } from "../emitter.utils";
+import { emitExpression } from "./expression";
 
 export function emitGet(ident: string, emitter: ModuleEmitter): string {
   const v = emitter.getVar(ident);

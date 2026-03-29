@@ -1,3 +1,5 @@
+export { sizeofType } from "../../shared/types";
+
 export const cmpOps = new Set(["==", "!=", "<", "<=", ">", ">="]);
 
 // removes '*' and '[]' from types
@@ -12,14 +14,6 @@ export function valueTypeToWasm(t: string): "i32" | "f32" {
   const base = baseScalar(t);
   if (base === "f32") return "f32";
   return "i32"; // i8/u8/i16/u16/i32/u32/bool/ptr/arrays => i32 stack lane
-}
-
-export function sizeofType(t: string): number {
-  const b = baseScalar(t);
-  if (b === "i8" || b === "u8") return 1;
-  if (b === "i16" || b === "u16") return 2;
-  if (b === "i32" || b === "u32" || b === "f32") return 4;
-  return 4;
 }
 
 export function wasmLoadOp(t: string): string {

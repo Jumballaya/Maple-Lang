@@ -1,28 +1,28 @@
-import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression.js";
-import { CallExpression } from "../parser/ast/expressions/CallExpression.js";
-import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression.js";
-import { Identifier } from "../parser/ast/expressions/Identifier.js";
-import { IndexExpression } from "../parser/ast/expressions/IndexExpression.js";
-import { InfixExpression } from "../parser/ast/expressions/InfixExpression.js";
-import { IntegerLiteralExpression } from "../parser/ast/expressions/IntegerLiteral.js";
-import { MemberExpression } from "../parser/ast/expressions/MemberExpression.js";
-import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression.js";
-import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression.js";
-import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression.js";
-import type { ASTExpression } from "../parser/ast/types/ast.type.js";
-import { baseScalar, cmpOps } from "./emitters/emit.types.js";
+import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression";
+import { CallExpression } from "../parser/ast/expressions/CallExpression";
+import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression";
+import { Identifier } from "../parser/ast/expressions/Identifier";
+import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
+import { InfixExpression } from "../parser/ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "../parser/ast/expressions/IntegerLiteral";
+import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
+import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
+import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
+import type { ASTExpression } from "../parser/ast/types/ast.type";
+import { baseScalar, cmpOps } from "./emitters/emit.types";
 import type {
   FunctionContext,
   FunctionMeta,
   ModuleMeta,
   StructData,
   VariableMeta,
-} from "./emitters/emitter.types.js";
-import { makeLabel } from "./emitters/emitter.utils.js";
-import { MapleModule } from "./MapleModule.js";
-import { FuncWriter } from "./writer/FuncWriter.js";
-import { Writer } from "./writer/Writer.js";
-import type { IWriter } from "./writer/writer.type.js";
+} from "./emitters/emitter.types";
+import { makeLabel } from "./emitters/emitter.utils";
+import { MapleModule } from "./MapleModule";
+import { FuncWriter } from "./writer/FuncWriter";
+import { Writer } from "./writer/Writer";
+import type { IWriter } from "./writer/writer.type";
 
 export class ModuleEmitter {
   private writers: IWriter[] = [new Writer()];

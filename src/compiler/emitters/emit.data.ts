@@ -1,22 +1,22 @@
-import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
-import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression.js";
-import { BooleanLiteralExpression } from "../../parser/ast/expressions/BooleanLiteralExpression.js";
-import { CallExpression } from "../../parser/ast/expressions/CallExpression.js";
-import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression.js";
-import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral.js";
-import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
-import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
-import { BlockStatement } from "../../parser/ast/statements/BlockStatement.js";
-import { ExpressionStatement } from "../../parser/ast/statements/ExpressionStatement.js";
-import { ForStatement } from "../../parser/ast/statements/ForStatement.js";
-import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
-import { IfStatement } from "../../parser/ast/statements/IfStatement.js";
-import { LetStatement } from "../../parser/ast/statements/LetStatement.js";
-import { WhileStatement } from "../../parser/ast/statements/WhileStatement.js";
-import type { ASTStatement } from "../../parser/ast/types/ast.type.js";
-import type { ModuleBuilder } from "../ModuleBuilder.js";
-import type { ModuleEmitter } from "../ModuleEmitter.js";
-import { baseScalar, sizeofType } from "./emit.types.js";
+import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression";
+import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression";
+import { BooleanLiteralExpression } from "../../parser/ast/expressions/BooleanLiteralExpression";
+import { CallExpression } from "../../parser/ast/expressions/CallExpression";
+import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression";
+import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral";
+import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral";
+import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression";
+import { BlockStatement } from "../../parser/ast/statements/BlockStatement";
+import { ExpressionStatement } from "../../parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../../parser/ast/statements/ForStatement";
+import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement";
+import { IfStatement } from "../../parser/ast/statements/IfStatement";
+import { LetStatement } from "../../parser/ast/statements/LetStatement";
+import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
+import type { ASTStatement } from "../../parser/ast/types/ast.type";
+import type { ModuleBuilder } from "../ModuleBuilder";
+import type { ModuleEmitter } from "../ModuleEmitter";
+import { baseScalar, sizeofType } from "./emit.types";
 
 export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
   if (stmt instanceof BlockStatement) {

@@ -1,8 +1,8 @@
-import type { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { makeLabel } from "../emitter.utils.js";
-import { emitExpression } from "../expression/expression.js";
-import { emitStatement } from "./statement.js";
+import type { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { makeLabel } from "../emitter.utils";
+import { emitExpression } from "../expression/expression";
+import { emitStatement } from "./statement";
 
 export function emitSwitchStatement(stmt: SwitchStatement, emitter: ModuleEmitter): void {
   //

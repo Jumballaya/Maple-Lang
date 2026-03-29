@@ -1,12 +1,12 @@
 import { exec } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ASTProgram } from "../parser/ast/ASTProgram.js";
-import { Parser } from "../parser/Parser.js";
-import type { ModuleMeta } from "./emitters/emitter.types.js";
-import { emitModule, extractModuleMeta } from "./emitters/module.js";
-import type { MapleModule } from "./MapleModule.js";
-import { stdlib } from "./stdlib.js";
+import type { ASTProgram } from "../parser/ast/ASTProgram";
+import { Parser } from "../parser/Parser";
+import type { ModuleMeta } from "./emitters/emitter.types";
+import { emitModule, extractModuleMeta } from "./emitters/module";
+import type { MapleModule } from "./MapleModule";
+import { stdlib } from "./stdlib";
 
 //
 //    Next idea:

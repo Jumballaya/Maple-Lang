@@ -1,25 +1,26 @@
-import type { ASTProgram } from "../../parser/ast/ASTProgram.js";
-import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression.js";
-import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral.js";
-import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression.js";
-import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement.js";
-import { ImportStatement } from "../../parser/ast/statements/ImportStatement.js";
-import { LetStatement } from "../../parser/ast/statements/LetStatement.js";
-import { StructStatement } from "../../parser/ast/statements/StructStatement.js";
-import type { MapleModule } from "../MapleModule.js";
-import { ModuleBuilder } from "../ModuleBuilder.js";
-import { ModuleEmitter } from "../ModuleEmitter.js";
-import { extractGlobalData } from "./emit.data.js";
-import { valueTypeToWasm } from "./emit.types.js";
-import type { ModuleMeta } from "./emitter.types.js";
-import { emitNumberGet } from "./expression/core.js";
-import { emitExpression } from "./expression/expression.js";
+import type { ASTProgram } from "../../parser/ast/ASTProgram";
+import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression";
+import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral";
+import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression";
+import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement";
+import { ImportStatement } from "../../parser/ast/statements/ImportStatement";
+import { LetStatement } from "../../parser/ast/statements/LetStatement";
+import { StructStatement } from "../../parser/ast/statements/StructStatement";
+import type { MapleModule } from "../MapleModule";
+import { ModuleBuilder } from "../ModuleBuilder";
+import { ModuleEmitter } from "../ModuleEmitter";
+import { extractGlobalData } from "./emit.data";
+import { valueTypeToWasm } from "./emit.types";
+import type { ModuleMeta } from "./emitter.types";
+import { resetLabels } from "./emitter.utils";
+import { emitNumberGet } from "./expression/core";
+import { emitExpression } from "./expression/expression";
 import {
   emitFunction,
   emitFunctionSignature,
   extractFunctionSignature,
   generateFunctionSignature,
-} from "./statement/function.js";
+} from "./statement/function";
 
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const name = stmt.identifier.tokenLiteral();
@@ -135,6 +136,7 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
 }
 
 export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
+  resetLabels();
   const emitter = new ModuleEmitter(data);
   const ctx = emitter.ctx;
 

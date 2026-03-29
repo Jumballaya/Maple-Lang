@@ -1,9 +1,9 @@
-import type { Token } from "../../lexer/token.types.js";
-import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression.js";
-import { Identifier } from "../../parser/ast/expressions/Identifier.js";
-import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral.js";
-import type { ASTExpression } from "../../parser/ast/types/ast.type.js";
-import type { VariableMeta } from "./emitter.types.js";
+import type { Token } from "../../lexer/token.types";
+import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression";
+import { Identifier } from "../../parser/ast/expressions/Identifier";
+import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral";
+import type { ASTExpression } from "../../parser/ast/types/ast.type";
+import type { VariableMeta } from "./emitter.types";
 
 // @TODO: Eventually this information will get captured and not infered like this
 export function asExpr(x: string | number): ASTExpression {
@@ -43,6 +43,11 @@ export function addrOf(v: VariableMeta): string {
 }
 
 let n = 0;
+
+export function resetLabels(): void {
+  n = 0;
+}
+
 export function makeLabel(prefix: string) {
   return `$${prefix}_${n++}`;
 }

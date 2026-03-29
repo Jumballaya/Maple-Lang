@@ -1,23 +1,23 @@
-import { BlockStatement } from "../../../parser/ast/statements/BlockStatement.js";
-import { BreakStatement } from "../../../parser/ast/statements/BreakStatement.js";
-import { ContinueStatement } from "../../../parser/ast/statements/ContinueStatement.js";
-import { ExpressionStatement } from "../../../parser/ast/statements/ExpressionStatement.js";
-import { ForStatement } from "../../../parser/ast/statements/ForStatement.js";
-import { IfStatement } from "../../../parser/ast/statements/IfStatement.js";
-import { LetStatement } from "../../../parser/ast/statements/LetStatement.js";
-import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement.js";
-import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement.js";
-import { WhileStatement } from "../../../parser/ast/statements/WhileStatement.js";
-import type { ASTStatement } from "../../../parser/ast/types/ast.type.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { emitExpression } from "../expression/expression.js";
-import { emitBreakStatement } from "./break.js";
-import { emitContinueStatement } from "./continue.js";
-import { emitForStatement } from "./for.js";
-import { emitIfStatement } from "./if.js";
-import { emitLetStatement } from "./let.js";
-import { emitSwitchStatement } from "./switch.js";
-import { emitWhileStatement } from "./while.js";
+import { BlockStatement } from "../../../parser/ast/statements/BlockStatement";
+import { BreakStatement } from "../../../parser/ast/statements/BreakStatement";
+import { ContinueStatement } from "../../../parser/ast/statements/ContinueStatement";
+import { ExpressionStatement } from "../../../parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../../../parser/ast/statements/ForStatement";
+import { IfStatement } from "../../../parser/ast/statements/IfStatement";
+import { LetStatement } from "../../../parser/ast/statements/LetStatement";
+import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement";
+import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
+import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
+import type { ASTStatement } from "../../../parser/ast/types/ast.type";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { emitExpression } from "../expression/expression";
+import { emitBreakStatement } from "./break";
+import { emitContinueStatement } from "./continue";
+import { emitForStatement } from "./for";
+import { emitIfStatement } from "./if";
+import { emitLetStatement } from "./let";
+import { emitSwitchStatement } from "./switch";
+import { emitWhileStatement } from "./while";
 
 export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void {
   if (stmt instanceof BlockStatement) {

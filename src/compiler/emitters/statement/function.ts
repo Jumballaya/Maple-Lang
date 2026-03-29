@@ -1,8 +1,8 @@
-import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { extractLocals } from "../emit.data.js";
-import { valueTypeToWasm } from "../emit.types.js";
-import { emitStatement } from "./statement.js";
+import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { extractLocals } from "../emit.data";
+import { valueTypeToWasm } from "../emit.types";
+import { emitStatement } from "./statement";
 
 export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): void {
   const rType = fn.fnExpr.returnType ? valueTypeToWasm(fn.fnExpr.returnType) : "void";

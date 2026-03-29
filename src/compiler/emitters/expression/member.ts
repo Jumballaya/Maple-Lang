@@ -1,7 +1,7 @@
-import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
-import type { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
-import type { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
+import { Identifier } from "../../../parser/ast/expressions/Identifier";
+import type { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
+import type { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
+import type { ModuleEmitter } from "../../ModuleEmitter";
 
 export function getPointerMemberData(
   expr: PointerMemberExpression | MemberExpression,

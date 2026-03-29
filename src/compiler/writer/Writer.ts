@@ -1,4 +1,4 @@
-import type { IWriter } from "./writer.type.js";
+import type { IWriter } from "./writer.type";
 
 export class Writer implements IWriter {
   private lines: string[] = [];

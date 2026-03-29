@@ -1,8 +1,8 @@
-import type { IfStatement } from "../../../parser/ast/statements/IfStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { extractNeedsReturn } from "../analysis/flow.js";
-import { emitExpression } from "../expression/expression.js";
-import { emitStatement } from "./statement.js";
+import type { IfStatement } from "../../../parser/ast/statements/IfStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { extractNeedsReturn } from "../analysis/flow";
+import { emitExpression } from "../expression/expression";
+import { emitStatement } from "./statement";
 
 // if both branches return, than the if needs to be marked with a result
 // e.g. (if (result i32)

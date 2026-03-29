@@ -1,12 +1,12 @@
-import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression.js";
-import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression.js";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
-import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral.js";
-import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression.js";
-import type { LetStatement } from "../../../parser/ast/statements/LetStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { asExpr } from "../emitter.utils.js";
-import { emitSet } from "../expression/core.js";
+import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression";
+import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
+import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral";
+import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression";
+import type { LetStatement } from "../../../parser/ast/statements/LetStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { asExpr } from "../emitter.utils";
+import { emitSet } from "../expression/core";
 
 export function emitLetStatement(stmt: LetStatement, emitter: ModuleEmitter) {
   if (stmt.expression instanceof StructLiteralExpression) {

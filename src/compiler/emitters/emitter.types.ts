@@ -60,12 +60,9 @@ export type ModuleMeta = {
   dataPtr: number;
 };
 
-export type StructMember = {
-  name: string;
-  type: string;
-  offset: number;
-  size: number;
-};
+import type { StructMember } from "../../shared/types";
+
+export type { StructMember };
 
 export type StructData = {
   name: string;

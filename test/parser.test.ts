@@ -396,6 +396,7 @@ describe("Parser: Control Flow", () => {
     assert(assignStmt.expression.left.tokenLiteral() === "x");
     assert(assignStmt.expression.left.typeAnnotation === "f32");
     assert(assignStmt.expression.value instanceof FloatLiteralExpression);
+    // biome-ignore lint/suspicious/noApproximativeNumericConstant: intentional literal, not Math.PI
     assert(floatEquals(assignStmt.expression.value.value, 3.1415));
 
     const returnStmt = funcStmt.fnExpr.body.statements[2];

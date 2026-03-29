@@ -632,6 +632,24 @@ describe("Emission: switch", () => {
   });
 });
 
+describe("Deterministic Compilation", () => {
+  test("same source compiles to identical WAT on repeated calls", () => {
+    const src = `fn loop_test(): void { for (let i: i32 = 0; i < 3; i = i + 1) { } }`;
+    const { wat: wat1 } = compile(src);
+    const { wat: wat2 } = compile(src);
+    assert.equal(wat1, wat2, "label counter must reset between compilations");
+  });
+
+  test("two different compilations each start labels at index 0", () => {
+    const src = `fn w(): void { while (1) { break; } }`;
+    const { wat: wat1 } = compile(src);
+    const { wat: wat2 } = compile(src);
+    // both must reference $break_0 / $loop_1 (or whatever the scheme is),
+    // not $break_4 / $loop_5 on the second call
+    assert.equal(wat1, wat2);
+  });
+});
+
 describe("Compiler Pipeline", () => {
   test("compiler function accepts output path parameter", () => {
     assert.equal(typeof compiler, "function");

@@ -1,8 +1,8 @@
-import type { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
-import type { ASTExpression } from "../../../parser/ast/types/ast.type.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { i32CompareOp } from "../emit.types.js";
-import { emitExpression } from "./expression.js";
+import type { InfixExpression } from "../../../parser/ast/expressions/InfixExpression";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { i32CompareOp } from "../emit.types";
+import { emitExpression } from "./expression";
 
 //
 //  Automatically convert from f32 -> i32 and i32 -> f32 when needed

@@ -1,7 +1,7 @@
-import type { WhileStatement } from "../../../parser/ast/statements/WhileStatement.js";
-import type { ModuleEmitter } from "../../ModuleEmitter.js";
-import { emitExpression } from "../expression/expression.js";
-import { emitStatement } from "./statement.js";
+import type { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
+import type { ModuleEmitter } from "../../ModuleEmitter";
+import { emitExpression } from "../expression/expression";
+import { emitStatement } from "./statement";
 
 export function emitWhileStatement(stmt: WhileStatement, emitter: ModuleEmitter) {
   const br = emitter.makeLabel("break");

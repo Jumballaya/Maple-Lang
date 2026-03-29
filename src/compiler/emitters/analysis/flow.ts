@@ -5,7 +5,7 @@ import { IfStatement } from "../../../parser/ast/statements/IfStatement";
 import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement";
 import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
-import type { ASTStatement } from "../../../parser/ast/types/ast.type.js";
+import type { ASTStatement } from "../../../parser/ast/types/ast.type";
 
 export function stmtDefinitelyReturns(stmt: ASTStatement): boolean {
   if (stmt instanceof ReturnStatement) {

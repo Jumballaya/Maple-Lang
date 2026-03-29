@@ -1,7 +1,7 @@
 import { sizeofType } from "../compiler/emitters/emit.types";
-import type { StructMember } from "../compiler/emitters/emitter.types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
+import type { StructMember } from "../shared/types";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
