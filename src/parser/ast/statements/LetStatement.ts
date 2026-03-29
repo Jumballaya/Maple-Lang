@@ -10,6 +10,7 @@ export class LetStatement implements ASTStatement {
   public expression: ASTExpression | null = null;
   public typeAnnotation: string;
   public exported;
+  public mutable: boolean;
 
   constructor(
     token: Token,
@@ -17,12 +18,14 @@ export class LetStatement implements ASTStatement {
     typeAnnotation: string,
     expr: ASTExpression | null = null,
     exported = false,
+    mutable = true,
   ) {
     this.token = token;
     this.identifier = ident;
     this.expression = expr;
     this.typeAnnotation = typeAnnotation;
     this.exported = exported;
+    this.mutable = mutable;
   }
 
   public tokenLiteral(): string {

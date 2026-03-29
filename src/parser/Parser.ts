@@ -22,6 +22,7 @@ import { PrefixExpression } from "./ast/expressions/PrefixExpression";
 import { StructLiteralExpression } from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { BreakStatement } from "./ast/statements/BreakStatement";
+import { ContinueStatement } from "./ast/statements/ContinueStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
 import { ForStatement } from "./ast/statements/ForStatement";
 import { FunctionStatement } from "./ast/statements/FunctionStatement";
@@ -30,6 +31,7 @@ import { ImportStatement } from "./ast/statements/ImportStatement";
 import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
 import { StructStatement } from "./ast/statements/StructStatement";
+import { SwitchStatement } from "./ast/statements/SwitchStatement";
 import { WhileStatement } from "./ast/statements/WhileStatement";
 import type {
   ASTExpression,
@@ -139,6 +141,8 @@ export class Parser {
     this.registerInfix("NotEquals", this.parseInfixExpression.bind(this));
     this.registerInfix("LessThan", this.parseInfixExpression.bind(this));
     this.registerInfix("GreaterThan", this.parseInfixExpression.bind(this));
+    this.registerInfix("LessThanEquals", this.parseInfixExpression.bind(this));
+    this.registerInfix("GreaterThanEquals", this.parseInfixExpression.bind(this));
     this.registerInfix("LParen", this.parseCallExpression.bind(this));
     this.registerInfix("Assign", this.parseAssignmentExpression.bind(this));
     this.registerInfix("AddAssign", this.parseAssignmentExpression.bind(this));
@@ -187,6 +191,18 @@ export class Parser {
         this.tokenizer.nextToken(); // consume the semicolon
         return stmt;
       }
+      case "Continue": {
+        const stmt = new ContinueStatement(token);
+        if (!this.expectPeek("Semicolon")) {
+          this.errors.push({
+            message: "Parser: semicolon expected after continue statement",
+            token,
+          });
+          return null;
+        }
+        this.tokenizer.nextToken(); // consume the semicolon
+        return stmt;
+      }
       case "Import": {
         if (!topLevel) {
           this.errors.push({
@@ -213,7 +229,10 @@ export class Parser {
       }
 
       case "Let": {
-        return this.parseLetStatement(exported);
+        return this.parseLetStatement(exported, true);
+      }
+      case "Const": {
+        return this.parseLetStatement(exported, false);
       }
 
       case "Struct": {
@@ -234,6 +253,10 @@ export class Parser {
 
       case "While": {
         return this.parseWhileStatement();
+      }
+
+      case "Switch": {
+        return this.parseSwitchStatement();
       }
 
       default: {
@@ -417,7 +440,7 @@ export class Parser {
     return "";
   }
 
-  private parseLetStatement(exported = false): ASTStatement | null {
+  private parseLetStatement(exported = false, mutable = true): ASTStatement | null {
     const statementToken = this.tokenizer.curToken();
     if (!this.expectPeek("Identifier")) {
       return null;
@@ -468,7 +491,7 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume semicolon
 
-    const letStmt = new LetStatement(statementToken, identifier, typeAnn, value, exported);
+    const letStmt = new LetStatement(statementToken, identifier, typeAnn, value, exported, mutable);
     letStmt.typeAnnotation = typeAnn;
 
     return letStmt;
@@ -476,7 +499,13 @@ export class Parser {
 
   private parseReturnStatement(): ASTStatement | null {
     const statementToken = this.tokenizer.curToken();
-    this.tokenizer.nextToken();
+    this.tokenizer.nextToken(); // advance past 'return'
+
+    // bare return: return;
+    if (this.tokenizer.curTokenIs("Semicolon")) {
+      this.tokenizer.nextToken(); // consume ';'
+      return new ReturnStatement(statementToken, null);
+    }
 
     const returnValue = this.parseExpression(EQUALS);
 
@@ -501,6 +530,71 @@ export class Parser {
     }
 
     return block;
+  }
+
+  private parseSwitchStatement(): ASTStatement | null {
+    const token = this.tokenizer.curToken();
+
+    if (!this.expectPeek("LParen")) {
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume '('
+    const switchExpr = this.parseExpression(LOWEST);
+    if (!switchExpr) {
+      return null;
+    }
+    if (!this.expectPeek("RParen")) {
+      return null;
+    }
+    if (!this.expectPeek("LBrace")) {
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume '{'
+
+    const cases: Array<{ test: number; body: BlockStatement }> = [];
+    let def: BlockStatement | undefined;
+
+    while (!this.tokenizer.curTokenIs("RBrace") && !this.tokenizer.curTokenIs("EOF")) {
+      if (this.tokenizer.curTokenIs("Case")) {
+        this.tokenizer.nextToken(); // consume 'case'
+        const testToken = this.tokenizer.curToken();
+        if (testToken.type !== "IntegerLiteral") {
+          this.errors.push({
+            message: "Parser: switch case must be an integer literal",
+            token: testToken,
+          });
+          return null;
+        }
+        const testVal = testToken.literal as number;
+        if (!this.expectPeek("Colon")) {
+          return null;
+        }
+        if (!this.expectPeek("LBrace")) {
+          return null;
+        }
+        const body = this.parseBlockStatement();
+        this.tokenizer.nextToken(); // consume '}'
+        cases.push({ test: testVal, body });
+      } else if (this.tokenizer.curTokenIs("Default")) {
+        if (!this.expectPeek("Colon")) {
+          return null;
+        }
+        if (!this.expectPeek("LBrace")) {
+          return null;
+        }
+        def = this.parseBlockStatement();
+        this.tokenizer.nextToken(); // consume '}'
+      } else {
+        break;
+      }
+    }
+
+    if (!this.tokenizer.curTokenIs("RBrace")) {
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume outer '}'
+
+    return new SwitchStatement(token, switchExpr, cases, def);
   }
 
   private parseIfStatement(): ASTStatement | null {
@@ -528,7 +622,19 @@ export class Parser {
     const consequence = this.parseBlockStatement();
     const expression = new IfStatement(exprToken, condition, consequence);
     if (this.tokenizer.peekTokenIs("Else")) {
-      this.tokenizer.nextToken();
+      this.tokenizer.nextToken(); // consume 'else'
+
+      if (this.tokenizer.peekTokenIs("If")) {
+        this.tokenizer.nextToken(); // consume 'if'
+        const elseIfStmt = this.parseIfStatement();
+        if (!elseIfStmt) {
+          return null;
+        }
+        const elseBlock = new BlockStatement(this.tokenizer.curToken());
+        elseBlock.statements.push(elseIfStmt);
+        expression.elseBlock = elseBlock;
+        return expression;
+      }
 
       if (!this.expectPeek("LBrace")) {
         return null;

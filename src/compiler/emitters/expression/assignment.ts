@@ -1,11 +1,13 @@
 import type { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression.js";
 import { Identifier } from "../../../parser/ast/expressions/Identifier.js";
+import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression.js";
 import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression.js";
+import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral.js";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression.js";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression.js";
 import type { ModuleEmitter } from "../../ModuleEmitter.js";
 import { Writer } from "../../writer/Writer.js";
-import { wasmStoreOp } from "../emit.types.js";
+import { baseScalar, sizeofType, wasmStoreOp } from "../emit.types.js";
 import { emitGet, emitSet } from "./core.js";
 import { emitExpression } from "./expression.js";
 import { getPointerMemberData } from "./member.js";
@@ -45,6 +47,35 @@ export function emitAssignmentExpression(
         expression.value,
       );
       writer.line(emitSet(name, rhs, emitter));
+    }
+  } else if (expression.left instanceof IndexExpression) {
+    if (expression.operator !== "=") {
+      throw new Error(
+        "[expression emitter] compound assignment for index expressions not implemented",
+      );
+    }
+    const varData = emitter.getVar(expression.left.left.tokenLiteral());
+    if (!varData) {
+      throw new Error(
+        `[expression emitter] unknown array variable: "${expression.left.left.tokenLiteral()}"`,
+      );
+    }
+    const memberType = baseScalar(varData.type);
+    const memberSize = sizeofType(memberType);
+    const storeOp = wasmStoreOp(memberType);
+    const base = emitGet(varData.name, emitter);
+    const val = emitExpression(expression.value, emitter);
+
+    if (
+      expression.left.index instanceof IntegerLiteralExpression &&
+      expression.left.index.value === 0
+    ) {
+      writer.line(`(${storeOp} ${base} ${val})`);
+    } else {
+      const index = emitExpression(expression.left.index, emitter);
+      writer.line(
+        `(${storeOp} (i32.add ${base} (i32.mul ${index} (i32.const ${memberSize}))) ${val})`,
+      );
     }
   } else if (
     expression.left instanceof MemberExpression ||

@@ -27,6 +27,9 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const value = emitExpression(stmt.expression!, emitter);
   const expr = stmt.expression;
 
+  const wasmType = valueTypeToWasm(type);
+  const typeDecl = stmt.mutable ? `(mut ${wasmType})` : wasmType;
+
   // string/array literal
   if (
     expr instanceof StringLiteralExpression ||
@@ -34,15 +37,15 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
     expr instanceof StructLiteralExpression
   ) {
     const num = emitNumberGet(expr.location, "i32");
-    emitter.addGlobalWat(`(global $${name} (mut ${valueTypeToWasm(type)}) ${num})`);
+    emitter.addGlobalWat(`(global $${name} ${typeDecl} ${num})`);
     if (stmt.exported) {
       emitter.addGlobalWat(`(export "${name}" (global $${name}))`);
     }
     return;
   }
 
-  // // everything else
-  emitter.addGlobalWat(`(global $${name} (mut ${type}) ${value})`);
+  // everything else
+  emitter.addGlobalWat(`(global $${name} ${typeDecl} ${value})`);
 }
 
 //

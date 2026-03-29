@@ -12,6 +12,7 @@ import { PostfixExpression } from "../src/parser/ast/expressions/PostfixExpressi
 import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
+import { ContinueStatement } from "../src/parser/ast/statements/ContinueStatement";
 import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../src/parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatement";
@@ -20,6 +21,7 @@ import { ImportStatement } from "../src/parser/ast/statements/ImportStatement";
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
 import { StructStatement } from "../src/parser/ast/statements/StructStatement";
+import { SwitchStatement } from "../src/parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
@@ -1255,6 +1257,162 @@ describe("Parser: Control Flow", () => {
     assert(retStmt.returnValue.typeAnnotation === "i32");
   });
 
+  test("can parse bare return statement", () => {
+    const p = new Parser(`fn do_thing(): void {
+      return;
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "do_thing", [], null, 1, false)) {
+      return;
+    }
+    const ret = funcStmt.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    assert(ret.returnValue === null);
+  });
+
+  test("can parse else if ladder", () => {
+    const p = new Parser(`fn grade(score: i32): i32 {
+      if (score >= 90) {
+        return 5;
+      } else if (score >= 75) {
+        return 4;
+      } else {
+        return 3;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "grade", [["score", "i32"]], "i32", 1, false)) {
+      return;
+    }
+
+    const ifStmt = funcStmt.fnExpr.body.statements[0];
+    assert(ifStmt instanceof IfStatement);
+    assert(ifStmt.thenBlock.statements[0] instanceof ReturnStatement);
+
+    // elseBlock is itself an IfStatement (not a plain block)
+    assert(ifStmt.elseBlock !== undefined);
+    assert(ifStmt.elseBlock.statements.length === 1);
+    const elseIf = ifStmt.elseBlock.statements[0];
+    assert(elseIf instanceof IfStatement);
+    assert(elseIf.thenBlock.statements[0] instanceof ReturnStatement);
+
+    // innermost else
+    assert(elseIf.elseBlock !== undefined);
+    assert(elseIf.elseBlock.statements[0] instanceof ReturnStatement);
+  });
+
+  test("can parse continue in a for loop", () => {
+    const p = new Parser(`fn test(): void {
+      for (let i: i32 = 0; i < 10; i = i + 1) {
+        continue;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "test", [], null, 1, false)) {
+      return;
+    }
+
+    const forStmt = funcStmt.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert(forStmt.loopBody.statements.length === 1);
+    assert(forStmt.loopBody.statements[0] instanceof ContinueStatement);
+  });
+
+  test("can parse continue in a while loop", () => {
+    const p = new Parser(`fn test(): void {
+      let i: i32 = 0;
+      while (i < 5) {
+        i = i + 1;
+        continue;
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "test", [], null, 2, false)) {
+      return;
+    }
+
+    const whileStmt = funcStmt.fnExpr.body.statements[1];
+    assert(whileStmt instanceof WhileStatement);
+    assert(whileStmt.loopBody.statements.length === 2);
+    assert(whileStmt.loopBody.statements[1] instanceof ContinueStatement);
+  });
+
+  test("can parse const declaration", () => {
+    const p = new Parser(`const MAX: i32 = 100;`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    assert(ast.statements.length === 1);
+    const constStmt = ast.statements[0];
+    assert(constStmt instanceof LetStatement);
+    assert(constStmt.identifier.tokenLiteral() === "MAX");
+    assert(constStmt.identifier.typeAnnotation === "i32");
+    assert(constStmt.expression instanceof IntegerLiteralExpression);
+    assert(constStmt.expression.value === 100);
+    assert(constStmt.mutable === false);
+  });
+
+  test("let is mutable by default", () => {
+    const p = new Parser(`let x: i32 = 0;`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const letStmt = ast.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.mutable === true);
+  });
+
+  test("can parse switch statement", () => {
+    const p = new Parser(`fn classify(x: i32): i32 {
+      switch (x) {
+        case 0: { return 10; }
+        case 1: { return 20; }
+        default: { return 99; }
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "classify", [["x", "i32"]], "i32", 1, false)) {
+      return;
+    }
+
+    const switchStmt = funcStmt.fnExpr.body.statements[0];
+    assert(switchStmt instanceof SwitchStatement);
+    assert(switchStmt.switchExpr instanceof Identifier);
+    assert(switchStmt.switchExpr.tokenLiteral() === "x");
+    assert(switchStmt.cases.length === 2);
+    assert(switchStmt.cases[0].test === 0);
+    assert(switchStmt.cases[1].test === 1);
+    assert(switchStmt.default !== undefined);
+  });
+
+  test("can parse switch without default", () => {
+    const p = new Parser(`fn test(x: i32): void {
+      switch (x) {
+        case 0: { return; }
+        case 1: { return; }
+      }
+    }`);
+    const ast = p.parse("test");
+    assert(p.errors.length === 0);
+    const funcStmt = ast.statements[0];
+    if (!assertFunctionSignature(funcStmt, "test", [["x", "i32"]], null, 1, false)) {
+      return;
+    }
+
+    const switchStmt = funcStmt.fnExpr.body.statements[0];
+    assert(switchStmt instanceof SwitchStatement);
+    assert(switchStmt.cases.length === 2);
+    assert(switchStmt.default === undefined);
+  });
+
   test("can parse a while loop with a break", () => {
     const p = new Parser(`fn while_loop_3(): i32 {
       let i: i32 = 0;
@@ -1721,6 +1879,36 @@ describe("Parser: Operators", () => {
       assert(left.value === 44);
       assert(operator === "^");
       assert(right.value === 37);
+    });
+
+    test("infix less than equals: literal <= literal", () => {
+      const p = new Parser(`fn infix_lte(): bool {
+        return 10 <= 20;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      const funcStmt = ast.statements[0];
+      if (!assertFunctionSignature(funcStmt, "infix_lte", [], "bool", 1, false)) {
+        return;
+      }
+      const infixExpr = (funcStmt.fnExpr.body.statements[0] as ReturnStatement).returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      assert(infixExpr.operator === "<=");
+    });
+
+    test("infix greater than equals: literal >= literal", () => {
+      const p = new Parser(`fn infix_gte(): bool {
+        return 20 >= 10;
+      }`);
+      const ast = p.parse("test");
+      assert(p.errors.length === 0);
+      const funcStmt = ast.statements[0];
+      if (!assertFunctionSignature(funcStmt, "infix_gte", [], "bool", 1, false)) {
+        return;
+      }
+      const infixExpr = (funcStmt.fnExpr.body.statements[0] as ReturnStatement).returnValue;
+      assert(infixExpr instanceof InfixExpression);
+      assert(infixExpr.operator === ">=");
     });
 
     test("infix left shift: literal << literal", () => {

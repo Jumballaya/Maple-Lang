@@ -493,6 +493,145 @@ describe("Module Metadata", () => {
   });
 });
 
+describe("Emission: else if", () => {
+  test("else if chain emits nested if/else WAT", () => {
+    const { wat } = compile(`
+      fn grade(score: i32): i32 {
+        if (score >= 90) {
+          return 5;
+        } else if (score >= 75) {
+          return 4;
+        } else {
+          return 3;
+        }
+      }
+    `);
+    assert(wat.includes("(if"));
+    assert(wat.includes("(else"));
+    // two separate return values prove both branches compiled
+    assert(wat.includes("(i32.const 5)"));
+    assert(wat.includes("(i32.const 4)"));
+    assert(wat.includes("(i32.const 3)"));
+  });
+
+  test("three-level else if chain compiles", () => {
+    const { wat } = compile(`
+      fn classify(n: i32): i32 {
+        if (n == 0) {
+          return 10;
+        } else if (n == 1) {
+          return 20;
+        } else if (n == 2) {
+          return 30;
+        } else {
+          return 40;
+        }
+      }
+    `);
+    assert(wat.includes("(i32.const 10)"));
+    assert(wat.includes("(i32.const 20)"));
+    assert(wat.includes("(i32.const 30)"));
+    assert(wat.includes("(i32.const 40)"));
+  });
+});
+
+describe("Emission: continue", () => {
+  test("continue in for loop emits br to loop label", () => {
+    const { wat } = compile(`
+      fn test(): void {
+        for (let i: i32 = 0; i < 10; i = i + 1) {
+          continue;
+        }
+      }
+    `);
+    assert(wat.includes("(loop"));
+    assert(wat.includes("(br $loop_"));
+  });
+
+  test("continue in while loop emits br to loop label", () => {
+    const { wat } = compile(`
+      fn test(): void {
+        let i: i32 = 0;
+        while (i < 5) {
+          i = i + 1;
+          continue;
+        }
+      }
+    `);
+    assert(wat.includes("(loop"));
+    assert(wat.includes("(br $loop_"));
+  });
+});
+
+describe("Emission: const", () => {
+  test("const global emits without mut", () => {
+    const { wat } = compile(`const MAX: i32 = 100;`);
+    assert(wat.includes("(global $MAX i32 (i32.const 100))"));
+    assert(!wat.includes("(global $MAX (mut i32)"));
+  });
+
+  test("let global still emits with mut", () => {
+    const { wat } = compile(`let x: i32 = 0;`);
+    assert(wat.includes("(global $x (mut i32) (i32.const 0))"));
+  });
+});
+
+describe("Emission: array index write", () => {
+  test("arr[literal] = val emits i32.store with const offset", () => {
+    const { wat } = compile(`
+      fn test(): void {
+        let arr: i32[] = [1, 2, 3];
+        arr[0] = 99;
+      }
+    `);
+    assert(wat.includes("i32.store"));
+    assert(wat.includes("(i32.const 99)"));
+  });
+
+  test("arr[var] = val emits i32.store with computed offset", () => {
+    const { wat } = compile(`
+      fn test(): void {
+        let arr: i32[] = [1, 2, 3];
+        let i: i32 = 1;
+        arr[i] = 42;
+      }
+    `);
+    assert(wat.includes("i32.store"));
+    assert(wat.includes("i32.mul"));
+    assert(wat.includes("(i32.const 42)"));
+  });
+});
+
+describe("Emission: switch", () => {
+  test("switch emits br_table", () => {
+    const { wat } = compile(`
+      fn classify(x: i32): i32 {
+        switch (x) {
+          case 0: { return 10; }
+          case 1: { return 20; }
+          default: { return 99; }
+        }
+      }
+    `);
+    assert(wat.includes("br_table"));
+    assert(wat.includes("(i32.const 10)"));
+    assert(wat.includes("(i32.const 20)"));
+    assert(wat.includes("(i32.const 99)"));
+  });
+
+  test("switch without default emits br_table with fallthrough", () => {
+    const { wat } = compile(`
+      fn test(x: i32): void {
+        switch (x) {
+          case 0: { return; }
+          case 1: { return; }
+        }
+      }
+    `);
+    assert(wat.includes("br_table"));
+  });
+});
+
 describe("Compiler Pipeline", () => {
   test("compiler function accepts output path parameter", () => {
     assert.equal(typeof compiler, "function");
