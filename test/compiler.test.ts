@@ -468,9 +468,7 @@ describe("Emission: Postfix Statement", () => {
 
   test("postfix as rvalue still emits block-with-result", () => {
     // When postfix is used as an expression (not a statement), the old value must be returned
-    const { wat } = compile(
-      "fn test(): i32 { let idx: i32 = 0; let x: i32 = idx++; return x; }",
-    );
+    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; let x: i32 = idx++; return x; }");
     assert(wat.includes("(block (result i32)"), "Rvalue postfix must emit block with result");
   });
 });

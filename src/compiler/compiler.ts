@@ -68,19 +68,12 @@ async function openFile(fp: string): Promise<string> {
 }
 
 function parseFile(name: string, text: string): ASTProgram | null {
-  const p = new Parser(text);
+  const p = new Parser(text, name);
   const ast = p.parse(name);
   if (p.errors.length) {
     for (const error of p.errors) {
-      const { message, token } = error;
-      const { line, col } = token;
-      console.error(
-        `Maple Error:\nline: ${line}, col: ${col}\nMessage: "${message}"\nToken: "${token.literal}"\n`,
-      );
+      console.error(error.format());
     }
-  }
-
-  if (p.errors.length) {
     return null;
   }
   return ast;

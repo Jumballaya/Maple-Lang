@@ -2435,6 +2435,101 @@ function assertFunctionSignature(
 }
 
 // params: Array<[name, type]>
+// ─── Error position tests ─────────────────────────────────────────────────────
+//
+// Programs used here are chosen to leave curToken = EOF after the first error
+// fires, so the parse() loop exits naturally without infinite-looping.
+//
+//   "let x:"               — parseTyping() fires "Expected type" with the
+//                            EOF token (line 1, col 7).
+//   "let x: i32 ="         — parseExpression() fires noPrefixParseFnError
+//                            for "EOF" (line 1, col 14).
+//   "fn f(): void {}\nlet x:"  — same type error, but the let is on line 2,
+//                            so col 7 on line 2.
+
+describe("Parser: Error positions", () => {
+  test("errors expose .line directly (not nested in .token)", () => {
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    const err = p.errors[0];
+    assert.equal(typeof err.line, "number", "err.line must be a number");
+    assert(err.line >= 1, "err.line must be >= 1");
+  });
+
+  test("errors expose .col directly (not nested in .token)", () => {
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    const err = p.errors[0];
+    assert.equal(typeof err.col, "number", "err.col must be a number");
+    assert(err.col >= 1, "err.col must be >= 1");
+  });
+
+  test("error .line matches source line of the error token (line 1)", () => {
+    // "let x:" — EOF token is on line 1
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    assert.equal(p.errors[0].line, 1);
+  });
+
+  test("error .line is 2 when the invalid token sits on line 2", () => {
+    // Valid function on line 1, broken let on line 2 — EOF is on line 2
+    const p = new Parser("fn f(): void {}\nlet x:");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    assert.equal(p.errors[0].line, 2);
+  });
+
+  test("error .col is correct for token on line 1", () => {
+    // "let x:" — EOF is at col 7 (positions: l=1,e=2,t=3,_=4,x=5,:=6,EOF=7)
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    assert.equal(p.errors[0].col, 7);
+  });
+
+  test("error .file reflects filename passed to Parser constructor", () => {
+    const p = new Parser("let x:", "myfile.maple");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    assert.equal(p.errors[0].file, "myfile.maple");
+  });
+
+  test("error .file is empty string when no filename is supplied", () => {
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    assert.equal(p.errors[0].file, "");
+  });
+
+  test("error message text is preserved on MapleError", () => {
+    const p = new Parser("let x:");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    const err = p.errors[0];
+    assert(typeof err.message === "string" && err.message.length > 0);
+    assert(
+      err.message.toLowerCase().includes("type") || err.message.toLowerCase().includes("expected"),
+      `Expected message about type/expected, got: "${err.message}"`,
+    );
+  });
+
+  test("error from missing expression exposes .line and .col", () => {
+    // "let x: i32 =" — EOF is the expression, fires noPrefixParseFnError
+    // positions: l=1 e=2 t=3 _=4 x=5 :=6 _=7 i=8 3=9 2=10 _=11 ==12 _=13 EOF=14
+    const p = new Parser("let x: i32 =");
+    p.parse("test");
+    assert(p.errors.length > 0);
+    const err = p.errors[0];
+    assert.equal(typeof err.line, "number");
+    assert.equal(err.line, 1);
+    assert.equal(typeof err.col, "number");
+    assert(err.col >= 1);
+  });
+});
+
 function assertFunctionParams(
   funcStmt: FunctionStatement,
   expectedParams: Array<[string, string]>,

@@ -16,6 +16,7 @@ import { PrefixExpression } from "../../../parser/ast/expressions/PrefixExpressi
 import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression";
 import type { ASTExpression } from "../../../parser/ast/types/ast.type";
+import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
 import { valueTypeToWasm, wasmLoadOp } from "../emit.types";
@@ -29,7 +30,8 @@ import { getPointerMemberData } from "./member";
 function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitter): string {
   const right = expression.right;
   if (!right) {
-    throw new Error("[expression emitter] prefix expression missing rhs");
+    const t = expression.token;
+    throw new MapleError("[expression emitter] prefix expression missing rhs", t.line, t.col);
   }
 
   const rhs = emitExpression(right, emitter);
@@ -48,26 +50,43 @@ function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitt
       return `(i32.xor ${rhs} (i32.const -1))`;
     }
     default: {
-      throw new Error(`[expression emitter] unsupported prefix operator "${expression.operator}"`);
+      const t = expression.token;
+      throw new MapleError(
+        `[expression emitter] unsupported prefix operator "${expression.operator}"`,
+        t.line,
+        t.col,
+      );
     }
   }
 }
 
 function emitPostfixExpression(expression: PostfixExpression, emitter: ModuleEmitter): string {
   if (!(expression.left instanceof Identifier)) {
-    throw new Error("[expression emitter] postfix only supports identifiers");
+    const t = expression.token;
+    throw new MapleError("[expression emitter] postfix only supports identifiers", t.line, t.col);
   }
   if (expression.operator !== "++" && expression.operator !== "--") {
-    throw new Error(`[expression emitter] unsupported postfix operator "${expression.operator}"`);
+    const t = expression.token;
+    throw new MapleError(
+      `[expression emitter] unsupported postfix operator "${expression.operator}"`,
+      t.line,
+      t.col,
+    );
   }
 
   const name = expression.left.tokenLiteral();
   const v = emitter.getVar(name);
   if (!v) {
-    throw new Error(`variable not found: "${name}"`);
+    const t = expression.left.token;
+    throw new MapleError(`variable not found: "${name}"`, t.line, t.col);
   }
   if (v.scope === "memory") {
-    throw new Error("[expression emitter] postfix on memory variables not implemented");
+    const t = expression.token;
+    throw new MapleError(
+      "[expression emitter] postfix on memory variables not implemented",
+      t.line,
+      t.col,
+    );
   }
 
   const getVal = emitGet(name, emitter);
@@ -154,7 +173,12 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     }
     //
   } else {
-    throw new Error(`[expression emitter] "${expression.constructor}" emit not implemented`);
+    const t = expression.token;
+    throw new MapleError(
+      `[expression emitter] "${expression.constructor.name}" emit not implemented`,
+      t.line,
+      t.col,
+    );
   }
 
   return writer.toString();

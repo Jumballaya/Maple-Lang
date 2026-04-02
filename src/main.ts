@@ -1,5 +1,6 @@
 import path from "node:path";
 import { compiler } from "./compiler/compiler";
+import { MapleError } from "./compiler/errors";
 
 const usage = `Usage: maple <file> [optional_arg]
 Compiles a maple source code file into a .wasm file
@@ -31,7 +32,12 @@ async function main() {
   try {
     await compiler(entry, parsed.name, parsed.dir, outputPath);
   } catch (e) {
-    console.log("Error: ", e);
+    if (e instanceof MapleError) {
+      console.error(e.format());
+    } else {
+      console.error("Error: ", e);
+    }
+    process.exit(1);
   }
 }
 main();

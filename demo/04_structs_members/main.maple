@@ -3,7 +3,7 @@ struct Point {
   y: i32,
 }
 
-// struct member used directly in a return expression (Phase 6B)
+// struct member used directly in a return expression
 export fn sum_point(): i32 {
   let p: Point = { x = 3, y = 4 };
   return p.x + p.y;

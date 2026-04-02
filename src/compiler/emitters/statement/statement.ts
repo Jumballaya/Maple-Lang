@@ -1,3 +1,5 @@
+import { Identifier } from "../../../parser/ast/expressions/Identifier";
+import { PostfixExpression } from "../../../parser/ast/expressions/PostfixExpression";
 import { BlockStatement } from "../../../parser/ast/statements/BlockStatement";
 import { BreakStatement } from "../../../parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../../../parser/ast/statements/ContinueStatement";
@@ -8,12 +10,11 @@ import { LetStatement } from "../../../parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../../../parser/ast/statements/ReturnStatement";
 import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
-import { Identifier } from "../../../parser/ast/expressions/Identifier";
-import { PostfixExpression } from "../../../parser/ast/expressions/PostfixExpression";
 import type { ASTStatement } from "../../../parser/ast/types/ast.type";
+import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { emitExpression } from "../expression/expression";
 import { emitGet } from "../expression/core";
+import { emitExpression } from "../expression/expression";
 import { emitBreakStatement } from "./break";
 import { emitContinueStatement } from "./continue";
 import { emitForStatement } from "./for";
@@ -24,11 +25,19 @@ import { emitWhileStatement } from "./while";
 
 function emitPostfixVoid(expr: PostfixExpression, emitter: ModuleEmitter): string {
   if (!(expr.left instanceof Identifier)) {
-    throw new Error("[statement emitter] postfix statement only supports identifiers");
+    const t = expr.token;
+    throw new MapleError(
+      "[statement emitter] postfix statement only supports identifiers",
+      t.line,
+      t.col,
+    );
   }
   const name = expr.left.tokenLiteral();
   const v = emitter.getVar(name);
-  if (!v) throw new Error(`variable not found: "${name}"`);
+  if (!v) {
+    const t = expr.left.token;
+    throw new MapleError(`variable not found: "${name}"`, t.line, t.col);
+  }
   const delta = expr.operator === "++" ? 1 : -1;
   const updated = `(i32.add ${emitGet(name, emitter)} (i32.const ${delta}))`;
   const setOp = v.scope === "global" ? "global.set" : "local.set";
@@ -90,5 +99,10 @@ export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void 
     return;
   }
 
-  throw new Error(`[statement emitter] statement type: ${stmt.tokenLiteral()} not implemented`);
+  const t = stmt.token;
+  throw new MapleError(
+    `[statement emitter] statement type: ${stmt.tokenLiteral()} not implemented`,
+    t.line,
+    t.col,
+  );
 }

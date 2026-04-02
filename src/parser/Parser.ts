@@ -1,4 +1,5 @@
 import { sizeofType } from "../compiler/emitters/emit.types";
+import { MapleError } from "../compiler/errors";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
 import type { StructMember } from "../shared/types";
@@ -57,7 +58,8 @@ import {
 
 export class Parser {
   private tokenizer: Tokenizer;
-  public errors: Array<{ message: string; token: Token }> = [];
+  private file: string;
+  public errors: MapleError[] = [];
 
   private prefixParseFns: Map<Token["type"], PrefixParseFn> = new Map();
   private infixParseFns: Map<Token["type"], InfixParseFn> = new Map();
@@ -108,7 +110,12 @@ export class Parser {
     RightShiftAssign: ASSIGN,
   };
 
-  constructor(source: string) {
+  public getErrors(): MapleError[] {
+    return this.errors;
+  }
+
+  constructor(source: string, file = "") {
+    this.file = file;
     this.tokenizer = new Tokenizer(source);
 
     // Prefix
@@ -186,10 +193,7 @@ export class Parser {
       case "Break": {
         const stmt = new BreakStatement(token);
         if (!this.expectPeek("Semicolon")) {
-          this.errors.push({
-            message: "Parser: semicolon expected after break statement",
-            token,
-          });
+          this.pushError("Parser: semicolon expected after break statement", token);
           return null;
         }
         this.tokenizer.nextToken(); // consume the semicolon
@@ -198,10 +202,7 @@ export class Parser {
       case "Continue": {
         const stmt = new ContinueStatement(token);
         if (!this.expectPeek("Semicolon")) {
-          this.errors.push({
-            message: "Parser: semicolon expected after continue statement",
-            token,
-          });
+          this.pushError("Parser: semicolon expected after continue statement", token);
           return null;
         }
         this.tokenizer.nextToken(); // consume the semicolon
@@ -209,20 +210,14 @@ export class Parser {
       }
       case "Import": {
         if (!topLevel) {
-          this.errors.push({
-            message: "Parser: Imports must be top-level only",
-            token,
-          });
+          this.pushError("Parser: Imports must be top-level only", token);
           return null;
         }
         return this.parseImportStatement();
       }
       case "Export": {
         if (!topLevel) {
-          this.errors.push({
-            message: "Parser: Exports must be top-level only",
-            token,
-          });
+          this.pushError("Parser: Exports must be top-level only", token);
           return null;
         }
         this.tokenizer.nextToken();
@@ -300,10 +295,7 @@ export class Parser {
     this.tokenizer.nextToken(); // consume the 'import' token
 
     if (!this.tokenizer.curTokenIs("Identifier")) {
-      this.errors.push({
-        message: "Parser: no identifier found for import statement",
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError("Parser: no identifier found for import statement", this.tokenizer.curToken());
       return null;
     }
     const imported: string[] = [];
@@ -324,10 +316,10 @@ export class Parser {
     }
 
     if (!this.tokenizer.peekTokenIs("Identifier")) {
-      this.errors.push({
-        message: "Parser: keyword 'from' missing in import statement",
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError(
+        "Parser: keyword 'from' missing in import statement",
+        this.tokenizer.curToken(),
+      );
       return null;
     }
 
@@ -335,10 +327,10 @@ export class Parser {
 
     const importToken = this.tokenizer.curToken() as IdentToken;
     if (importToken.literal !== "from") {
-      this.errors.push({
-        message: `Parser: keyword 'from' missing in import statement, got: ${importToken.literal}`,
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError(
+        `Parser: keyword 'from' missing in import statement, got: ${importToken.literal}`,
+        this.tokenizer.curToken(),
+      );
       return null;
     }
 
@@ -346,10 +338,7 @@ export class Parser {
 
     const pathToken = this.tokenizer.curToken();
     if (pathToken.type !== "StringLiteral") {
-      this.errors.push({
-        message: `Parser: import path must be a string`,
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError("Parser: import path must be a string", this.tokenizer.curToken());
       return null;
     }
 
@@ -563,10 +552,7 @@ export class Parser {
         this.tokenizer.nextToken(); // consume 'case'
         const testToken = this.tokenizer.curToken();
         if (testToken.type !== "IntegerLiteral") {
-          this.errors.push({
-            message: "Parser: switch case must be an integer literal",
-            token: testToken,
-          });
+          this.pushError("Parser: switch case must be an integer literal", testToken);
           return null;
         }
         const testVal = testToken.literal as number;
@@ -676,10 +662,7 @@ export class Parser {
     const conditionStatement = new ExpressionStatement(this.tokenizer.curToken(), conditionExpr);
     this.tokenizer.nextToken(); // consumes last token from the parseExpression call
     if (!this.tokenizer.curTokenIs("Semicolon")) {
-      this.errors.push({
-        message: "Parser: semicolon expected after for condition expression",
-        token: stmtToken,
-      });
+      this.pushError("Parser: semicolon expected after for condition expression", stmtToken);
       return null;
     }
     this.tokenizer.nextToken();
@@ -833,8 +816,8 @@ export class Parser {
     const right = this.parseExpression(precedence);
     if (!right) {
       const message = `Parser: Fatal: unable to parse right hand side of infix operator ${op}`;
-      this.errors.push({ message, token: exprToken });
-      throw new Error(this.errors.join("\n"));
+      this.pushError(message, exprToken);
+      throw new Error(this.errors.map((e) => e.format()).join("\n"));
     }
     if (op === ".") {
       if (right instanceof Identifier) {
@@ -946,7 +929,7 @@ export class Parser {
     const value = literalToken.literal;
     if (Number.isNaN(value)) {
       const message = `Parser: Could not parse ${this.tokenizer.curToken().literal} as a number`;
-      this.errors.push({ message, token: this.tokenizer.curToken() });
+      this.pushError(message, this.tokenizer.curToken());
       return null;
     }
     return new FloatLiteralExpression(literalToken, value);
@@ -961,7 +944,7 @@ export class Parser {
     const value = literalToken.literal;
     if (Number.isNaN(value)) {
       const message = `Parser: Could not parse ${this.tokenizer.curToken().literal} as a number`;
-      this.errors.push({ message, token: this.tokenizer.curToken() });
+      this.pushError(message, this.tokenizer.curToken());
       return null;
     }
     return new IntegerLiteralExpression(literalToken, value);
@@ -1010,20 +993,17 @@ export class Parser {
   private parseArrayLiteralMember(): number | null {
     const p = this.parseExpression(LOWEST);
     if (!p) {
-      this.errors.push({
-        message: "Parser: missing expression in array literal",
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError("Parser: missing expression in array literal", this.tokenizer.curToken());
       return null;
     }
     const isFloat = p instanceof FloatLiteralExpression;
     const isInt = p instanceof IntegerLiteralExpression;
     const isBool = p instanceof BooleanLiteralExpression;
     if (!(isFloat || isInt || isBool)) {
-      this.errors.push({
-        message: "Parser: only float, integer and bool literals in an array literal are supported",
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError(
+        "Parser: only float, integer and bool literals in an array literal are supported",
+        this.tokenizer.curToken(),
+      );
       return null;
     }
     this.tokenizer.nextToken();
@@ -1189,20 +1169,17 @@ export class Parser {
     const isBuiltin = BUILTIN_TYPES.includes(curToken.type);
 
     if (!isIdent && !isBuiltin) {
-      this.errors.push({
-        message: `Parser: Expected type, none found`,
-        token: this.tokenizer.curToken(),
-      });
+      this.pushError("Parser: Expected type, none found", this.tokenizer.curToken());
       return null;
     }
 
     if (this.tokenizer.peekTokenIs("LBracket")) {
       this.tokenizer.nextToken();
       if (!this.expectPeek("RBracket")) {
-        this.errors.push({
-          message: `Parser: array types must include the ending bracket`,
-          token: this.tokenizer.curToken(),
-        });
+        this.pushError(
+          "Parser: array types must include the ending bracket",
+          this.tokenizer.curToken(),
+        );
         return null;
       }
       type += "[]";
@@ -1221,14 +1198,19 @@ export class Parser {
 
   // Errors
   private peekError(type: Token["type"]) {
-    const peekType = this.tokenizer.peekToken().type;
-    const message = `Parser: Expected next token to be ${type}, got ${peekType}`;
-    this.errors.push({ message, token: this.tokenizer.peekToken() });
+    const peek = this.tokenizer.peekToken();
+    const message = `Parser: Expected next token to be ${type}, got ${peek.type}`;
+    this.errors.push(new MapleError(message, peek.line, peek.col, this.file));
   }
 
   private noPrefixParseFnError(type: Token["type"]) {
+    const cur = this.tokenizer.curToken();
     const message = `Parser: No prefix parse function found for ${type}.`;
-    this.errors.push({ message, token: this.tokenizer.curToken() });
+    this.errors.push(new MapleError(message, cur.line, cur.col, this.file));
+  }
+
+  private pushError(message: string, token: Token) {
+    this.errors.push(new MapleError(message, token.line, token.col, this.file));
   }
 
   // Function State

@@ -16,7 +16,7 @@ export fn _start(seed: i32): i32 {
   let total: i32 = add(base.left, base.right);
   let tweak: i32 = seed % 3;
 
-  // local struct: members used directly in arithmetic (Phase 6B)
+  // local struct: members used directly in arithmetic
   let lp: Pair = { left = 4, right = 1 };
   total = total + lp.left - lp.right;
 
@@ -45,7 +45,7 @@ export fn _start(seed: i32): i32 {
   total = total + idx;
   idx--;
 
-  // casting: scale total as f32, take half, cast back to i32 (Phase 6C)
+  // casting: scale total as f32, take half, cast back to i32
   let half: i32 = (total as f32 * 0.5) as i32;
   total += half;
 
