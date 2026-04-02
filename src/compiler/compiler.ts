@@ -10,57 +10,29 @@ import { stdlib } from "./stdlib";
 import { typeCheck } from "./TypeChecker";
 
 //
-//    Next idea:
+// Compilation pipeline (current):
 //
-//      Add passes:
-//          1. Verification/validation: make sure types are correct.
-//             this has to be done AFTER pass1, and before building
-//             the actual code.
-//             This make sure structs are correct, have the correct
-//             members being used, etc. it would also build defaults
-//             for members not explicitly constructed.
-//             It would also check to make sure types are applied
-//             correctly.
+//  1) Parse entry + imported modules
+//     - build ASTs
+//     - extract ModuleMeta for each module
 //
-//          2. Optimization: The first implementation would be just
-//             combining static math operations, static casting, etc.
-//             it would combine stuff like: 2 + 2 -> 4 instead of
-//             emitting an add operation and 2 loads.
+//  2) Resolve imports/exports across stdlib + user modules
+//     - attach resolved import metadata (function/global/struct signatures)
 //
+//  3) Validation pass
+//     - run typeCheck() over each module before emission
 //
+//  4) Emit WAT
+//     - emitModule() -> MapleModule
+//     - MapleModule.buildWat() -> build/*.wat
 //
-///////////////
+//  5) Assemble + link
+//     - wat2wasm build/*.wat -> build/*.o
+//     - copy stdlib *.o files
+//     - wasm-ld build/*.o -> final .wasm
 //
-//  Compilation
-//
-//  Part 1. 2 Pass assembler
-//
-//  pass 1. ASTProgram[] -> ModuleBuilder[] -> ModuleMeta[]
-//    Goal: collection of data for dependency resolution
-//    - function data
-//    - import and export data
-//    - struct data
-//
-//  pass 2. [ASTProgram, ModuleMeta][] -> ModuleEmitter[] -> MapleModule[]
-//    Goal: emit chunks of code and organize them in the maple module
-//    - stdlib ModuleMetas are hardcoded and the imported ones are pulled in for resolving imports
-//    - 2a. resolve import meta data (function signatures, global types, struct data)
-//    - 2b. ModuleBuilder takes meta data and ASTProgram and generates the MapleModule
-//
-//
-//  Part 2. Compile and link
-//  pass 3. MapleModule[] -> .wat[]
-//    Goal: emit .wat files
-//    - MapleModule.buildWat() -> fs.writeFile
-//
-//  pass 4. .wat[] -> .o[]
-//    Goal: compile into binaries
-//    - wat2wasm each .wasm file to a .o binary
-//    - copy stlib .o files into build folder
-//
-//  pass 5.
-//    Goal: link and build final binary
-//    - wasm-ld all .o files in the build folder and generate the .wasm file
+// Next idea status:
+//   1) Optimization pass (constant folding/static simplification): pending.
 //
 
 async function openFile(fp: string): Promise<string> {
