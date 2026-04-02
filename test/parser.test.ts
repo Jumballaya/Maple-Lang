@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { StructMember } from "../src/compiler/emitters/emitter.types";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
+import { CastExpression } from "../src/parser/ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiteralExpression";
 import { Identifier } from "../src/parser/ast/expressions/Identifier";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
@@ -2144,6 +2145,65 @@ describe("Parser: Operators", () => {
       assert(postStmt.left.typeAnnotation === "i32");
       assert(postStmt.operator === "--");
     });
+  });
+});
+
+describe("Parser: Cast", () => {
+  test("simple cast: integer literal as f32", () => {
+    const p = new Parser("fn test(): f32 { return 5 as f32; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    const cast = ret.returnValue;
+    assert(cast instanceof CastExpression);
+    assert.equal(cast.targetType, "f32");
+    assert(cast.expr instanceof IntegerLiteralExpression);
+  });
+
+  test("simple cast: float literal as i32", () => {
+    const p = new Parser("fn test(): i32 { return 3.14 as i32; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    const cast = ret.returnValue;
+    assert(cast instanceof CastExpression);
+    assert.equal(cast.targetType, "i32");
+    assert(cast.expr instanceof FloatLiteralExpression);
+  });
+
+  test("cast binds tighter than addition: x as f32 + 1.0 parses as (x as f32) + 1.0", () => {
+    const p = new Parser("fn test(x: i32): f32 { return x as f32 + 1.0; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    // outer node should be an infix + with left being a CastExpression
+    const infix = ret.returnValue;
+    assert(infix instanceof InfixExpression);
+    assert.equal(infix.operator, "+");
+    assert(infix.left instanceof CastExpression);
+    assert.equal(infix.left.targetType, "f32");
+  });
+
+  test("cast to same-family type: n as u8 parses with targetType u8", () => {
+    const p = new Parser("fn test(n: i32): i32 { return n as u8; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    const cast = ret.returnValue;
+    assert(cast instanceof CastExpression);
+    assert.equal(cast.targetType, "u8");
   });
 });
 

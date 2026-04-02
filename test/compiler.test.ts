@@ -403,8 +403,75 @@ describe("Emission: Prefix/Postfix", () => {
       }
     `);
     assert(wat.includes("local.set $x"));
-    assert(wat.includes("i32.add"));
-    assert(wat.includes("i32.sub"));
+    // x++ → (local.set $x (i32.add (local.get $x) (i32.const 1)))
+    assert(wat.includes("(i32.const 1)"));
+    // x-- → (local.set $x (i32.add (local.get $x) (i32.const -1)))
+    assert(wat.includes("(i32.const -1)"));
+  });
+});
+
+describe("Emission: Cast", () => {
+  test("i32 as f32 emits f32.convert_i32_s", () => {
+    const { wat } = compile("fn test(x: i32): f32 { return x as f32; }");
+    assert(wat.includes("f32.convert_i32_s"));
+  });
+
+  test("f32 as i32 emits i32.trunc_f32_s", () => {
+    const { wat } = compile("fn test(x: f32): i32 { return x as i32; }");
+    assert(wat.includes("i32.trunc_f32_s"));
+  });
+
+  test("i32 as u8 emits no conversion opcode (same WASM type)", () => {
+    const { wat } = compile("fn test(n: i32): i32 { return n as u8; }");
+    assert(!wat.includes("convert"));
+    assert(!wat.includes("trunc"));
+    assert(wat.includes("local.get $n"));
+  });
+
+  test("cast inside binary expression resolves correct type", () => {
+    const { wat } = compile("fn test(x: i32): f32 { return x as f32 + 1.0; }");
+    assert(wat.includes("f32.add"));
+    assert(wat.includes("f32.convert_i32_s"));
+  });
+});
+
+describe("Emission: Postfix Statement", () => {
+  test("idx++ as statement emits plain local.set, not block-with-result", () => {
+    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; idx++; return idx; }");
+    assert(wat.includes("(local.set $idx"), "Must mutate idx");
+    assert(
+      !wat.includes("(block (result i32)"),
+      "Statement-level postfix must not emit (block (result i32)) — that leaves a value on the stack",
+    );
+  });
+
+  test("idx-- as statement emits plain local.set, not block-with-result", () => {
+    const { wat } = compile("fn test(): i32 { let idx: i32 = 5; idx--; return idx; }");
+    assert(wat.includes("(local.set $idx"), "Must mutate idx");
+    assert(
+      !wat.includes("(block (result i32)"),
+      "Statement-level postfix must not emit (block (result i32))",
+    );
+  });
+
+  test("idx++ as statement increments by 1 in emitted WAT", () => {
+    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; idx++; return idx; }");
+    // Must emit: (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
+    assert(wat.includes("(i32.add (local.get $idx) (i32.const 1))"), "Must increment by 1");
+  });
+
+  test("idx-- as statement decrements by 1 in emitted WAT", () => {
+    const { wat } = compile("fn test(): i32 { let idx: i32 = 5; idx--; return idx; }");
+    // Must emit: (local.set $idx (i32.add (local.get $idx) (i32.const -1)))
+    assert(wat.includes("(i32.add (local.get $idx) (i32.const -1))"), "Must decrement by 1");
+  });
+
+  test("postfix as rvalue still emits block-with-result", () => {
+    // When postfix is used as an expression (not a statement), the old value must be returned
+    const { wat } = compile(
+      "fn test(): i32 { let idx: i32 = 0; let x: i32 = idx++; return x; }",
+    );
+    assert(wat.includes("(block (result i32)"), "Rvalue postfix must emit block with result");
   });
 });
 

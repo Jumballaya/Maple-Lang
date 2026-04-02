@@ -1,5 +1,6 @@
 import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../parser/ast/expressions/CallExpression";
+import { CastExpression } from "../parser/ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression";
 import { Identifier } from "../parser/ast/expressions/Identifier";
 import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
@@ -10,7 +11,7 @@ import { PointerMemberExpression } from "../parser/ast/expressions/PointerMember
 import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import type { ASTExpression } from "../parser/ast/types/ast.type";
-import { baseScalar, cmpOps } from "./emitters/emit.types";
+import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
 import type {
   FunctionContext,
   FunctionMeta,
@@ -209,6 +210,10 @@ export class ModuleEmitter {
         }
       }
       throw new Error(`[function call expression] unable to determine type`);
+    }
+    if (expr instanceof CastExpression) {
+      const wt = valueTypeToWasm(expr.targetType);
+      return wt === "f32" ? "f32" : "i32";
     }
     if (expr instanceof PointerMemberExpression || expr instanceof MemberExpression) {
       if (!(expr.parent instanceof Identifier)) return "i32";

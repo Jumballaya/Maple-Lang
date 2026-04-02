@@ -2,6 +2,7 @@ import { ArrayLiteralExpression } from "../../../parser/ast/expressions/ArrayLit
 import { AssignmentExpression } from "../../../parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../../../parser/ast/expressions/CallExpression";
+import { CastExpression } from "../../../parser/ast/expressions/CastExpression";
 import { CharLiteralExpression } from "../../../parser/ast/expressions/CharLiteralExpression";
 import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression";
 import { Identifier } from "../../../parser/ast/expressions/Identifier";
@@ -17,7 +18,7 @@ import { StructLiteralExpression } from "../../../parser/ast/expressions/StructL
 import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
-import { wasmLoadOp } from "../emit.types";
+import { valueTypeToWasm, wasmLoadOp } from "../emit.types";
 import { emitAssignmentExpression } from "./assignment";
 import { emitBinaryOp } from "./binary";
 import { emitGet, emitNumberGet } from "./core";
@@ -139,6 +140,18 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     //
   } else if (expression instanceof PostfixExpression) {
     writer.append(emitPostfixExpression(expression, emitter));
+    //
+  } else if (expression instanceof CastExpression) {
+    const inner = emitExpression(expression.expr, emitter);
+    const from = emitter.getExprType(expression.expr);
+    const toWasm = valueTypeToWasm(expression.targetType);
+    if (from === "i32" && toWasm === "f32") {
+      writer.line(`(f32.convert_i32_s ${inner})`);
+    } else if (from === "f32" && toWasm === "i32") {
+      writer.line(`(i32.trunc_f32_s ${inner})`);
+    } else {
+      writer.line(inner); // same WASM type (e.g. i32 → u8, i32 → i16): no-op
+    }
     //
   } else {
     throw new Error(`[expression emitter] "${expression.constructor}" emit not implemented`);

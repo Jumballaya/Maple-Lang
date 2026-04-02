@@ -7,6 +7,7 @@ import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression
 import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "./ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "./ast/expressions/CallExpression";
+import { CastExpression } from "./ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "./ast/expressions/FloatLiteralExpression";
 import {
   FunctionLiteralExpression,
@@ -92,6 +93,8 @@ export class Parser {
     LBracket: INDEX,
     Period: INDEX,
 
+    As: PRODUCT,
+
     Assign: ASSIGN,
     AddAssign: ASSIGN,
     MinusAssign: ASSIGN,
@@ -157,6 +160,7 @@ export class Parser {
     this.registerInfix("RightShiftAssign", this.parseAssignmentExpression.bind(this));
     this.registerInfix("Period", this.parseInfixExpression.bind(this));
     this.registerInfix("LBracket", this.parseIndexExpression.bind(this));
+    this.registerInfix("As", this.parseCastExpression.bind(this));
 
     // Postfix
     this.registerPostfix("Increment", this.parsePostfixExpression.bind(this));
@@ -886,6 +890,16 @@ export class Parser {
       return null;
     }
     return new IndexExpression(token, left, index);
+  }
+
+  private parseCastExpression(left: ASTExpression): ASTExpression | null {
+    const token = this.tokenizer.curToken(); // the 'as' token
+    this.tokenizer.nextToken(); // advance to the target type
+    const targetType = this.parseTyping();
+    if (!targetType) {
+      return null;
+    }
+    return new CastExpression(token, left, targetType);
   }
 
   private parseCallExpression(func: ASTExpression): ASTExpression {

@@ -1,0 +1,40 @@
+// i32 -> f32: uses f32.convert_i32_s
+export fn int_to_float(n: i32): f32 {
+  return n as f32;
+}
+
+// f32 -> i32: uses i32.trunc_f32_s (truncates toward zero, not floor)
+export fn float_to_int(f: f32): i32 {
+  return f as i32;
+}
+
+// cast inside arithmetic: (n as f32) * scale
+export fn scale(n: i32, scale: f32): f32 {
+  return n as f32 * scale;
+}
+
+// integer average using cast to avoid truncation on input
+export fn average(a: i32, b: i32): f32 {
+  return (a as f32 + b as f32) * 0.5;
+}
+
+// no-op cast: i32 -> u8 emits no conversion instruction
+export fn mask_byte(n: i32): i32 {
+  return n as u8;
+}
+
+export fn _start(): i32 {
+  // int_to_float(7) -> 7.0, then as i32 -> 7
+  let a: i32 = int_to_float(7) as i32;
+
+  // float_to_int(9.9) -> 9 (truncates)
+  let b: i32 = float_to_int(9.9);
+
+  // scale(3, 2.0) -> 6.0, then as i32 -> 6
+  let c: i32 = scale(3, 2.0) as i32;
+
+  // average(3, 7) -> 5.0, then as i32 -> 5
+  let d: i32 = average(3, 7) as i32;
+
+  return a + b + c + d;
+}
