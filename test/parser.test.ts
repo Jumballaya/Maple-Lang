@@ -2435,17 +2435,42 @@ function assertFunctionSignature(
 }
 
 // params: Array<[name, type]>
+// ─── Error recovery tests ─────────────────────────────────────────────────────
+
+describe("Parser: Error recovery", () => {
+  test("bare identifier without semicolon at top level does not hang", () => {
+    // Previously caused an infinite loop / OOM crash
+    const p = new Parser("asdads\nfn f(): i32 { return 1; }");
+    p.parse("test");
+    // Parser must finish — if it hangs the test runner catches it via timeout
+    assert(p.errors.length >= 0); // just asserting no crash
+  });
+
+  test("missing semicolon inside a function body does not hang", () => {
+    const p = new Parser("fn test(): void {\n  let x: i32 = 5\n}");
+    p.parse("test");
+    assert(p.errors.length > 0);
+  });
+
+  test("multiple errors in one file are all collected", () => {
+    const p = new Parser(
+      "fn a(): void {\n  let x: i32 = 5\n}\nfn b(): void {\n  let y: i32 = 6\n}",
+    );
+    p.parse("test");
+    assert(p.errors.length >= 2, `Expected >=2 errors, got ${p.errors.length}`);
+  });
+
+  test("valid code after a top-level error is still parsed", () => {
+    const p = new Parser("asdads\nfn f(): i32 { return 1; }");
+    const ast = p.parse("test");
+    const fnNames = ast.statements
+      .filter((s) => s.constructor.name === "FunctionStatement")
+      .map((s) => s.tokenLiteral());
+    assert(fnNames.includes("fn"), "FunctionStatement should be present after the bad identifier");
+  });
+});
+
 // ─── Error position tests ─────────────────────────────────────────────────────
-//
-// Programs used here are chosen to leave curToken = EOF after the first error
-// fires, so the parse() loop exits naturally without infinite-looping.
-//
-//   "let x:"               — parseTyping() fires "Expected type" with the
-//                            EOF token (line 1, col 7).
-//   "let x: i32 ="         — parseExpression() fires noPrefixParseFnError
-//                            for "EOF" (line 1, col 14).
-//   "fn f(): void {}\nlet x:"  — same type error, but the let is on line 2,
-//                            so col 7 on line 2.
 
 describe("Parser: Error positions", () => {
   test("errors expose .line directly (not nested in .token)", () => {

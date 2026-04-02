@@ -181,6 +181,8 @@ export class Parser {
       const statement = this.parseStatement(false, true);
       if (statement !== null) {
         program.statements.push(statement);
+      } else {
+        this.synchronize();
       }
     }
 
@@ -519,6 +521,8 @@ export class Parser {
       const stmt = this.parseStatement();
       if (stmt !== null) {
         block.statements.push(stmt);
+      } else {
+        this.synchronize();
       }
     }
 
@@ -758,9 +762,12 @@ export class Parser {
 
     const expression = this.parseExpression(LOWEST);
 
-    if (this.tokenizer.peekTokenIs("Semicolon")) {
-      this.tokenizer.nextToken(); // consume last token of expression
-      this.tokenizer.nextToken(); // consume semicolor
+    // Always advance past the last token the expression left as curToken.
+    // Without this, a missing semicolon keeps curToken unchanged and the
+    // outer parse loop spins on the same token forever.
+    this.tokenizer.nextToken();
+    if (this.tokenizer.curTokenIs("Semicolon")) {
+      this.tokenizer.nextToken(); // consume semicolon
     }
 
     return new ExpressionStatement(statementToken, expression);
@@ -1194,6 +1201,35 @@ export class Parser {
       return "";
     }
     return type;
+  }
+
+  // Error recovery: advance to the next statement boundary so the parse loop
+  // can continue after an error without spinning on the same token.
+  private synchronize(): void {
+    while (!this.tokenizer.curTokenIs("EOF")) {
+      if (this.tokenizer.curTokenIs("Semicolon")) {
+        this.tokenizer.nextToken();
+        return;
+      }
+      const t = this.tokenizer.curToken().type;
+      if (
+        t === "Func" ||
+        t === "Let" ||
+        t === "Const" ||
+        t === "Struct" ||
+        t === "Return" ||
+        t === "If" ||
+        t === "For" ||
+        t === "While" ||
+        t === "Break" ||
+        t === "Continue" ||
+        t === "Switch" ||
+        t === "RBrace"
+      ) {
+        return;
+      }
+      this.tokenizer.nextToken();
+    }
   }
 
   // Errors
