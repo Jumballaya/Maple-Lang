@@ -151,6 +151,86 @@ describe("Emission: Structs", () => {
     assert(wat.includes("v_x"));
     assert(wat.includes("v_y"));
   });
+
+  test("struct i32 member used in binary arithmetic emits i32.add and loads both members", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.x + p.y;
+      }
+    `);
+    assert(wat.includes("i32.add"));
+    assert(wat.includes("local.get $p_x"));
+    assert(wat.includes("local.get $p_y"));
+  });
+
+  test("struct member used in comparison emits comparison opcode and loads member", () => {
+    const { wat } = compile(`
+      struct Counter { n: i32 }
+      fn test(): i32 {
+        let c: Counter = { n = 5 };
+        if (c.n > 0) {
+          return 1;
+        }
+        return 0;
+      }
+    `);
+    assert(wat.includes("i32.gt_s"));
+    assert(wat.includes("local.get $c_n"));
+  });
+
+  test("struct f32 member used in binary arithmetic emits f32.add and loads both members", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn test(): f32 {
+        let v: Vec2 = { x = 1.5, y = 2.5 };
+        return v.x + v.y;
+      }
+    `);
+    assert(wat.includes("f32.add"));
+    assert(wat.includes("local.get $v_x"));
+    assert(wat.includes("local.get $v_y"));
+  });
+
+  test("struct member as direct while-loop condition emits loop", () => {
+    const { wat } = compile(`
+      struct Flag { active: i32 }
+      fn test(): void {
+        let f: Flag = { active = 1 };
+        while (f.active) {
+          f.active = 0;
+        }
+      }
+    `);
+    assert(wat.includes("(loop"));
+    assert(wat.includes("local.get $f_active"));
+  });
+
+  test("prefix minus on struct member emits negation", () => {
+    const { wat } = compile(`
+      struct Num { val: i32 }
+      fn test(): i32 {
+        let n: Num = { val = 7 };
+        return -n.val;
+      }
+    `);
+    assert(wat.includes("i32.sub"));
+    assert(wat.includes("local.get $n_val"));
+  });
+
+  test("memory-backed struct param member used in binary arithmetic resolves type correctly", () => {
+    // struct params are passed as i32 memory pointers; members read via i32.load + offset
+    const { wat } = compile(`
+      struct Pair { a: i32, b: i32 }
+      fn test(p: Pair): i32 {
+        return p.a + p.b;
+      }
+    `);
+    assert(wat.includes("i32.add"));
+    assert(wat.includes("i32.load"));
+    assert(wat.includes("local.get $p"));
+  });
 });
 
 describe("Emission: Control Flow", () => {

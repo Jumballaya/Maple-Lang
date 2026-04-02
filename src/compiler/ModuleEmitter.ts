@@ -211,7 +211,23 @@ export class ModuleEmitter {
       throw new Error(`[function call expression] unable to determine type`);
     }
     if (expr instanceof PointerMemberExpression || expr instanceof MemberExpression) {
-      throw new Error(`[get expression type] member/pointer member expression not implemented`);
+      if (!(expr.parent instanceof Identifier)) return "i32";
+      const base = expr.parent.tokenLiteral();
+      const member = expr.member;
+      // flat local path: struct was stored as p_x, p_y, etc.
+      const flat = this.getVar(`${base}_${member}`);
+      if (flat) {
+        const t = baseScalar(flat.type);
+        return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
+      }
+      // memory-backed struct path: p is a pointer to struct in memory
+      const baseVar = this.getVar(base);
+      if (!baseVar) return "i32";
+      const structName = baseVar.type.startsWith("*") ? baseVar.type.slice(1) : baseVar.type;
+      const memberData = this.mod.structs[structName]?.members[member];
+      if (!memberData) return "i32";
+      const t = baseScalar(memberData.type);
+      return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
     }
 
     return "i32";
