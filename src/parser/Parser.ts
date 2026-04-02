@@ -768,6 +768,11 @@ export class Parser {
     this.tokenizer.nextToken();
     if (this.tokenizer.curTokenIs("Semicolon")) {
       this.tokenizer.nextToken(); // consume semicolon
+    } else {
+      this.pushError(
+        `Parser: Expected ';' after expression, got ${this.tokenizer.curToken().type}`,
+        this.tokenizer.curToken(),
+      );
     }
 
     return new ExpressionStatement(statementToken, expression);
