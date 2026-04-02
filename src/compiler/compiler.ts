@@ -7,6 +7,7 @@ import type { ModuleMeta } from "./emitters/emitter.types";
 import { emitModule, extractModuleMeta } from "./emitters/module";
 import type { MapleModule } from "./MapleModule";
 import { stdlib } from "./stdlib";
+import { typeCheck } from "./TypeChecker";
 
 //
 //    Next idea:
@@ -149,7 +150,16 @@ export async function compiler(
     }
   }
 
-  // @TODO: Validation pass
+  // Validation pass — type checker
+  for (const mod of Object.values(pass1)) {
+    const typeErrors = typeCheck(mod.ast, mod.data);
+    if (typeErrors.length > 0) {
+      for (const e of typeErrors) {
+        console.error(e.format());
+      }
+      return null;
+    }
+  }
   // @TODO: Optimization pass
 
   // step 3. compile
