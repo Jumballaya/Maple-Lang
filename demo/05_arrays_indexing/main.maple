@@ -1,10 +1,61 @@
-export fn _start(seed: i32): i32 {
+// read a single element by literal index
+export fn read_literal(): i32 {
   let arr: i32[] = [10, 20, 30, 40];
-  let i: i32 = seed;
+  return arr[2];
+}
 
-  if (i < 0) {
-    i = 0;
+// read a single element by variable index
+export fn read_variable(i: i32): i32 {
+  let arr: i32[] = [10, 20, 30, 40];
+  return arr[i];
+}
+
+// write an element then read it back
+export fn write_and_read(): i32 {
+  let arr: i32[] = [1, 2, 3];
+  arr[1] = 99;
+  return arr[1];
+}
+
+// sum all elements
+export fn sum(): i32 {
+  let arr: i32[] = [5, 10, 15, 20];
+  let total: i32 = 0;
+  let i: i32 = 0;
+  while (i < 4) {
+    total = total + arr[i];
+    i = i + 1;
   }
+  return total;
+}
 
-  return arr[i + 1];
+// find maximum element
+export fn max(): i32 {
+  let arr: i32[] = [3, 9, 1, 7, 5];
+  let m: i32 = arr[0];
+  let i: i32 = 1;
+  while (i < 5) {
+    if (arr[i] > m) {
+      m = arr[i];
+    }
+    i = i + 1;
+  }
+  return m;
+}
+
+// reverse-index: read from the end
+export fn last(): i32 {
+  let arr: i32[] = [100, 200, 300];
+  let len: i32 = 3;
+  return arr[len - 1];
+}
+
+// _start: 30 + 30 + 99 + 50 + 9 + 300 = 518
+export fn _start(): i32 {
+  return read_literal()
+       + read_variable(2)
+       + write_and_read()
+       + sum()
+       + max()
+       + last();
 }
