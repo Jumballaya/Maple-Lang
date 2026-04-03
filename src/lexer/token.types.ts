@@ -39,6 +39,7 @@ export type Token =
   | U64TypeToken
   | F64TypeToken
   | BoolTypeToken
+  | StringTypeToken
   | VoidToken
 
   // Operators
@@ -282,6 +283,11 @@ export type F64TypeToken = {
 export type BoolTypeToken = {
   type: "Boolean";
   literal: "bool";
+} & Pos;
+
+export type StringTypeToken = {
+  type: "String";
+  literal: "string";
 } & Pos;
 
 export type StarToken = {

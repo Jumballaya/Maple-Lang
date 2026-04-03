@@ -36,4 +36,5 @@ export const TYPE_KEYWORDS = new Map<string, Token["type"]>([
   ["f32", "f32"],
   ["f64", "f64"],
   ["bool", "Boolean"],
+  ["string", "String"],
 ]);

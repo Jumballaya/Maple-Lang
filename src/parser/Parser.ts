@@ -21,6 +21,7 @@ import { IntegerLiteralExpression } from "./ast/expressions/IntegerLiteral";
 import { MemberExpression } from "./ast/expressions/MemberExpression";
 import { PostfixExpression } from "./ast/expressions/PostfixExpression";
 import { PrefixExpression } from "./ast/expressions/PrefixExpression";
+import { StringLiteralExpression } from "./ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "./ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { BreakStatement } from "./ast/statements/BreakStatement";
@@ -118,11 +119,13 @@ export class Parser {
   constructor(source: string, file = "") {
     this.file = file;
     this.tokenizer = new Tokenizer(source);
+    this.structDefs.set("string", { len: "i32", data: "i32" });
 
     // Prefix
     this.registerPrefix("Identifier", this.parseIdentifier.bind(this));
     this.registerPrefix("FloatLiteral", this.parseFloatLiteral.bind(this));
     this.registerPrefix("IntegerLiteral", this.parseIntegerLiteral.bind(this));
+    this.registerPrefix("StringLiteral", this.parseStringLiteral.bind(this));
 
     this.registerPrefix("Tilde", this.parsePrefixExpression.bind(this));
     this.registerPrefix("Bang", this.parsePrefixExpression.bind(this));
@@ -510,6 +513,7 @@ export class Parser {
     if (expr instanceof IntegerLiteralExpression) return "i32";
     if (expr instanceof FloatLiteralExpression) return "f32";
     if (expr instanceof BooleanLiteralExpression) return "bool";
+    if (expr instanceof StringLiteralExpression) return "string";
     if (expr instanceof CastExpression) return expr.targetType;
     if (expr instanceof Identifier) {
       return this.identifierTypes.get(expr.tokenLiteral()) ?? "";
@@ -1017,6 +1021,12 @@ export class Parser {
       this.tokenizer.curToken(),
       this.tokenizer.curTokenIs("True"),
     );
+  }
+
+  private parseStringLiteral(): ASTExpression {
+    const token = this.tokenizer.curToken();
+    const value = new TextDecoder().decode(token.literal as Uint8Array);
+    return new StringLiteralExpression(token, value);
   }
 
   private parseArrayLiteral(type: string): ASTExpression | null {

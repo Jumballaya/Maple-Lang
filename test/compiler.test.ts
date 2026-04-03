@@ -592,13 +592,11 @@ describe("Emission: Literals", () => {
     assert(wat.includes("(i32.const 0)"));
   });
 
-  test("string literal currently fails to parse as expression", () => {
-    const p = new Parser('fn test(): i32 { return "hello"; }');
-    p.parse("test");
-    assert(p.errors.length > 0);
-    assert(
-      p.errors.some((e) => e.message.includes("No prefix parse function found for StringLiteral")),
-    );
+  test("string literal in let emits pointer constant and data segment", () => {
+    const { wat } = compile('fn test(): i32 { let s: string = "hello"; return 0; }');
+    assert(wat.includes("(local $s i32)"), `Missing local string slot:\n${wat}`);
+    assert(wat.includes("(local.set $s (i32.const"), `Missing pointer constant emit:\n${wat}`);
+    assert(wat.includes('(data (offset (i32.const'), `Missing data segment emit:\n${wat}`);
   });
 
   test("char literal currently fails to parse as expression", () => {
@@ -867,5 +865,26 @@ describe("Emission: Type inference", () => {
     const { wat } = compile("fn f(): void { let y = 3.14; }");
     assert(wat.includes("(local $y f32)"), `Missing (local $y f32) in:\n${wat}`);
     assert(wat.includes("(local.set $y (f32.const 3.14))"), `Missing local.set in:\n${wat}`);
+  });
+});
+
+describe("Emission: Strings", () => {
+  test("explicit string local emits i32 local and string pointer set", () => {
+    const { wat } = compile('fn f(): void { let s: string = "hello"; }');
+    assert(wat.includes("(local $s i32)"), `Missing (local $s i32) in:\n${wat}`);
+    assert(wat.includes("(local.set $s (i32.const"), `Missing string pointer set in:\n${wat}`);
+    assert(wat.includes('(data (offset (i32.const'), `Missing data segment in:\n${wat}`);
+  });
+
+  test("inferred string local emits i32 local and string pointer set", () => {
+    const { wat } = compile('fn f(): void { let s = "world"; }');
+    assert(wat.includes("(local $s i32)"), `Missing (local $s i32) in:\n${wat}`);
+    assert(wat.includes("(local.set $s (i32.const"), `Missing string pointer set in:\n${wat}`);
+    assert(wat.includes('(data (offset (i32.const'), `Missing data segment in:\n${wat}`);
+  });
+
+  test("string .len member access emits load from string header", () => {
+    const { wat } = compile('fn f(): i32 { let s: string = "hello"; return s.len; }');
+    assert(wat.includes("i32.load"), `Missing i32.load for s.len in:\n${wat}`);
   });
 });

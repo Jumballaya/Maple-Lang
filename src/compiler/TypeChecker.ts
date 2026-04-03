@@ -12,6 +12,7 @@ import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
 import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
 import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
+import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
@@ -42,6 +43,7 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
   if (expr instanceof IntegerLiteralExpression) return "i32";
   if (expr instanceof FloatLiteralExpression) return "f32";
   if (expr instanceof BooleanLiteralExpression) return "bool";
+  if (expr instanceof StringLiteralExpression) return "string";
 
   if (expr instanceof Identifier) {
     return scope.get(expr.tokenLiteral())?.type ?? null;
@@ -120,6 +122,7 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
 
 function typesCompatible(declared: string, actual: string, meta: ModuleMeta): boolean {
   if (declared === actual) return true;
+  if (declared === "string" || actual === "string") return false;
   if (declared in meta.structs || actual in meta.structs) return false;
   if (declared.endsWith("[]") || actual.endsWith("[]")) return false;
   return valueTypeToWasm(declared) === valueTypeToWasm(actual);

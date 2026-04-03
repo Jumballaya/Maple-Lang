@@ -238,3 +238,25 @@ fn main(): i32 {
     `);
   });
 });
+
+describe("TypeChecker: Strings", () => {
+  test("string variable assigned string literal is ok", () => {
+    expectNoErrors('fn f(): void { let s: string = "hello"; }');
+  });
+
+  test("i32 variable assigned string literal is an error", () => {
+    expectError('fn f(): void { let x: i32 = "hello"; }', "Type mismatch");
+  });
+
+  test("string variable assigned i32 literal is an error", () => {
+    expectError("fn f(): void { let s: string = 5; }", "Type mismatch");
+  });
+
+  test("string argument to string parameter is ok", () => {
+    expectNoErrors('fn f(s: string): void {} fn g(): void { f("hello"); }');
+  });
+
+  test("string argument to i32 parameter is an error", () => {
+    expectError('fn f(n: i32): void {} fn g(): void { f("hello"); }', "Type mismatch");
+  });
+});

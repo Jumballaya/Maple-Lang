@@ -12,6 +12,7 @@ import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerL
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
 import { PostfixExpression } from "../src/parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../src/parser/ast/expressions/PrefixExpression";
+import { StringLiteralExpression } from "../src/parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../src/parser/ast/statements/ContinueStatement";
@@ -2580,9 +2581,23 @@ describe("Parser: Type inference", () => {
     assert.equal(stmt.typeAnnotation, "bool");
   });
 
+  test("infers string from string literal", () => {
+    const stmt = parseLet('let s = "hello";');
+    assert.equal(stmt.typeAnnotation, "string");
+    assert(stmt.expression instanceof StringLiteralExpression);
+    assert.equal(stmt.expression.value, "hello");
+  });
+
   test("explicit i32 annotation still works (no regression)", () => {
     const stmt = parseLet("let x: i32 = 5;");
     assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("explicit string annotation parses and stores string literal expression", () => {
+    const stmt = parseLet('let s: string = "hello";');
+    assert.equal(stmt.typeAnnotation, "string");
+    assert(stmt.expression instanceof StringLiteralExpression);
+    assert.equal(stmt.expression.value, "hello");
   });
 
   test("infers i32 from i32 infix expression", () => {
@@ -2692,6 +2707,25 @@ describe("Parser: Type inference", () => {
       p.errors.some((e) => e.message.includes("Cannot infer type")),
       `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
     );
+  });
+
+  test("string literal as standalone expression parses", () => {
+    const p = new Parser('"hello";');
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[0];
+    assert(stmt instanceof ExpressionStatement);
+    assert(stmt.expression instanceof StringLiteralExpression);
+    assert.equal(stmt.expression.value, "hello");
+  });
+
+  test("function parameter with string type parses", () => {
+    const p = new Parser("fn f(s: string): void {}");
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[0];
+    assert(stmt instanceof FunctionStatement);
+    assertFunctionParams(stmt, [["s", "string"]]);
   });
 });
 

@@ -1,0 +1,36 @@
+// explicit string type annotation
+export fn explicit_len(): i32 {
+  let s: string = "hello123";
+  return s.len;
+}
+
+// inferred string type annotation
+export fn inferred_len(): i32 {
+  let s = "maple123";
+  return s.len;
+}
+
+// pass string through a typed parameter
+fn twice_len(s: string): i32 {
+  return s.len + s.len;
+}
+
+export fn param_len(): i32 {
+  let s: string = "wasm1234";
+  return twice_len(s);
+}
+
+// avoid returning a bare string literal directly; assign first, then return
+// through a string-typed local so string data is extracted into the data section
+export fn local_then_return(flag: bool): i32 {
+  let msg: string = "alpha123";
+  if (flag) {
+    msg = "beta1234";
+  }
+  return msg.len;
+}
+
+// _start: 8 + 8 + 16 + 8 = 40
+export fn _start(): i32 {
+  return explicit_len() + inferred_len() + param_len() + local_then_return(false);
+}

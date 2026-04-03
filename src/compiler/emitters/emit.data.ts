@@ -107,7 +107,8 @@ function extractArrayLiteral(expr: ArrayLiteralExpression, builder: ModuleBuilde
 
 function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuilder) {
   const lit = expr.value;
-  const len = lit.length;
+  const utf8 = new TextEncoder().encode(lit);
+  const len = utf8.length;
 
   //
   //    struct string {
@@ -115,7 +116,10 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuil
   //      data: *u8,
   //    }
   //
-  const charPtr = builder.internString(lit); // data for chars
+  const rawBytes = Array.from(utf8).reduce((acc, b) => {
+    return `${acc}\\${b.toString(16).padStart(2, "0")}`;
+  }, "");
+  const charPtr = builder.addBytes(rawBytes); // data for chars
   const header = numToLittleEndian([len, charPtr], "i32"); // [len, ptr]
   const hdrAddr = builder.addBytes(header); // auto-alloc header
   expr.location = hdrAddr; // string pointer points to header

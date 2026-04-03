@@ -10,6 +10,7 @@ import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
 import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
 import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
+import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import type { ASTExpression } from "../parser/ast/types/ast.type";
 import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
 import type {
@@ -148,6 +149,9 @@ export class ModuleEmitter {
     }
     if (expr instanceof BooleanLiteralExpression) {
       return "bool";
+    }
+    if (expr instanceof StringLiteralExpression) {
+      return "i32";
     }
     if (expr instanceof Identifier) {
       const v = this.getVar(expr.tokenLiteral());

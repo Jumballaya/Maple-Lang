@@ -77,6 +77,19 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
     }
   }
 
+  // Built-in string struct (always available)
+  if (!builder.getStruct("string")) {
+    builder.defStruct({
+      name: "string",
+      size: 8,
+      exported: false,
+      members: {
+        len: { name: "len", offset: 0, size: 4, type: "i32" },
+        data: { name: "data", offset: 4, size: 4, type: "i32" },
+      },
+    });
+  }
+
   // parse for functions at top level
   for (const stmt of program.statements) {
     if (stmt instanceof FunctionStatement) {
