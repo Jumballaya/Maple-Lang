@@ -4,6 +4,7 @@ import type { StructMember } from "../src/compiler/emitters/emitter.types";
 import { ArrayLiteralExpression } from "../src/parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
+import { CallExpression } from "../src/parser/ast/expressions/CallExpression";
 import { CastExpression } from "../src/parser/ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiteralExpression";
 import { Identifier } from "../src/parser/ast/expressions/Identifier";
@@ -2726,6 +2727,99 @@ describe("Parser: Type inference", () => {
     const stmt = prog.statements[0];
     assert(stmt instanceof FunctionStatement);
     assertFunctionParams(stmt, [["s", "string"]]);
+  });
+});
+
+describe("Parser: Struct methods", () => {
+  test("parses dotted method declaration with receiver binding", () => {
+    const src = `
+      struct Vec2 { x: i32, y: i32, }
+      fn Vec2.add(v)(other: Vec2): Vec2 { return v; }
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+
+    const stmt = prog.statements[1];
+    assert(stmt instanceof FunctionStatement);
+    assert.equal(stmt.name, "Vec2_add");
+    assert.equal((stmt as unknown as { receiverType?: string | null }).receiverType, "Vec2");
+    assertFunctionParams(stmt, [
+      ["v", "Vec2"],
+      ["other", "Vec2"],
+    ]);
+  });
+
+  test("parses exported dotted method declaration", () => {
+    const src = `
+      struct Vec2 { x: i32, y: i32, }
+      export fn Vec2.scale(v)(factor: i32): void {}
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+
+    const stmt = prog.statements[1];
+    assert(stmt instanceof FunctionStatement);
+    assert.equal(stmt.exported, true);
+    assert.equal(stmt.name, "Vec2_scale");
+    assert.equal((stmt as unknown as { receiverType?: string | null }).receiverType, "Vec2");
+    assertFunctionParams(stmt, [
+      ["v", "Vec2"],
+      ["factor", "i32"],
+    ]);
+  });
+
+  test("reports parse error for dotted method missing receiver binding", () => {
+    const src = `
+      struct Vec2 { x: i32, y: i32, }
+      fn Vec2.add(other: Vec2): Vec2 { return other; }
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected parse error for missing receiver binding");
+  });
+
+  test("desugars method call into mangled function call with receiver first", () => {
+    const src = `
+      struct Vec2 { x: i32, y: i32, }
+      fn test(v: Vec2, other: Vec2): void { v.add(other); }
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+
+    const testFn = prog.statements[1];
+    assert(testFn instanceof FunctionStatement);
+    const stmt = testFn.fnExpr.body.statements[0];
+    assert(stmt instanceof ExpressionStatement);
+    assert(stmt.expression instanceof CallExpression);
+    assert.equal(stmt.expression.func, "Vec2_add");
+    assert.equal(stmt.expression.args.length, 2);
+    assert(stmt.expression.args[0] instanceof Identifier);
+    assert.equal(stmt.expression.args[0].tokenLiteral(), "v");
+    assert(stmt.expression.args[1] instanceof Identifier);
+    assert.equal(stmt.expression.args[1].tokenLiteral(), "other");
+  });
+
+  test("desugars no-arg method call into mangled function call with receiver only", () => {
+    const src = `
+      struct Vec2 { x: i32, y: i32, }
+      fn test(v: Vec2): void { v.magnitude(); }
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+
+    const testFn = prog.statements[1];
+    assert(testFn instanceof FunctionStatement);
+    const stmt = testFn.fnExpr.body.statements[0];
+    assert(stmt instanceof ExpressionStatement);
+    assert(stmt.expression instanceof CallExpression);
+    assert.equal(stmt.expression.func, "Vec2_magnitude");
+    assert.equal(stmt.expression.args.length, 1);
+    assert(stmt.expression.args[0] instanceof Identifier);
+    assert.equal(stmt.expression.args[0].tokenLiteral(), "v");
   });
 });
 

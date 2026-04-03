@@ -287,6 +287,36 @@ export class Parser {
     }
     const identToken = this.tokenizer.curToken();
     const ident = identToken.literal.toString();
+    let mangledName = ident;
+    let receiverType: string | null = null;
+    let receiverToken: Token | null = null;
+
+    if (this.tokenizer.peekTokenIs("Period")) {
+      this.tokenizer.nextToken(); // consume '.'
+      if (!this.expectPeek("Identifier")) {
+        return null;
+      }
+      const methodToken = this.tokenizer.curToken();
+      const methodName = methodToken.literal.toString();
+      mangledName = `${ident}_${methodName}`;
+      receiverType = ident;
+
+      if (!this.expectPeek("LParen")) {
+        return null;
+      }
+      this.tokenizer.nextToken(); // consume '('
+      if (!this.tokenizer.curTokenIs("Identifier")) {
+        this.pushError("Parser: method receiver binding requires an identifier", this.tokenizer.curToken());
+        return null;
+      }
+      receiverToken = this.tokenizer.curToken();
+      const receiverName = receiverToken.literal.toString();
+      this.identifierTypes.set(receiverName, ident);
+      this.locals.push(receiverName);
+      if (!this.expectPeek("RParen")) {
+        return null;
+      }
+    }
 
     // Get the function expression: (): {}
     const expr = this.parseFunctionLiteral() as FunctionLiteralExpression | null;
@@ -294,13 +324,19 @@ export class Parser {
     if (!expr) {
       return null;
     }
+    if (receiverType && receiverToken) {
+      expr.params.unshift({
+        identifier: new Identifier(receiverToken, receiverType),
+        type: receiverType,
+      });
+    }
 
     if (!this.tokenizer.curTokenIs("RBrace")) {
       return null;
     }
     this.tokenizer.nextToken();
 
-    return new FunctionStatement(statementToken, expr, ident, exported);
+    return new FunctionStatement(statementToken, expr, mangledName, exported, receiverType);
   }
 
   private parseImportStatement(): ASTStatement | null {
@@ -952,8 +988,16 @@ export class Parser {
   }
 
   private parseCallExpression(func: ASTExpression): ASTExpression {
+    const callToken = this.tokenizer.curToken();
+    if (func instanceof MemberExpression && func.parent instanceof Identifier) {
+      const parentType = this.identifierTypes.get(func.parent.tokenLiteral()) ?? "";
+      if (this.structDefs.has(parentType)) {
+        const args = this.parseCallArguments();
+        return new CallExpression(callToken, `${parentType}_${func.member}`, [func.parent, ...args]);
+      }
+    }
     return new CallExpression(
-      this.tokenizer.curToken(),
+      callToken,
       func.tokenLiteral(),
       this.parseCallArguments(),
     );

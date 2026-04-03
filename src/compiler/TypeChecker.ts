@@ -415,6 +415,15 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   // Check each function body
   for (const stmt of program.statements) {
     if (!(stmt instanceof FunctionStatement)) continue;
+    if (stmt.receiverType && !(stmt.receiverType in meta.structs)) {
+      errors.push(
+        new MapleError(
+          `Method declared on unknown struct '${stmt.receiverType}'`,
+          stmt.token.line,
+          stmt.token.col,
+        ),
+      );
+    }
 
     // Build per-function scope: globals + params
     const scope: Scope = new Map(globals);

@@ -9,12 +9,20 @@ export class FunctionStatement implements ASTStatement {
   public fnExpr: FunctionLiteralExpression;
   public name: string;
   public exported: boolean;
+  public receiverType: string | null;
 
-  constructor(token: Token, fnExpr: FunctionLiteralExpression, name: string, exported = false) {
+  constructor(
+    token: Token,
+    fnExpr: FunctionLiteralExpression,
+    name: string,
+    exported = false,
+    receiverType: string | null = null,
+  ) {
     this.token = token;
     this.fnExpr = fnExpr;
     this.name = name;
     this.exported = exported;
+    this.receiverType = receiverType;
   }
 
   public tokenLiteral(): string {

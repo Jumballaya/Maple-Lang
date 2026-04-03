@@ -1,0 +1,21 @@
+struct Vec2 {
+  x: i32,
+  y: i32,
+}
+
+fn Vec2.sum(v)(): i32 {
+  return v.x + v.y;
+}
+
+fn Vec2.add(v)(other: Vec2): i32 {
+  return v.x + v.y + other.x + other.y;
+}
+
+let a: Vec2 = { x = 2, y = 3 };
+let b: Vec2 = { x = 5, y = 7 };
+
+export fn _start(): i32 {
+  let s1: i32 = a.sum();
+  let s2: i32 = a.add(b);
+  return s1 + s2;
+}

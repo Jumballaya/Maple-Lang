@@ -260,3 +260,24 @@ describe("TypeChecker: Strings", () => {
     expectError('fn f(n: i32): void {} fn g(): void { f("hello"); }', "Type mismatch");
   });
 });
+
+describe("TypeChecker: Struct methods", () => {
+  test("method receiver struct must exist", () => {
+    expectError("fn Ghost.vanish(g)(): void {}", "Method declared on unknown struct 'Ghost'");
+  });
+
+  test("method call with receiver and args is type-checked as normal function call", () => {
+    expectNoErrors(`
+struct Vec2 {
+  x: i32,
+  y: i32,
+}
+fn Vec2.add(v)(other: Vec2): i32 {
+  return v.x + other.x;
+}
+fn run(v: Vec2, other: Vec2): i32 {
+  return v.add(other);
+}
+    `);
+  });
+});

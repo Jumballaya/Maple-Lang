@@ -888,3 +888,27 @@ describe("Emission: Strings", () => {
     assert(wat.includes("i32.load"), `Missing i32.load for s.len in:\n${wat}`);
   });
 });
+
+describe("Emission: Struct methods", () => {
+  test("dotted method declaration emits mangled wasm function name", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: i32, y: i32, }
+      fn Vec2.add(v)(other: Vec2): i32 { return v.x + other.x; }
+    `);
+    assert(wat.includes("(func $Vec2_add"), `Missing mangled function name in:\n${wat}`);
+    assert(wat.includes("(param $v i32)"), `Missing receiver param in:\n${wat}`);
+    assert(wat.includes("(param $other i32)"), `Missing method arg param in:\n${wat}`);
+    assert(wat.includes("(result i32)"), `Missing method return type in:\n${wat}`);
+  });
+
+  test("method call emits mangled call with receiver as first argument", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: i32, y: i32, }
+      fn Vec2.add(v)(other: Vec2): i32 { return v.x + other.x; }
+      fn run(v: Vec2, other: Vec2): i32 { return v.add(other); }
+    `);
+    assert(wat.includes("(call $Vec2_add"), `Missing mangled method call in:\n${wat}`);
+    assert(wat.includes("(local.get $v)"), `Missing receiver argument in:\n${wat}`);
+    assert(wat.includes("(local.get $other)"), `Missing method argument in:\n${wat}`);
+  });
+});
