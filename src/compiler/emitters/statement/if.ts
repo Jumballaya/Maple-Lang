@@ -1,23 +1,42 @@
 import type { IfStatement } from "../../../parser/ast/statements/IfStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { extractNeedsReturn } from "../analysis/flow";
+import { MapleError } from "../../errors";
+import { extractIfResultType, extractNeedsReturn } from "../analysis/flow";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
-// if both branches return, than the if needs to be marked with a result
-// e.g. (if (result i32)
+// if both branches return, the if needs to be marked with the actual result type
 export function emitIfStatement(stmt: IfStatement, emitter: ModuleEmitter) {
   emitter.writer.append("(if");
 
   const needsReturn = extractNeedsReturn(stmt);
   if (needsReturn) {
-    emitter.writer.append(` (result i32)`);
+    const resultType = extractIfResultType(stmt, emitter);
+    if (resultType !== null) {
+      emitter.writer.append(` (result ${resultType})`);
+    }
   }
   emitter.writer.newLine();
 
   // condition
+  const cond = emitExpression(stmt.conditionExpr, emitter);
+  const t = emitter.getExprType(stmt.conditionExpr);
+  let asI32: string;
+  if (t === "bool") {
+    asI32 = cond;
+  } else if (t === "i32") {
+    asI32 = `(i32.ne ${cond} (i32.const 0))`;
+  } else if (t === "f32") {
+    asI32 = `(f32.ne ${cond} (f32.const 0))`;
+  } else {
+    throw new MapleError(
+      `if condition must be a numeric or boolean expression, got '${t}'`,
+      stmt.token.line,
+      stmt.token.col,
+    );
+  }
   emitter.writer.tabIn();
-  emitter.writer.line(emitExpression(stmt.conditionExpr, emitter));
+  emitter.writer.line(asI32);
 
   // then
   emitter.writer.open("(then ");

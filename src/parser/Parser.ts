@@ -306,7 +306,10 @@ export class Parser {
       }
       this.tokenizer.nextToken(); // consume '('
       if (!this.tokenizer.curTokenIs("Identifier")) {
-        this.pushError("Parser: method receiver binding requires an identifier", this.tokenizer.curToken());
+        this.pushError(
+          "Parser: method receiver binding requires an identifier",
+          this.tokenizer.curToken(),
+        );
         return null;
       }
       receiverToken = this.tokenizer.curToken();
@@ -691,15 +694,15 @@ export class Parser {
     this.tokenizer.nextToken();
     const condition = this.parseExpression(LOWEST);
 
+    if (!condition) {
+      return null;
+    }
+
     if (!this.expectPeek("RParen")) {
       return null;
     }
 
     if (!this.expectPeek("LBrace")) {
-      return null;
-    }
-
-    if (!condition) {
       return null;
     }
 
@@ -776,24 +779,8 @@ export class Parser {
       return null;
     }
 
-    // loopBody
-    const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
-    this.tokenizer.nextToken();
-    while (!(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))) {
-      const stmt = this.parseStatement(false);
-      if (!stmt) {
-        return null;
-      }
-      if (this.tokenizer.curTokenIs("Semicolon")) {
-        this.tokenizer.nextToken();
-      }
-      loopBody.statements.push(stmt);
-    }
-
-    if (!this.tokenizer.curTokenIs("RBrace")) {
-      return null;
-    }
-    this.tokenizer.nextToken();
+    const loopBody = this.parseBlockStatement();
+    this.tokenizer.nextToken(); // consume closing '}'
 
     return new ForStatement(
       stmtToken,
@@ -824,25 +811,8 @@ export class Parser {
       return null;
     }
 
-    // loopBody
-    const loopBody = new BlockStatement(this.tokenizer.curToken(), []);
-    this.tokenizer.nextToken();
-    while (!(this.tokenizer.curTokenIs("RBrace") || this.tokenizer.curTokenIs("EOF"))) {
-      const stmt = this.parseStatement(false);
-
-      if (!stmt) {
-        return null;
-      }
-      if (this.tokenizer.curTokenIs("Semicolon")) {
-        this.tokenizer.nextToken();
-      }
-      loopBody.statements.push(stmt);
-    }
-
-    if (!this.tokenizer.curTokenIs("RBrace")) {
-      return null;
-    }
-    this.tokenizer.nextToken();
+    const loopBody = this.parseBlockStatement();
+    this.tokenizer.nextToken(); // consume closing '}'
 
     return new WhileStatement(stmtToken, conditionExpr, loopBody);
   }
@@ -993,14 +963,13 @@ export class Parser {
       const parentType = this.identifierTypes.get(func.parent.tokenLiteral()) ?? "";
       if (this.structDefs.has(parentType)) {
         const args = this.parseCallArguments();
-        return new CallExpression(callToken, `${parentType}_${func.member}`, [func.parent, ...args]);
+        return new CallExpression(callToken, `${parentType}_${func.member}`, [
+          func.parent,
+          ...args,
+        ]);
       }
     }
-    return new CallExpression(
-      callToken,
-      func.tokenLiteral(),
-      this.parseCallArguments(),
-    );
+    return new CallExpression(callToken, func.tokenLiteral(), this.parseCallArguments());
   }
 
   private parseCallArguments(): ASTExpression[] {

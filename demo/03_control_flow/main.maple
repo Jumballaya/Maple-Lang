@@ -1,15 +1,45 @@
 export fn _start(limit: i32): i32 {
   let total: i32 = 0;
+  let score: f32 = 1.0;
 
   for (let i: i32 = 0; i < limit; i = i + 1) {
+    // continue in loop
+    if (i == 2) {
+      continue;
+    }
+
+    // i32 condition in if
+    if (i) {
+      total = total + 1;
+    }
+
+    // switch in loop with break/continue behavior
+    switch (i % 4) {
+      case 0: {
+        total = total + 10;
+        continue;
+      }
+      case 1: {
+        total = total + 3;
+        break;
+      }
+      default: {
+        total = total + i;
+      }
+    }
+
     if (i > 6) {
       break;
     }
-    total = total + i;
   }
 
   while (total < 20) {
     total = total + 2;
+  }
+
+  // f32 condition in if
+  if (score) {
+    total = total + 5;
   }
 
   if (total > 25) {

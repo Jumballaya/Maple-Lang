@@ -300,6 +300,44 @@ describe("Integration: wat2wasm validation", () => {
           case 1: { return 20; }
           default: { return 99; }
         }
+        return 0;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("switch default with break stays in valid label scope", () => {
+    const wat = compile(`
+      fn f(x: i32): void {
+        switch (x) {
+          case 0: { return; }
+          default: { break; }
+        }
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("nested f32 return if emits wat2wasm-valid output", () => {
+    const wat = compile(`
+      fn f(x: i32): f32 {
+        if (x > 0) {
+          if (x > 1) { return 1.0; } else { return 2.0; }
+        } else {
+          return 3.0;
+        }
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("void-returning if both branches returns remains wat2wasm-valid", () => {
+    const wat = compile(`
+      fn f(x: i32): void {
+        if (x > 0) { return; } else { return; }
       }
     `);
     const err = validateWithWat2Wasm(wat);

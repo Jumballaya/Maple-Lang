@@ -1,9 +1,14 @@
 import type { ForStatement } from "../../../parser/ast/statements/ForStatement";
+import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { emitExpression } from "../expression/expression";
+import { emitLetStatement } from "./let";
 import { emitStatement } from "./statement";
 
 export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
+  // Emit the initializer before entering the loop so non-zero inits are applied
+  emitLetStatement(stmt.initBlock, emitter);
+
   const br = emitter.makeLabel("break");
   const lp = emitter.makeLabel("loop");
 
@@ -14,14 +19,23 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   emitter.writer.open(`(loop ${lp}`);
 
   // break condition
-  const cond = emitExpression(stmt.conditionExpr.expression!, emitter);
-  const t = emitter.getExprType(stmt.conditionExpr.expression!);
-  const asI32 =
-    t === "bool"
-      ? cond
-      : t === "i32"
-        ? `(i32.ne ${cond} (i32.const 0))`
-        : `(f32.ne ${cond} (f32.const 0))`;
+  const condExpr = stmt.conditionExpr.expression!;
+  const cond = emitExpression(condExpr, emitter);
+  const t = emitter.getExprType(condExpr);
+  let asI32: string;
+  if (t === "bool") {
+    asI32 = cond;
+  } else if (t === "i32") {
+    asI32 = `(i32.ne ${cond} (i32.const 0))`;
+  } else if (t === "f32") {
+    asI32 = `(f32.ne ${cond} (f32.const 0))`;
+  } else {
+    throw new MapleError(
+      `for loop condition must be a numeric or boolean expression, got '${t}'`,
+      stmt.conditionExpr.token.line,
+      stmt.conditionExpr.token.col,
+    );
+  }
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
   // body

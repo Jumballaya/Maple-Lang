@@ -23,6 +23,7 @@ export fn _start(seed: i32): i32 {
   let idx: i32 = 0;
   let total: i32 = add(base.left, base.right);
   let tweak: i32 = seed % 3;
+  let weight: f32 = 1.0;
 
   // local struct: members used directly in arithmetic
   let lp: Pair = { left = 4, right = 1 };
@@ -45,6 +46,24 @@ export fn _start(seed: i32): i32 {
     }
   }
 
+  // switch behavior with explicit break/continue targets
+  for (let s: i32 = 0; s < 5; s = s + 1) {
+    switch (s) {
+      case 0: {
+        total = total + 11;
+        continue;
+      }
+      case 1: {
+        total = total + 5;
+        break;
+      }
+      default: {
+        total = total + s;
+      }
+    }
+    total = total + 1;
+  }
+
   tweak <<= 1;
   tweak |= 1;
   total += tweak;
@@ -60,6 +79,14 @@ export fn _start(seed: i32): i32 {
   let flipped: i32 = ~tweak;
   if (!(seed == 0)) {
     total = total + (seed >> 1);
+  }
+
+  // if conditions normalize i32/f32 to wasm i32 condition values
+  if (seed) {
+    total = total + 2;
+  }
+  if (weight) {
+    total = total + 3;
   }
 
   // type inference: no explicit type annotations needed

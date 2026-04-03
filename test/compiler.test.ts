@@ -9,6 +9,7 @@ import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
+import { MapleError } from "../src/compiler/errors";
 
 function compile(src: string) {
   const p = new Parser(src);
@@ -910,5 +911,370 @@ describe("Emission: Struct methods", () => {
     assert(wat.includes("(call $Vec2_add"), `Missing mangled method call in:\n${wat}`);
     assert(wat.includes("(local.get $v)"), `Missing receiver argument in:\n${wat}`);
     assert(wat.includes("(local.get $other)"), `Missing method argument in:\n${wat}`);
+  });
+});
+
+// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+
+describe("Emission: Control Flow Hardening - For init (Bug 1)", () => {
+  test("for loop with non-zero init emits local.set before the loop block", () => {
+    // RED: init is never emitted by emitForStatement - WASM locals default to 0
+    const { wat } = compile("fn f(): void { for (let i: i32 = 5; i < 10; i = i + 1) { } }");
+    const setIdx = wat.indexOf("(local.set $i (i32.const 5))");
+    const blockIdx = wat.indexOf("(block $break_");
+    assert(setIdx !== -1, `Missing (local.set $i (i32.const 5)) in:\n${wat}`);
+    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  });
+
+  test("for loop with negative init emits local.set before the loop block", () => {
+    // RED: same bug - negative non-zero init silently becomes 0
+    const { wat } = compile("fn f(): void { for (let i: i32 = -3; i < 7; i = i + 1) { } }");
+    const setIdx = wat.indexOf("(local.set $i");
+    const blockIdx = wat.indexOf("(block $break_");
+    assert(setIdx !== -1, `Missing (local.set $i) for negative init in:\n${wat}`);
+    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  });
+
+  test("for loop with zero init still emits local.set before the loop block", () => {
+    // GREEN: zero init "works by accident" today but should be explicit
+    const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { } }");
+    const blockIdx = wat.indexOf("(block $break_");
+    assert(blockIdx !== -1, `Missing (block $break_) in:\n${wat}`);
+    // After fix, local.set $i (i32.const 0) should appear before (block
+    const setIdx = wat.indexOf("(local.set $i");
+    assert(setIdx !== -1, `Missing (local.set $i) in:\n${wat}`);
+    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
+  test("if/else both returning f32 emits (result f32) not (result i32)", () => {
+    // RED: result type is hardcoded to i32 in if.ts
+    const { wat } = compile(
+      `fn f(x: i32): f32 { if (x > 0) { return 1.0; } else { return 2.0; } }`,
+    );
+    assert(!wat.includes("(result i32)"), `Should not emit (result i32) for f32-returning branches:\n${wat}`);
+  });
+
+  test("nested if returns that are all f32 still emit outer (result f32)", () => {
+    const { wat } = compile(`
+      fn f(x: i32): f32 {
+        if (x > 0) {
+          if (x > 1) { return 1.0; } else { return 2.0; }
+        } else {
+          return 3.0;
+        }
+      }
+    `);
+    assert(wat.includes("(if (result f32)"), `Expected outer if (result f32) in:\n${wat}`);
+    assert(!wat.includes("(if (result i32)"), `Outer if must not be i32 in:\n${wat}`);
+  });
+
+  test("if with only void returns does not emit a synthetic result type", () => {
+    const { wat } = compile(`
+      fn f(x: i32): void {
+        if (x > 0) { return; } else { return; }
+      }
+    `);
+    assert(!wat.includes("(if (result i32)"), `Void-returning if should not emit (result i32):\n${wat}`);
+    assert(!wat.includes("(if (result f32)"), `Void-returning if should not emit (result f32):\n${wat}`);
+  });
+
+  test("if/else both returning i32 emits (result i32)", () => {
+    // GREEN: i32 case should still work correctly
+    const { wat } = compile(
+      `fn f(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }`,
+    );
+    assert(wat.includes("(result i32)"), `Expected (result i32) for i32-returning branches:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
+  test("if with void function as condition throws MapleError", () => {
+    assert.throws(
+      () => compile(`fn noop(): void {} fn f(): void { if (noop()) { return; } }`),
+      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+    );
+  });
+
+  test("if with f32 condition emits f32.ne (normalized to i32)", () => {
+    const { wat } = compile(`fn f(): void { let x: f32 = 1.0; if (x) { return; } }`);
+    assert(wat.includes("f32.ne"), `Expected f32.ne for if condition in:\n${wat}`);
+  });
+
+  test("if with i32 condition emits i32.ne (normalized to i32)", () => {
+    const { wat } = compile(`fn f(): void { let x: i32 = 1; if (x) { return; } }`);
+    assert(wat.includes("i32.ne"), `Expected i32.ne for if condition in:\n${wat}`);
+  });
+
+  test("for loop with void function as condition throws MapleError", () => {
+    // RED: void condition falls through to f32.ne, producing invalid WAT instead of error
+    assert.throws(
+      () => compile(`fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`),
+      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+    );
+  });
+
+  test("while loop with void function as condition throws MapleError", () => {
+    // RED: same void condition fallthrough bug in while.ts
+    assert.throws(
+      () => compile(`fn noop(): void {} fn f(): void { while (noop()) { } }`),
+      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+    );
+  });
+
+  test("for loop with f32 condition emits f32.ne (explicit branch, not fallthrough)", () => {
+    // GREEN: f32 conditions should work correctly via the explicit f32.ne branch
+    const { wat } = compile(
+      `fn f(): void { let x: f32 = 1.0; for (let i: i32 = 0; x; i = i + 1) { } }`,
+    );
+    assert(wat.includes("f32.ne"), `Expected f32.ne for f32 condition in:\n${wat}`);
+  });
+
+  test("while loop with bool condition passes through directly without ne wrapper", () => {
+    // GREEN: bool conditions should not be wrapped in i32.ne
+    const { wat } = compile(`fn f(): void { let b: bool = true; while (b) { break; } }`);
+    assert(wat.includes("(local.get $b)"), `Expected direct bool condition in:\n${wat}`);
+  });
+
+  test("while loop with i32 condition wraps in i32.ne", () => {
+    // GREEN: i32 conditions should use i32.ne ... 0
+    const { wat } = compile(`fn f(): void { let i: i32 = 0; while (i) { break; } }`);
+    assert(wat.includes("i32.ne"), `Expected i32.ne for i32 condition in:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)", () => {
+  test("break outside any loop or switch throws error", () => {
+    // RED: currently emits (br undefined) without error
+    assert.throws(
+      () => compile("fn f(): void { break; }"),
+      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+    );
+  });
+
+  test("continue outside any loop throws error", () => {
+    // RED: currently emits (br undefined) without error
+    assert.throws(
+      () => compile("fn f(): void { continue; }"),
+      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+    );
+  });
+
+  test("break in for loop emits valid br instruction", () => {
+    // GREEN: break in a loop must still work
+    const { wat } = compile(
+      "fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }",
+    );
+    assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
+  });
+
+  test("continue in for loop emits valid br instruction to loop label", () => {
+    // GREEN: continue in a loop must still work
+    const { wat } = compile(
+      "fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { continue; } }",
+    );
+    assert(wat.includes("(br $loop_"), `Expected (br $loop_...) in:\n${wat}`);
+  });
+
+  test("break in while loop emits valid br instruction", () => {
+    // GREEN
+    const { wat } = compile("fn f(): void { while (1) { break; } }");
+    assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
+  });
+
+  test("continue in while loop emits valid br instruction", () => {
+    // GREEN
+    const { wat } = compile(
+      "fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }",
+    );
+    assert(wat.includes("(br $loop_"), `Expected (br $loop_...) in:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
+  test("break in standalone switch does not emit (br undefined)", () => {
+    // RED: switch does not push a break label, so (br undefined) is emitted
+    const { wat } = compile(`
+      fn f(x: i32): void {
+        switch (x) {
+          case 0: { break; }
+          default: { break; }
+        }
+      }
+    `);
+    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
+  });
+
+  test("break inside switch inside for loop targets the switch exit, not the for loop", () => {
+    // RED: break currently targets the for loop's break label (wrong)
+    const { wat } = compile(`
+      fn f(x: i32): void {
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          switch (x) {
+            case 0: { break; }
+            default: { break; }
+          }
+        }
+      }
+    `);
+    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
+    // The switch should have its own labeled block
+    assert(wat.includes("$switch_"), `Expected switch-specific labels in:\n${wat}`);
+  });
+
+  test("continue inside switch inside for loop targets the for loop", () => {
+    // GREEN (after fix 7): continue in switch should target enclosing loop
+    const { wat } = compile(`
+      fn f(x: i32): void {
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          switch (x) {
+            case 0: { continue; }
+            default: { break; }
+          }
+        }
+      }
+    `);
+    assert(wat.includes("$loop_"), `Expected loop label for continue:\n${wat}`);
+    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
+  });
+
+  test("switch case body still has implicit exit after case body", () => {
+    // GREEN: existing Go-style no-fall-through behavior must not regress
+    const { wat } = compile(`
+      fn f(x: i32): i32 {
+        switch (x) {
+          case 0: { return 10; }
+          default: { return 99; }
+        }
+      }
+    `);
+    assert(wat.includes("br_table"), `Expected br_table in switch:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - Nested constructs", () => {
+  test("nested for loops - break in inner loop targets inner loop's break label", () => {
+    // GREEN: nested loops should each have independent break/loop labels
+    const { wat } = compile(`
+      fn f(): void {
+        for (let i: i32 = 0; i < 3; i = i + 1) {
+          for (let j: i32 = 0; j < 3; j = j + 1) {
+            break;
+          }
+        }
+      }
+    `);
+    assert(!wat.includes("(br undefined)"), `No (br undefined) in nested loops:\n${wat}`);
+    // There should be two distinct break labels
+    const breakMatches = wat.match(/\$break_\d+/g) ?? [];
+    const uniqueBreaks = new Set(breakMatches);
+    assert(uniqueBreaks.size >= 2, `Expected at least 2 distinct break labels in:\n${wat}`);
+  });
+
+  test("if inside for loop with break targets the for loop", () => {
+    // GREEN
+    const { wat } = compile(`
+      fn f(): void {
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          if (i > 2) { break; }
+        }
+      }
+    `);
+    assert(!wat.includes("(br undefined)"), `No (br undefined):\n${wat}`);
+    assert(wat.includes("(br $break_"), `Expected break label:\n${wat}`);
+  });
+
+  test("return inside for loop inside if emits return correctly", () => {
+    // GREEN
+    const { wat } = compile(`
+      fn f(x: i32): i32 {
+        if (x > 0) {
+          for (let i: i32 = 0; i < x; i = i + 1) {
+            return i;
+          }
+        }
+        return 0;
+      }
+    `);
+    assert(wat.includes("(return"), `Expected return instruction in:\n${wat}`);
+  });
+});
+
+describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
+  test("switch without default in if then-branch does not cause spurious (result i32)", () => {
+    const { wat } = compile(`
+      fn f(x: i32, y: i32): i32 {
+        if (x > 0) {
+          switch (y) {
+            case 0: { return 1; }
+          }
+        } else {
+          return 2;
+        }
+        return 3;
+      }
+    `);
+    const matches = wat.match(/\(result i32\)/g) ?? [];
+    assert.equal(
+      matches.length,
+      1,
+      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
+    );
+  });
+
+  test("for loop in if then-branch does not cause spurious (result i32) on if", () => {
+    // RED: stmtDefinitelyReturns(forStatement) incorrectly returns true,
+    // causing extractNeedsReturn to annotate the if with (result i32)
+    // which makes the (then) block required to produce a value - invalid WAT
+    const { wat } = compile(`
+      fn f(x: i32): i32 {
+        if (x > 0) {
+          for (let i: i32 = 0; i < x; i = i + 1) {
+            return 1;
+          }
+        } else {
+          return -1;
+        }
+        return 0;
+      }
+    `);
+    // Should have exactly 1 (result i32) - from the function signature only
+    const matches = wat.match(/\(result i32\)/g) ?? [];
+    assert.equal(
+      matches.length,
+      1,
+      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
+    );
+  });
+
+  test("while loop in if then-branch does not cause spurious (result i32) on if", () => {
+    // RED: same bug for while loops
+    const { wat } = compile(`
+      fn f(x: i32): i32 {
+        if (x > 0) {
+          while (x > 0) {
+            return 1;
+          }
+        } else {
+          return -1;
+        }
+        return 0;
+      }
+    `);
+    const matches = wat.match(/\(result i32\)/g) ?? [];
+    assert.equal(
+      matches.length,
+      1,
+      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
+    );
+  });
+
+  test("if/else where both branches have explicit returns emits (result i32)", () => {
+    // GREEN: genuine both-branches-return case should still get (result i32)
+    const { wat } = compile(
+      `fn f(x: i32): i32 { if (x > 0) { return 1; } else { return -1; } }`,
+    );
+    assert(wat.includes("(result i32)"), `Expected (result i32) when both branches return:\n${wat}`);
   });
 });

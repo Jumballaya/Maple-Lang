@@ -14,12 +14,15 @@ import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { BreakStatement } from "../parser/ast/statements/BreakStatement";
+import { ContinueStatement } from "../parser/ast/statements/ContinueStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
 import { IfStatement } from "../parser/ast/statements/IfStatement";
 import { LetStatement } from "../parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
+import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
 import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
@@ -137,6 +140,15 @@ function walkExpression(
   errors: MapleError[],
 ): void {
   if (!expr) return;
+
+  // Undefined identifier check
+  if (expr instanceof Identifier) {
+    if (!scope.has(expr.tokenLiteral())) {
+      const t = expr.token;
+      errors.push(new MapleError(`Undefined identifier '${expr.tokenLiteral()}'`, t.line, t.col));
+    }
+    return;
+  }
 
   // Check 3 — mixed arithmetic
   if (expr instanceof InfixExpression) {
@@ -291,15 +303,25 @@ function checkLetInitializer(
   walkExpression(stmt.expression, scope, meta, errors);
 }
 
+type FlowContext = {
+  loopDepth: number;
+  switchDepth: number;
+};
+
+function isNumericOrBooleanConditionType(t: string | null): boolean {
+  return t === "bool" || t === "i32" || t === "f32";
+}
+
 function walkBlock(
   block: BlockStatement,
   scope: Scope,
   meta: ModuleMeta,
   fnReturnType: string | null,
   errors: MapleError[],
+  ctx: FlowContext = { loopDepth: 0, switchDepth: 0 },
 ): void {
   for (const stmt of block.statements) {
-    walkStatement(stmt, scope, meta, fnReturnType, errors);
+    walkStatement(stmt, scope, meta, fnReturnType, errors, ctx);
   }
 }
 
@@ -309,6 +331,7 @@ function walkStatement(
   meta: ModuleMeta,
   fnReturnType: string | null,
   errors: MapleError[],
+  ctx: FlowContext = { loopDepth: 0, switchDepth: 0 },
 ): void {
   if (stmt instanceof LetStatement) {
     // Add to scope before checking the initializer so later statements in the
@@ -355,37 +378,79 @@ function walkStatement(
     return;
   }
 
+  if (stmt instanceof BreakStatement) {
+    if (ctx.loopDepth === 0 && ctx.switchDepth === 0) {
+      const t = stmt.token;
+      errors.push(new MapleError("break statement must be inside a loop or switch", t.line, t.col));
+    }
+    return;
+  }
+
+  if (stmt instanceof ContinueStatement) {
+    if (ctx.loopDepth === 0) {
+      const t = stmt.token;
+      errors.push(new MapleError("continue statement must be inside a loop", t.line, t.col));
+    }
+    return;
+  }
+
   if (stmt instanceof IfStatement) {
     walkExpression(stmt.conditionExpr, scope, meta, errors);
-    walkBlock(stmt.thenBlock, scope, meta, fnReturnType, errors);
+    const condType = resolveExprType(stmt.conditionExpr, scope, meta);
+    if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
+      const t = stmt.token;
+      errors.push(
+        new MapleError(
+          `if condition must be a numeric or boolean expression, got '${condType}'`,
+          t.line,
+          t.col,
+        ),
+      );
+    }
+    walkBlock(stmt.thenBlock, scope, meta, fnReturnType, errors, ctx);
     if (stmt.elseBlock) {
-      walkBlock(stmt.elseBlock, scope, meta, fnReturnType, errors);
+      walkBlock(stmt.elseBlock, scope, meta, fnReturnType, errors, ctx);
     }
     return;
   }
 
   if (stmt instanceof WhileStatement) {
+    const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     walkExpression(stmt.condExpr, scope, meta, errors);
-    walkBlock(stmt.loopBody, scope, meta, fnReturnType, errors);
+    walkBlock(stmt.loopBody, scope, meta, fnReturnType, errors, loopCtx);
     return;
   }
 
   if (stmt instanceof ForStatement) {
-    // add the init variable to scope
-    scope.set(stmt.initBlock.identifier.tokenLiteral(), {
+    // Create an isolated child scope so the init variable doesn't leak after the loop
+    const loopScope = new Map(scope);
+    loopScope.set(stmt.initBlock.identifier.tokenLiteral(), {
       type: stmt.initBlock.typeAnnotation,
       mutable: stmt.initBlock.mutable,
     });
+    const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     // Check 1 for for-loop initializer
-    checkLetInitializer(stmt.initBlock, scope, meta, errors);
-    walkExpression(stmt.conditionExpr.expression, scope, meta, errors);
-    walkExpression(stmt.updateExpr.expression, scope, meta, errors);
-    walkBlock(stmt.loopBody, scope, meta, fnReturnType, errors);
+    checkLetInitializer(stmt.initBlock, loopScope, meta, errors);
+    walkExpression(stmt.conditionExpr.expression, loopScope, meta, errors);
+    walkExpression(stmt.updateExpr.expression, loopScope, meta, errors);
+    walkBlock(stmt.loopBody, loopScope, meta, fnReturnType, errors, loopCtx);
+    return;
+  }
+
+  if (stmt instanceof SwitchStatement) {
+    const switchCtx: FlowContext = { loopDepth: ctx.loopDepth, switchDepth: ctx.switchDepth + 1 };
+    walkExpression(stmt.switchExpr, scope, meta, errors);
+    for (const c of stmt.cases) {
+      walkBlock(c.body, scope, meta, fnReturnType, errors, switchCtx);
+    }
+    if (stmt.default) {
+      walkBlock(stmt.default, scope, meta, fnReturnType, errors, switchCtx);
+    }
     return;
   }
 
   if (stmt instanceof BlockStatement) {
-    walkBlock(stmt, scope, meta, fnReturnType, errors);
+    walkBlock(stmt, scope, meta, fnReturnType, errors, ctx);
   }
 }
 

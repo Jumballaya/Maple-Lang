@@ -1,4 +1,5 @@
 import type { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
+import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
@@ -15,12 +16,20 @@ export function emitWhileStatement(stmt: WhileStatement, emitter: ModuleEmitter)
 
   const condTxt = emitExpression(stmt.condExpr, emitter);
   const t = emitter.getExprType(stmt.condExpr);
-  const asI32 =
-    t === "bool"
-      ? condTxt
-      : t === "i32"
-        ? `(i32.ne ${condTxt} (i32.const 0))`
-        : `(f32.ne ${condTxt} (f32.const 0))`;
+  let asI32: string;
+  if (t === "bool") {
+    asI32 = condTxt;
+  } else if (t === "i32") {
+    asI32 = `(i32.ne ${condTxt} (i32.const 0))`;
+  } else if (t === "f32") {
+    asI32 = `(f32.ne ${condTxt} (f32.const 0))`;
+  } else {
+    throw new MapleError(
+      `while loop condition must be a numeric or boolean expression, got '${t}'`,
+      stmt.token.line,
+      stmt.token.col,
+    );
+  }
 
   // loop condition
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);

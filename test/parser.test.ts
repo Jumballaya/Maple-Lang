@@ -2823,6 +2823,90 @@ describe("Parser: Struct methods", () => {
   });
 });
 
+// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+
+describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
+  test("for loop with syntax error in body recovers and produces for statement", () => {
+    // RED: manual body loop returns null on first bad statement, aborting entire for parse
+    const p = new Parser(
+      `fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { let x: = 5; } }`,
+    );
+    const prog = p.parse("test");
+    assert(p.errors.length > 0, "Expected parse errors from syntax error in body");
+    const fn = prog.statements[0];
+    assert(fn instanceof FunctionStatement, "Expected FunctionStatement");
+    assert(
+      fn.fnExpr.body.statements.length > 0,
+      "ForStatement should be produced despite error in body",
+    );
+    assert(fn.fnExpr.body.statements[0] instanceof ForStatement, "Expected ForStatement");
+  });
+
+  test("while loop with syntax error in body recovers and produces while statement", () => {
+    // RED: same bug in parseWhileStatement
+    const p = new Parser(`fn f(): void { while (1) { let x: = 5; } }`);
+    const prog = p.parse("test");
+    assert(p.errors.length > 0, "Expected parse errors from syntax error in body");
+    const fn = prog.statements[0];
+    assert(fn instanceof FunctionStatement, "Expected FunctionStatement");
+    assert(
+      fn.fnExpr.body.statements.length > 0,
+      "WhileStatement should be produced despite error in body",
+    );
+    assert(fn.fnExpr.body.statements[0] instanceof WhileStatement, "Expected WhileStatement");
+  });
+
+  test("for loop with valid body still produces all statements", () => {
+    // GREEN: normal for loop body parsing must not regress
+    const p = new Parser(`fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { let x: i32 = 1; let y: i32 = 2; } }`);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const fn = prog.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const forStmt = fn.fnExpr.body.statements[0];
+    assert(forStmt instanceof ForStatement);
+    assert.equal(forStmt.loopBody.statements.length, 2, "Both body statements should be present");
+  });
+
+  test("while loop with valid body still produces all statements", () => {
+    // GREEN: normal while body parsing must not regress
+    const p = new Parser(`fn f(): void { while (1) { let x: i32 = 1; break; } }`);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const fn = prog.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const whileStmt = fn.fnExpr.body.statements[0];
+    assert(whileStmt instanceof WhileStatement);
+    assert.equal(whileStmt.loopBody.statements.length, 2, "Both body statements should be present");
+  });
+});
+
+describe("Parser: Control Flow Hardening - If condition (Fix 9)", () => {
+  test("if with empty condition reports parse error", () => {
+    // GREEN: error is already reported, but condition null check ordering matters
+    const p = new Parser(`fn f(): void { if () {} }`);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected parse error for if with empty condition");
+  });
+
+  test("if with valid condition parses correctly", () => {
+    // GREEN: must not regress
+    const p = new Parser(`fn f(): void { if (1) {} }`);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const fn = prog.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert(fn.fnExpr.body.statements[0] instanceof IfStatement);
+  });
+
+  test("if missing closing paren reports parse error", () => {
+    // GREEN: missing ) is caught by expectPeek
+    const p = new Parser(`fn f(): void { if (1 {} }`);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected parse error for if missing )");
+  });
+});
+
 function assertFunctionParams(
   funcStmt: FunctionStatement,
   expectedParams: Array<[string, string]>,

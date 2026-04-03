@@ -281,3 +281,129 @@ fn run(v: Vec2, other: Vec2): i32 {
     `);
   });
 });
+
+// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+
+describe("TypeChecker: Control Flow - Scope (Bug 5)", () => {
+  test("for loop variable is not visible after the loop", () => {
+    // RED: for-loop var is added to scope but never removed, so it leaks
+    expectError(
+      `fn f(): i32 {
+        for (let i: i32 = 0; i < 5; i = i + 1) {}
+        return i;
+      }`,
+      "i",
+    );
+  });
+
+  test("for loop variable is visible inside the loop body", () => {
+    // GREEN: the variable must be accessible within the loop
+    expectNoErrors(`
+      fn f(): void {
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          let x: i32 = i;
+        }
+      }
+    `);
+  });
+
+  test("two sequential for loops with same variable name do not conflict", () => {
+    // GREEN (after fix): each loop's scope is independent
+    expectNoErrors(`
+      fn f(): void {
+        for (let i: i32 = 0; i < 3; i = i + 1) {}
+        for (let i: i32 = 0; i < 5; i = i + 1) {}
+      }
+    `);
+  });
+});
+
+describe("TypeChecker: Control Flow - Break/Continue Context (Fix 8)", () => {
+  test("break outside any loop or switch is a type error", () => {
+    // RED: no context validation exists yet
+    expectError("fn f(): void { break; }", "break");
+  });
+
+  test("continue outside any loop is a type error", () => {
+    // RED: no context validation exists yet
+    expectError("fn f(): void { continue; }", "continue");
+  });
+
+  test("continue inside switch but not inside a loop is a type error", () => {
+    // RED: continue should only be valid in loops, not bare switches
+    expectError(
+      `fn f(x: i32): void { switch (x) { case 0: { continue; } default: { break; } } }`,
+      "continue",
+    );
+  });
+
+  test("break inside for loop is valid", () => {
+    // GREEN
+    expectNoErrors("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }");
+  });
+
+  test("continue inside for loop is valid", () => {
+    // GREEN
+    expectNoErrors("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { continue; } }");
+  });
+
+  test("break inside while loop is valid", () => {
+    // GREEN
+    expectNoErrors("fn f(): void { while (1) { break; } }");
+  });
+
+  test("continue inside while loop is valid", () => {
+    // GREEN
+    expectNoErrors(
+      "fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }",
+    );
+  });
+
+  test("break inside switch is valid", () => {
+    // GREEN (after fix 7 adds switch break label)
+    expectNoErrors(
+      `fn f(x: i32): void { switch (x) { case 0: { break; } default: { break; } } }`,
+    );
+  });
+
+  test("continue inside switch inside for loop is valid (targets the loop)", () => {
+    // GREEN: continue in a switch that is inside a loop should be allowed
+    expectNoErrors(`
+      fn f(x: i32): void {
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          switch (x) {
+            case 0: { continue; }
+            default: { break; }
+          }
+        }
+      }
+    `);
+  });
+
+  test("break inside nested for loops is valid", () => {
+    // GREEN
+    expectNoErrors(`
+      fn f(): void {
+        for (let i: i32 = 0; i < 3; i = i + 1) {
+          for (let j: i32 = 0; j < 3; j = j + 1) {
+            break;
+          }
+        }
+      }
+    `);
+  });
+});
+
+describe("TypeChecker: If conditions", () => {
+  test("if with void call condition is a type error", () => {
+    expectError(
+      `
+      fn noop(): void {}
+      fn f(): void {
+        if (noop()) { return; }
+      }
+      `,
+      "if condition",
+    );
+  });
+});
