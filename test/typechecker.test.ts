@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { typeCheck } from "../src/compiler/TypeChecker";
-import type { MapleError } from "../src/compiler/errors";
 import { extractModuleMeta } from "../src/compiler/emitters/module";
+import type { MapleError } from "../src/compiler/errors";
+import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
 
 function check(src: string): MapleError[] {
@@ -58,10 +58,7 @@ describe("TypeChecker: Assignment compatibility", () => {
   });
 
   test("for-loop init let type mismatch is an error", () => {
-    expectError(
-      "fn f(): void { for (let i: i32 = 1.5; i < 10; i = i + 1) { } }",
-      "Type mismatch",
-    );
+    expectError("fn f(): void { for (let i: i32 = 1.5; i < 10; i = i + 1) { } }", "Type mismatch");
   });
 });
 
@@ -134,9 +131,7 @@ describe("TypeChecker: Call arguments", () => {
   });
 
   test("correct argument count and types is ok", () => {
-    expectNoErrors(
-      "fn add(a: i32, b: i32): i32 { return a + b; }\nfn f(): void { add(1, 2); }",
-    );
+    expectNoErrors("fn add(a: i32, b: i32): i32 { return a + b; }\nfn f(): void { add(1, 2); }");
   });
 
   test("global initializer call with wrong arg count is an error", () => {
@@ -207,6 +202,38 @@ fn main(): i32 {
   let total: i32 = p.x + p.y;
   let half: i32 = (total as f32 * 0.5) as i32;
   return sum(total, half);
+}
+    `);
+  });
+});
+
+describe("TypeChecker: Type inference integration", () => {
+  test("inferred i32 prevents assignment to f32 local", () => {
+    expectError(
+      `fn f(): void {
+        let x = 5;
+        let y: f32 = x;
+      }`,
+      "Type mismatch",
+    );
+  });
+
+  test("valid program with mix of inferred and explicit annotations", () => {
+    expectNoErrors(`
+struct Point {
+  x: i32,
+  y: i32,
+}
+fn add(a: i32, b: i32): i32 {
+  return a + b;
+}
+fn main(): i32 {
+  let a = 10;
+  let b = 20;
+  let sum: i32 = add(a, b);
+  let ratio = sum as f32;
+  let arr = [1, 2, 3];
+  return sum;
 }
     `);
   });

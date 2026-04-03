@@ -66,6 +66,7 @@ export class Parser {
   private postfixParseFns: Map<Token["type"], PostfixParseFn> = new Map();
 
   private identifierTypes: Map<string, string> = new Map();
+  private structDefs: Map<string, Record<string, string>> = new Map();
 
   private locals: string[] = []; // all of the variables local to the current scope
 
@@ -181,6 +182,13 @@ export class Parser {
       const statement = this.parseStatement(false, true);
       if (statement !== null) {
         program.statements.push(statement);
+        if (statement instanceof StructStatement) {
+          const fields: Record<string, string> = {};
+          for (const [fieldName, member] of Object.entries(statement.members)) {
+            fields[fieldName] = member.type;
+          }
+          this.structDefs.set(statement.name, fields);
+        }
       } else {
         this.synchronize();
       }
@@ -442,26 +450,16 @@ export class Parser {
     }
     const identToken = this.tokenizer.curToken();
 
-    let typeAnn: string = "";
-    let typeIdent: Token | null = null;
+    let typeAnn = "";
+
     if (this.tokenizer.peekTokenIs("Colon")) {
-      this.tokenizer.nextToken();
-      if (this.tokenizer.peekTokenIs("Identifier")) {
-        typeIdent = this.tokenizer.peekToken() as IdentToken; // @TODO: Extract actual type token from this.parseTyping
-        typeAnn = typeIdent.literal;
-      } else if (BUILTIN_TYPES.includes(this.tokenizer.peekToken().type)) {
-        typeIdent = this.tokenizer.peekToken();
-        typeAnn = typeIdent.literal.toString();
-      }
-      this.tokenizer.nextToken(); // consume colon
+      this.tokenizer.nextToken(); // advance to ':'
+      this.tokenizer.nextToken(); // advance to type token
       const t = this.parseTyping();
       if (!t) return null;
-      if (t === "void") {
-        return null;
-      }
+      if (t === "void") return null;
+      typeAnn = t; // full type: "i32", "f32", "Point", "i32[]", etc.
     }
-    const identifier = new Identifier(identToken, typeAnn);
-    this.identifierTypes.set(identToken.literal.toString(), typeAnn);
 
     if (!this.expectPeek("Assign")) {
       return null;
@@ -469,17 +467,32 @@ export class Parser {
 
     this.tokenizer.nextToken();
 
-    // this is an array literal, it needs the type up front
     const isArray = this.tokenizer.curTokenIs("LBracket");
     const isStruct = this.tokenizer.curTokenIs("LBrace");
     let value: ASTExpression | null = null;
     if (isArray) {
-      value = this.parseArrayLiteral(typeAnn);
+      // Pass the element type ("i32"), not the array type ("i32[]"), so that
+      // ArrayLiteralExpression.memberType is always the element type.
+      const elementType = typeAnn.endsWith("[]") ? typeAnn.slice(0, -2) : typeAnn;
+      value = this.parseArrayLiteral(elementType);
     } else if (isStruct) {
-      value = this.parseStructLiteral(typeIdent as IdentToken);
+      value = this.parseStructLiteral(typeAnn);
     } else {
       value = this.parseExpression(LOWEST);
     }
+
+    // Infer type if no annotation was provided
+    if (typeAnn === "" && value !== null) {
+      typeAnn = this.inferTypeFromExpr(value);
+      if (typeAnn === "") {
+        this.pushError("Cannot infer type; add an explicit type annotation", statementToken);
+        return null;
+      }
+    }
+
+    // typeAnn is now fully resolved (explicit or inferred); register it
+    const identifier = new Identifier(identToken, typeAnn);
+    this.identifierTypes.set(identToken.literal.toString(), typeAnn);
 
     if (!this.expectPeek("Semicolon")) {
       return null;
@@ -490,6 +503,43 @@ export class Parser {
     letStmt.typeAnnotation = typeAnn;
 
     return letStmt;
+  }
+
+  private inferTypeFromExpr(expr: ASTExpression | null): string {
+    if (!expr) return "";
+    if (expr instanceof IntegerLiteralExpression) return "i32";
+    if (expr instanceof FloatLiteralExpression) return "f32";
+    if (expr instanceof BooleanLiteralExpression) return "bool";
+    if (expr instanceof CastExpression) return expr.targetType;
+    if (expr instanceof Identifier) {
+      return this.identifierTypes.get(expr.tokenLiteral()) ?? "";
+    }
+    if (expr instanceof StructLiteralExpression) return expr.name;
+    if (expr instanceof ArrayLiteralExpression) {
+      return expr.memberType ? `${expr.memberType}[]` : "";
+    }
+    if (expr instanceof MemberExpression) {
+      const parentType = this.inferTypeFromExpr(expr.parent);
+      if (!parentType) return "";
+      const structFields = this.structDefs.get(parentType);
+      return structFields?.[expr.member] ?? "";
+    }
+    if (expr instanceof InfixExpression) {
+      const CMP_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
+      if (CMP_OPS.has(expr.operator)) return "bool";
+      const lt = this.inferTypeFromExpr(expr.left);
+      const rt = this.inferTypeFromExpr(expr.right);
+      if (!lt || !rt) return "";
+      return lt === "f32" || rt === "f32" ? "f32" : "i32";
+    }
+    if (expr instanceof PrefixExpression) {
+      if (expr.operator === "!") return "bool";
+      return this.inferTypeFromExpr(expr.right ?? null);
+    }
+    if (expr instanceof PostfixExpression) {
+      return this.inferTypeFromExpr(expr.left ?? null);
+    }
+    return "";
   }
 
   private parseReturnStatement(): ASTStatement | null {
@@ -971,6 +1021,7 @@ export class Parser {
 
   private parseArrayLiteral(type: string): ASTExpression | null {
     const literalToken = this.tokenizer.curToken();
+    let memberType = type;
 
     if (!this.tokenizer.curTokenIs("LBracket")) {
       return null;
@@ -980,18 +1031,19 @@ export class Parser {
 
     // initial values
     if (!this.tokenizer.curTokenIs("RBracket")) {
-      const v = this.parseArrayLiteralMember();
-      if (v !== null) {
-        value.push(v);
+      const { num, exprType } = this.parseArrayLiteralMemberTyped();
+      if (num !== null) {
+        value.push(num);
+        if (!memberType) memberType = exprType;
       }
     }
 
     // more values
     while (this.tokenizer.curTokenIs("Comma")) {
       this.tokenizer.nextToken(); // consume Comma
-      const v = this.parseArrayLiteralMember();
-      if (v !== null) {
-        value.push(v);
+      const { num } = this.parseArrayLiteralMemberTyped();
+      if (num !== null) {
+        value.push(num);
       }
     }
 
@@ -999,14 +1051,19 @@ export class Parser {
       return null;
     }
 
-    return new ArrayLiteralExpression(literalToken, type, value);
+    if (!memberType) {
+      this.pushError("Cannot infer array element type; add a type annotation", literalToken);
+      return null;
+    }
+
+    return new ArrayLiteralExpression(literalToken, memberType, value);
   }
 
-  private parseArrayLiteralMember(): number | null {
+  private parseArrayLiteralMemberTyped(): { num: number | null; exprType: string } {
     const p = this.parseExpression(LOWEST);
     if (!p) {
       this.pushError("Parser: missing expression in array literal", this.tokenizer.curToken());
-      return null;
+      return { num: null, exprType: "" };
     }
     const isFloat = p instanceof FloatLiteralExpression;
     const isInt = p instanceof IntegerLiteralExpression;
@@ -1016,21 +1073,24 @@ export class Parser {
         "Parser: only float, integer and bool literals in an array literal are supported",
         this.tokenizer.curToken(),
       );
-      return null;
+      return { num: null, exprType: "" };
     }
     this.tokenizer.nextToken();
-    return typeof p.value === "number" ? p.value : p.value ? 1 : 0;
+    const exprType = isFloat ? "f32" : "i32";
+    const num = typeof p.value === "number" ? p.value : p.value ? 1 : 0;
+    return { num, exprType };
   }
 
-  private parseStructLiteral(token: IdentToken): ASTExpression | null {
-    const name = token.literal;
+  private parseStructLiteral(structName: string): ASTExpression | null {
+    const literalToken = this.tokenizer.curToken(); // the LBrace token
+    let name = structName;
     const members: Record<string, ASTExpression> = {};
     while (!this.tokenizer.peekTokenIs("RBrace")) {
       if (!this.expectPeek("Identifier")) {
         return null;
       }
       const ident = this.tokenizer.curToken();
-      const name = ident.literal.toString();
+      const fieldName = ident.literal.toString();
       if (!this.expectPeek("Assign")) {
         return null;
       }
@@ -1038,7 +1098,7 @@ export class Parser {
 
       const expr = this.parseExpression(LOWEST);
       if (expr) {
-        members[name] = expr;
+        members[fieldName] = expr;
       }
 
       // account for last item skipping its comma
@@ -1058,7 +1118,23 @@ export class Parser {
       return null;
     }
 
-    return new StructLiteralExpression(token, name, members);
+    if (!name) {
+      const memberNames = Object.keys(members);
+      const matched = [...this.structDefs.entries()].find(([, fields]) => {
+        const fieldNames = Object.keys(fields);
+        return fieldNames.length === memberNames.length && memberNames.every((f) => f in fields);
+      });
+      if (!matched) {
+        this.pushError(
+          "Cannot infer struct type from literal; add a type annotation",
+          literalToken,
+        );
+        return null;
+      }
+      name = matched[0];
+    }
+
+    return new StructLiteralExpression(literalToken, name, members);
   }
 
   private parseFunctionLiteral(): ASTExpression | null {

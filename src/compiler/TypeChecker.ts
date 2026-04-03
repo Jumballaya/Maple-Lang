@@ -1,3 +1,4 @@
+import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { AssignmentExpression } from "../parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../parser/ast/expressions/CallExpression";
@@ -11,8 +12,6 @@ import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
 import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
 import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
-import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
-import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
@@ -21,9 +20,10 @@ import { IfStatement } from "../parser/ast/statements/IfStatement";
 import { LetStatement } from "../parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
-import { MapleError } from "./errors";
+import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
 import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
+import { MapleError } from "./errors";
 
 const ARITHMETIC_OPS = new Set(["+", "-", "*", "/", "%"]);
 

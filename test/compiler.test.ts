@@ -855,3 +855,17 @@ describe("Compiler Pipeline", () => {
     assert(wat.includes('(import "runtime" "memory" (memory 2))'));
   });
 });
+
+describe("Emission: Type inference", () => {
+  test("inferred i32 local emits correct local declaration and set", () => {
+    const { wat } = compile("fn f(): void { let x = 5; }");
+    assert(wat.includes("(local $x i32)"), `Missing (local $x i32) in:\n${wat}`);
+    assert(wat.includes("(local.set $x (i32.const 5))"), `Missing local.set in:\n${wat}`);
+  });
+
+  test("inferred f32 local emits correct local declaration and set", () => {
+    const { wat } = compile("fn f(): void { let y = 3.14; }");
+    assert(wat.includes("(local $y f32)"), `Missing (local $y f32) in:\n${wat}`);
+    assert(wat.includes("(local.set $y (f32.const 3.14))"), `Missing local.set in:\n${wat}`);
+  });
+});

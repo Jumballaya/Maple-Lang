@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { StructMember } from "../src/compiler/emitters/emitter.types";
+import { ArrayLiteralExpression } from "../src/parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
 import { CastExpression } from "../src/parser/ast/expressions/CastExpression";
@@ -2552,6 +2553,130 @@ describe("Parser: Error positions", () => {
     assert.equal(err.line, 1);
     assert.equal(typeof err.col, "number");
     assert(err.col >= 1);
+  });
+});
+
+describe("Parser: Type inference", () => {
+  function parseLet(src: string): LetStatement {
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    const stmt = prog.statements[0];
+    assert(stmt instanceof LetStatement, `Expected LetStatement, got ${stmt?.constructor?.name}`);
+    return stmt;
+  }
+
+  test("infers i32 from integer literal", () => {
+    const stmt = parseLet("let x = 5;");
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers f32 from float literal", () => {
+    const stmt = parseLet("let y = 3.14;");
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers bool from boolean literal", () => {
+    const stmt = parseLet("let b = true;");
+    assert.equal(stmt.typeAnnotation, "bool");
+  });
+
+  test("explicit i32 annotation still works (no regression)", () => {
+    const stmt = parseLet("let x: i32 = 5;");
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers i32 from i32 infix expression", () => {
+    const stmt = parseLet("let r = 1 + 2;");
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers f32 from f32 infix expression", () => {
+    const stmt = parseLet("let r = 1.0 + 2.0;");
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers f32 from cast expression", () => {
+    const stmt = parseLet("let c = 1 as f32;");
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers struct type from literal when struct is defined", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      let p = { x = 1, y = 2 };
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const letStmt = prog.statements[1];
+    assert(letStmt instanceof LetStatement);
+    assert.equal(letStmt.typeAnnotation, "P");
+  });
+
+  test("parse error when struct literal has no matching struct def", () => {
+    const src = "let p = { a = 1, b = 2 };";
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer struct type")),
+      `Expected "Cannot infer struct type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
+  test("infers i32[] from integer array literal", () => {
+    const stmt = parseLet("let arr = [1, 2, 3];");
+    assert.equal(stmt.typeAnnotation, "i32[]");
+  });
+
+  test("infers f32[] from float array literal", () => {
+    const stmt = parseLet("let arr = [1.0, 2.0];");
+    assert.equal(stmt.typeAnnotation, "f32[]");
+  });
+
+  test("regression: explicit i32[] annotation stores full type", () => {
+    const stmt = parseLet("let arr: i32[] = [1, 2, 3];");
+    assert.equal(stmt.typeAnnotation, "i32[]");
+  });
+
+  test("explicit i32[] annotation: ArrayLiteralExpression.memberType is element type 'i32'", () => {
+    const stmt = parseLet("let arr: i32[] = [1, 2, 3];");
+    assert(stmt.expression instanceof ArrayLiteralExpression);
+    assert.equal(stmt.expression.memberType, "i32");
+  });
+
+  test("explicit f32[] annotation: ArrayLiteralExpression.memberType is element type 'f32'", () => {
+    const stmt = parseLet("let arr: f32[] = [1.0, 2.0];");
+    assert(stmt.expression instanceof ArrayLiteralExpression);
+    assert.equal(stmt.expression.memberType, "f32");
+  });
+
+  test("infers i32 from member access on inferred struct", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      let p: P = { x = 1, y = 2 };
+      let z = p.x;
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const letStmt = prog.statements[2];
+    assert(letStmt instanceof LetStatement);
+    assert.equal(letStmt.typeAnnotation, "i32");
+  });
+
+  test("parse error when let has call expression with no annotation", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      let x = add(1, 2);
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer type")),
+      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
   });
 });
 
