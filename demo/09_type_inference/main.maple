@@ -1,0 +1,78 @@
+struct Vec2 {
+  x: i32,
+  y: i32,
+}
+
+// scalars: i32 and f32 inferred from literals
+export fn scalar_inference(): i32 {
+  let a = 10;
+  let b = 20;
+  let c = a + b;
+  return c;
+}
+
+// f32 inferred from float literal
+export fn float_inference(): i32 {
+  let pi = 3.14;
+  let r = 2.0;
+  let area = pi * r * r;
+  return area as i32;
+}
+
+// bool inferred from comparison
+export fn bool_inference(): i32 {
+  let x = 42;
+  let big = x > 10;
+  if (big) {
+    return 1;
+  }
+  return 0;
+}
+
+// f32 inferred from cast expression
+export fn cast_inference(): i32 {
+  let n = 7;
+  let f = n as f32;
+  let half = f * 0.5;
+  return half as i32;
+}
+
+// struct inferred from literal by field-name matching
+export fn struct_inference(): i32 {
+  let v = { x = 3, y = 4 };
+  return v.x + v.y;
+}
+
+// i32 inferred from struct member access
+export fn member_inference(): i32 {
+  let v: Vec2 = { x = 10, y = 6 };
+  let diff = v.x - v.y;
+  return diff;
+}
+
+// i32[] inferred from integer array literal — syntax compiles cleanly;
+// excluded from _start due to the known wasm-ld data-section relocation issue
+export fn array_inference(): i32 {
+  let arr = [10, 20, 30];
+  return arr[0] + arr[1] + arr[2];
+}
+
+// mix of inferred and explicit in the same function
+export fn mixed(): i32 {
+  let base = 100;
+  let scale: f32 = 0.5;
+  let scaled = base as f32 * scale;
+  let result: i32 = scaled as i32;
+  return result;
+}
+
+// _start: 30 + 12 + 1 + 3 + 7 + 4 + 50 = 107
+export fn _start(): i32 {
+  return scalar_inference()
+       + float_inference()
+       + bool_inference()
+       + cast_inference()
+       + struct_inference()
+       + member_inference()
+       + mixed();
+}
