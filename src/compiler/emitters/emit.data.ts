@@ -116,12 +116,21 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuil
   //      data: *u8,
   //    }
   //
-  const rawBytes = Array.from(utf8).reduce((acc, b) => {
+  // Pad raw bytes to a 4-byte boundary with explicit \00 bytes so the emitted
+  // data segment covers the full allocation stride. Without this, wasm-ld packs
+  // data segments contiguously and eliminates the implicit gap, misaligning the
+  // header address that the code has already hard-coded.
+  const paddedLen = alignup(len, 4);
+  let rawBytes = Array.from(utf8).reduce((acc, b) => {
     return `${acc}\\${b.toString(16).padStart(2, "0")}`;
   }, "");
-  const charPtr = builder.addBytes(rawBytes); // data for chars
+  for (let i = len; i < paddedLen; i++) {
+    rawBytes += "\\00";
+  }
+
+  const charPtr = builder.addBytes(rawBytes, undefined, 4); // paddedLen bytes, align 4
   const header = numToLittleEndian([len, charPtr], "i32"); // [len, ptr]
-  const hdrAddr = builder.addBytes(header); // auto-alloc header
+  const hdrAddr = builder.addBytes(header, undefined, 4); // header immediately follows
   expr.location = hdrAddr; // string pointer points to header
 }
 

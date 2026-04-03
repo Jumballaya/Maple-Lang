@@ -5,6 +5,14 @@ struct Pair {
   right: i32,
 }
 
+fn Pair.sum(p)(): i32 {
+  return p.left + p.right;
+}
+
+fn Pair.scale(p)(factor: i32): i32 {
+  return (p.left + p.right) * factor;
+}
+
 let base: Pair = {
   left = 2,
   right = 3,
@@ -53,6 +61,22 @@ export fn _start(seed: i32): i32 {
   if (!(seed == 0)) {
     total = total + (seed >> 1);
   }
+
+  // type inference: no explicit type annotations needed
+  let inferred_int = 7;
+  let inferred_float = 2.0;
+  let inferred_cast = inferred_int as f32 * inferred_float;
+  total = total + inferred_int + (inferred_cast as i32);
+
+  // strings: length of a string literal is accessible via .len
+  let greeting: string = "hello";
+  let inferred_str = "world!";
+  total = total + greeting.len + inferred_str.len;
+
+  // struct methods: call methods on a pointer-backed struct (global)
+  let method_sum: i32 = base.sum();
+  let method_scaled: i32 = base.scale(3);
+  total = total + method_sum + method_scaled;
 
   return total + flipped + (-tweak);
 }
