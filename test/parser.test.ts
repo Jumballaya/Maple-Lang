@@ -2613,6 +2613,21 @@ describe("Parser: Type inference", () => {
     assert.equal(letStmt.typeAnnotation, "P");
   });
 
+  test("parse error when struct literal matches multiple struct defs (ambiguous)", () => {
+    const src = `
+      struct Vec2  { x: i32, y: i32, }
+      struct AVec2 { x: i32, y: i32, }
+      let p = { x = 1, y = 2 };
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Ambiguous")),
+      `Expected "Ambiguous" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
   test("parse error when struct literal has no matching struct def", () => {
     const src = "let p = { a = 1, b = 2 };";
     const p = new Parser(src);

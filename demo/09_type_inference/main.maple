@@ -50,8 +50,7 @@ export fn member_inference(): i32 {
   return diff;
 }
 
-// i32[] inferred from integer array literal — syntax compiles cleanly;
-// excluded from _start due to the known wasm-ld data-section relocation issue
+// i32[] inferred from integer array literal
 export fn array_inference(): i32 {
   let arr = [10, 20, 30];
   return arr[0] + arr[1] + arr[2];
@@ -66,7 +65,7 @@ export fn mixed(): i32 {
   return result;
 }
 
-// _start: 30 + 12 + 1 + 3 + 7 + 4 + 50 = 107
+// _start: 30 + 12 + 1 + 3 + 7 + 4 + 60 + 50 = 167
 export fn _start(): i32 {
   return scalar_inference()
        + float_inference()
@@ -74,5 +73,6 @@ export fn _start(): i32 {
        + cast_inference()
        + struct_inference()
        + member_inference()
+       + array_inference()
        + mixed();
 }

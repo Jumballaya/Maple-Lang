@@ -1120,18 +1120,34 @@ export class Parser {
 
     if (!name) {
       const memberNames = Object.keys(members);
-      const matched = [...this.structDefs.entries()].find(([, fields]) => {
+      const matches = [...this.structDefs.entries()].filter(([, fields]) => {
         const fieldNames = Object.keys(fields);
         return fieldNames.length === memberNames.length && memberNames.every((f) => f in fields);
       });
-      if (!matched) {
+      if (matches.length === 0) {
         this.pushError(
           "Cannot infer struct type from literal; add a type annotation",
           literalToken,
         );
         return null;
       }
-      name = matched[0];
+      if (matches.length > 1) {
+        const names = matches.map(([n]) => n).join(", ");
+        this.pushError(
+          `Ambiguous struct literal: matches ${names}; add a type annotation`,
+          literalToken,
+        );
+        return null;
+      }
+      const match = matches[0];
+      if (!match) {
+        this.pushError(
+          "Cannot infer struct type from literal; add a type annotation",
+          literalToken,
+        );
+        return null;
+      }
+      name = match[0];
     }
 
     return new StructLiteralExpression(literalToken, name, members);

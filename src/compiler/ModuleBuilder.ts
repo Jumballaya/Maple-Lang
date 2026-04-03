@@ -19,7 +19,11 @@ export class ModuleBuilder {
   private structs: Record<string, StructData> = {};
   private data: Array<ModuleDataMeta> = [];
   private stringPool: Record<string, number> = {};
-  private dataPtr = 1024;
+  // wasm-ld places static data at __global_base (default 65536 = one 64 KB page
+  // reserved for the shadow stack). Starting our data pointer here means the
+  // addresses the compiler embeds in code (i32.const 65536, i32.const 65540 …)
+  // match the addresses the linker actually uses in the final binary.
+  private dataPtr = 65536;
 
   constructor(name: string) {
     this.name = name;
