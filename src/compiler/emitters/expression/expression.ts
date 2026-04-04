@@ -144,16 +144,19 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     expression instanceof PointerMemberExpression
   ) {
     const { memberData, identData } = getPointerMemberData(expression, emitter);
-    if (memberData) {
-      const loadOp = wasmLoadOp(memberData.type);
-      const offset = memberData.offset;
-      const addr = emitGet(identData.name, emitter);
-      const val = emitNumberGet(offset, "i32");
-      writer.append(`(${loadOp} (i32.add ${addr} ${val}))`);
-    } else {
-      // no memberData means it is a flattened local ident
-      writer.append(emitGet(identData.name, emitter));
+    if (!memberData) {
+      const t = expression.token;
+      throw new MapleError(
+        "[expression emitter] struct member access requires a struct-typed base",
+        t.line,
+        t.col,
+      );
     }
+    const loadOp = wasmLoadOp(memberData.type);
+    const offset = memberData.offset;
+    const addr = emitGet(identData.name, emitter);
+    const val = emitNumberGet(offset, "i32");
+    writer.append(`(${loadOp} (i32.add ${addr} ${val}))`);
   } else if (expression instanceof PrefixExpression) {
     writer.append(emitPrefixExpression(expression, emitter));
     //

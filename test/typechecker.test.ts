@@ -354,16 +354,12 @@ describe("TypeChecker: Control Flow - Break/Continue Context (Fix 8)", () => {
 
   test("continue inside while loop is valid", () => {
     // GREEN
-    expectNoErrors(
-      "fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }",
-    );
+    expectNoErrors("fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }");
   });
 
   test("break inside switch is valid", () => {
     // GREEN (after fix 7 adds switch break label)
-    expectNoErrors(
-      `fn f(x: i32): void { switch (x) { case 0: { break; } default: { break; } } }`,
-    );
+    expectNoErrors(`fn f(x: i32): void { switch (x) { case 0: { break; } default: { break; } } }`);
   });
 
   test("continue inside switch inside for loop is valid (targets the loop)", () => {
@@ -404,6 +400,78 @@ describe("TypeChecker: If conditions", () => {
       }
       `,
       "if condition",
+    );
+  });
+});
+
+// ─── 8A: Memory-Backed Local Structs — Type Checker ──────────────────────────
+
+describe("TypeChecker: 8A Local struct member access", () => {
+  test("Q78: accessing i32 member on local struct reports no error", () => {
+    expectNoErrors(`
+      struct Point { x: i32, y: i32 }
+      fn f(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.x;
+      }
+    `);
+  });
+
+  test("Q79: accessing f32 member on local struct reports no error", () => {
+    expectNoErrors(`
+      struct Vec2 { x: f32, y: f32 }
+      fn f(): f32 {
+        let v: Vec2 = { x = 1.5, y = 2.5 };
+        return v.x;
+      }
+    `);
+  });
+
+  test("Q80: p.x + p.y type-checks correctly as i32", () => {
+    expectNoErrors(`
+      struct Point { x: i32, y: i32 }
+      fn f(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.x + p.y;
+      }
+    `);
+  });
+
+  test("Q81: method call on local struct reports no error", () => {
+    expectNoErrors(`
+      struct Point { x: i32, y: i32 }
+      fn Point.sum(p)(): i32 { return p.x + p.y; }
+      fn f(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.sum();
+      }
+    `);
+  });
+
+  test("Q82: method call with wrong arg count on local struct still reports error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn Point.scale(self)(factor: i32): i32 { return self.x * factor; }
+      fn f(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.scale(2, 3);
+      }
+      `,
+      "expects",
+    );
+  });
+
+  test("Q83: accessing nonexistent member on local struct still caught", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): i32 {
+        let p: Point = { x = 1, y = 2 };
+        return p.z;
+      }
+      `,
+      "no member",
     );
   });
 });

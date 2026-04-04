@@ -12,36 +12,50 @@ import { ForStatement } from "../../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement";
 import { IfStatement } from "../../parser/ast/statements/IfStatement";
 import { LetStatement } from "../../parser/ast/statements/LetStatement";
+import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../parser/ast/types/ast.type";
 import type { ModuleBuilder } from "../ModuleBuilder";
 import type { ModuleEmitter } from "../ModuleEmitter";
 import { baseScalar, sizeofType } from "./emit.types";
 
-export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
+export function extractGlobalData(
+  stmt: ASTStatement,
+  builder: ModuleBuilder,
+  insideFunction = false,
+) {
   if (stmt instanceof BlockStatement) {
     for (const st of stmt.statements) {
-      extractGlobalData(st, builder);
+      extractGlobalData(st, builder, insideFunction);
     }
     return;
   }
   if (stmt instanceof FunctionStatement) {
-    extractGlobalData(stmt.fnExpr.body, builder);
+    extractGlobalData(stmt.fnExpr.body, builder, true);
     return;
   }
   if (stmt instanceof ForStatement) {
-    extractGlobalData(stmt.loopBody, builder);
+    extractGlobalData(stmt.loopBody, builder, insideFunction);
     return;
   }
   if (stmt instanceof IfStatement) {
-    extractGlobalData(stmt.thenBlock, builder);
+    extractGlobalData(stmt.thenBlock, builder, insideFunction);
     if (stmt.elseBlock) {
-      extractGlobalData(stmt.elseBlock, builder);
+      extractGlobalData(stmt.elseBlock, builder, insideFunction);
     }
     return;
   }
   if (stmt instanceof WhileStatement) {
-    extractGlobalData(stmt.loopBody, builder);
+    extractGlobalData(stmt.loopBody, builder, insideFunction);
+    return;
+  }
+  if (stmt instanceof SwitchStatement) {
+    for (const c of stmt.cases) {
+      extractGlobalData(c.body, builder, insideFunction);
+    }
+    if (stmt.default) {
+      extractGlobalData(stmt.default, builder, insideFunction);
+    }
     return;
   }
   if (stmt instanceof ExpressionStatement) {
@@ -53,7 +67,7 @@ export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
       if (expr.value instanceof ArrayLiteralExpression) {
         extractArrayLiteral(expr.value, builder);
       }
-      if (expr.value instanceof StructLiteralExpression) {
+      if (expr.value instanceof StructLiteralExpression && !insideFunction) {
         extractStructLiteral(expr.value, builder);
       }
     }
@@ -66,7 +80,7 @@ export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
         if (p instanceof ArrayLiteralExpression) {
           extractArrayLiteral(p, builder);
         }
-        if (p instanceof StructLiteralExpression) {
+        if (p instanceof StructLiteralExpression && !insideFunction) {
           extractStructLiteral(p, builder);
         }
       }
@@ -77,7 +91,7 @@ export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
     if (stmt.expression instanceof ArrayLiteralExpression) {
       extractArrayLiteral(stmt.expression, builder);
     }
-    if (stmt.expression instanceof StructLiteralExpression) {
+    if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
       extractStructLiteral(stmt.expression, builder);
     }
     return;
@@ -89,7 +103,7 @@ export function extractGlobalData(stmt: ASTStatement, builder: ModuleBuilder) {
     if (stmt.expression instanceof ArrayLiteralExpression) {
       extractArrayLiteral(stmt.expression, builder);
     }
-    if (stmt.expression instanceof StructLiteralExpression) {
+    if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
       extractStructLiteral(stmt.expression, builder);
     }
     return;
@@ -193,12 +207,68 @@ export function alignup(value: number, alignment = 4) {
   return value + (alignment - (value % alignment));
 }
 
-function defStructLocalFields(emitter: ModuleEmitter, base: string, structName: string) {
-  const sd = emitter.getStruct(structName);
-  if (!sd) throw new Error(`unknown struct: "${structName}"`);
-  for (const [m, md] of Object.entries(sd.members)) {
-    emitter.defLocal({ name: `${base}_${m}`, type: md.type, scope: "local" });
+export function buildLocalStructFrame(
+  s: ASTStatement,
+  emitter: ModuleEmitter,
+): { totalSize: number; offsets: Record<string, number> } {
+  let total = 0;
+  const offsets: Record<string, number> = {};
+
+  function recordStructLocal(nameToken: string, structName: string): void {
+    const sd = emitter.getStruct(structName);
+    if (!sd) throw new Error(`unknown struct: "${structName}"`);
+    const name = nameToken;
+    offsets[name] = total;
+    total += sd.size;
   }
+
+  function walk(stmt: ASTStatement): void {
+    if (stmt instanceof FunctionStatement) {
+      return;
+    }
+    if (stmt instanceof LetStatement) {
+      if (stmt.expression instanceof StructLiteralExpression) {
+        recordStructLocal(stmt.identifier.tokenLiteral(), stmt.expression.name);
+      }
+      return;
+    }
+    if (stmt instanceof BlockStatement) {
+      for (const st of stmt.statements) {
+        walk(st);
+      }
+      return;
+    }
+    if (stmt instanceof IfStatement) {
+      walk(stmt.thenBlock);
+      if (stmt.elseBlock) {
+        walk(stmt.elseBlock);
+      }
+      return;
+    }
+    if (stmt instanceof WhileStatement) {
+      walk(stmt.loopBody);
+      return;
+    }
+    if (stmt instanceof ForStatement) {
+      const init = stmt.initBlock;
+      if (init.expression instanceof StructLiteralExpression) {
+        recordStructLocal(init.identifier.tokenLiteral(), init.expression.name);
+      }
+      walk(stmt.loopBody);
+      return;
+    }
+    if (stmt instanceof SwitchStatement) {
+      for (const c of stmt.cases) {
+        walk(c.body);
+      }
+      if (stmt.default) {
+        walk(stmt.default);
+      }
+    }
+  }
+
+  walk(s);
+  return { totalSize: total, offsets };
 }
 
 export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
@@ -208,7 +278,11 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   }
   if (s instanceof LetStatement) {
     if (s.expression instanceof StructLiteralExpression) {
-      defStructLocalFields(builder, s.identifier.tokenLiteral(), s.expression.name);
+      builder.defLocal({
+        name: s.identifier.tokenLiteral(),
+        type: s.expression.name,
+        scope: "local",
+      });
       return;
     }
     builder.defLocal({
@@ -238,7 +312,11 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   if (s instanceof ForStatement) {
     const init = s.initBlock;
     if (init.expression instanceof StructLiteralExpression) {
-      defStructLocalFields(builder, init.identifier.tokenLiteral(), init.expression.name);
+      builder.defLocal({
+        name: init.identifier.tokenLiteral(),
+        type: init.expression.name,
+        scope: "local",
+      });
     } else {
       builder.defLocal({
         name: s.initBlock.identifier.tokenLiteral(),
@@ -248,5 +326,13 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
     }
     extractLocals(s.loopBody, builder);
     return;
+  }
+  if (s instanceof SwitchStatement) {
+    for (const c of s.cases) {
+      extractLocals(c.body, builder);
+    }
+    if (s.default) {
+      extractLocals(s.default, builder);
+    }
   }
 }

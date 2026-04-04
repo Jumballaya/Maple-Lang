@@ -391,3 +391,191 @@ describe("Integration: wat2wasm validation", () => {
     assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
   });
 });
+
+// ─── 8A: Memory-Backed Local Structs — Integration ─────────────────────────
+
+describe("Integration: 8A local struct wat2wasm validation", () => {
+  maybeTest("P64: local struct — create, read field, return passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.x + p.y;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P65: local struct with early return passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(cond: i32): i32 {
+        let p: Point = { x = 10, y = 20 };
+        if (cond > 0) {
+          return p.x;
+        }
+        return p.y;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P66: two local structs — read from both passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 1, y = 2 };
+        let q: Point = { x = 3, y = 4 };
+        return p.x + q.y;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P67: write-then-read local struct passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 0, y = 0 };
+        p.x = 99;
+        return p.x;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P68: loop with struct field read/write passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 5, y = 0 };
+        while (p.x > 0) {
+          p.x = p.x - 1;
+          p.y = p.y + 1;
+        }
+        return p.y;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P69: method call on local struct passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn Point.sum(self)(): i32 {
+        return self.x + self.y;
+      }
+      fn test(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.sum();
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P70: method with extra arg on local struct passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn Point.scale(self)(factor: i32): i32 {
+        return (self.x + self.y) * factor;
+      }
+      fn test(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        return p.scale(2);
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P71: f32 struct local — read f32 member passes wat2wasm", () => {
+    const wat = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn test(): f32 {
+        let v: Vec2 = { x = 1.5, y = 2.5 };
+        return v.x;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P72: mixed i32/f32 struct local passes wat2wasm", () => {
+    const wat = compile(`
+      struct Mixed { a: i32, b: f32 }
+      fn test(): i32 {
+        let m: Mixed = { a = 42, b = 3.14 };
+        return m.a;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P73: void function with local struct passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 1, y = 2 };
+        p.x = 10;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("P74: nested function calls — both with local structs passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn inner(): i32 {
+        let q: Point = { x = 10, y = 20 };
+        return q.x + q.y;
+      }
+      fn outer(): i32 {
+        let p: Point = { x = 1, y = 2 };
+        return p.x + inner();
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest(
+    "P75: function without local struct calling function with local struct passes wat2wasm",
+    () => {
+      const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn with_struct(): i32 {
+        let p: Point = { x = 5, y = 6 };
+        return p.x + p.y;
+      }
+      fn without_struct(): i32 {
+        return with_struct() + 1;
+      }
+    `);
+      const err = validateWithWat2Wasm(wat);
+      assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    },
+  );
+
+  maybeTest("P76: existing struct param and member access still passes wat2wasm", () => {
+    const wat = compile(`
+      struct Vec2 { x: i32, y: i32 }
+      fn dot(v: Vec2, u: Vec2): i32 {
+        let vx: i32 = v.x;
+        let vy: i32 = v.y;
+        let ux: i32 = u.x;
+        let uy: i32 = u.y;
+        return vx * ux + vy * uy;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+});

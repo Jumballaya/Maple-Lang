@@ -85,17 +85,15 @@ export function emitAssignmentExpression(
       throw new Error("[expression emitter] compound assignment for members not implemented");
     }
     const { identData, memberData } = getPointerMemberData(expression.left, emitter);
-    if (memberData) {
-      const t = memberData.type;
-      const off = memberData.offset;
-      const storeOp = wasmStoreOp(t);
-      const base = emitGet(identData.name, emitter);
-      const val = emitExpression(expression.value, emitter);
-      writer.line(`(${storeOp} (i32.add ${base} (i32.const ${off})) ${val})`);
-    } else {
-      // no member data means it is a local flattened variable instead of an real struct pointer
-      writer.line(emitSet(identData.name, expression.value, emitter));
+    if (!memberData) {
+      throw new Error("[expression emitter] struct member assignment requires a struct-typed base");
     }
+    const t = memberData.type;
+    const off = memberData.offset;
+    const storeOp = wasmStoreOp(t);
+    const base = emitGet(identData.name, emitter);
+    const val = emitExpression(expression.value, emitter);
+    writer.line(`(${storeOp} (i32.add ${base} (i32.const ${off})) ${val})`);
   } else {
     throw new Error(
       `[expression emitter] Assignment expression type: "${expression.left.toString()}" not supported`,

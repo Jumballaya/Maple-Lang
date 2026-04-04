@@ -46,6 +46,10 @@ export type FunctionContext = {
   params: Record<string, VariableMeta>;
   locals: Record<string, VariableMeta>;
   labels: { break?: string; loop?: string }[];
+  /** Total bytes reserved on the shadow stack for this function frame (0 if none). */
+  frameSize: number;
+  /** Byte offset of each local struct variable from `global.get $__sp` right after prologue. */
+  structFrameOffsets: Record<string, number>;
 };
 
 export type ModuleMeta = {

@@ -1,34 +1,75 @@
 ```
 +------------------------------+  0x0000_0000
 |                              |
-|   Shadow stack               |  wasm-ld software stack, grows downward
-|   (64 KB, one full page)     |  __stack_pointer initialised to 0x1_0000
+|   Shadow stack               |  compiler-managed software stack, grows downward
+|   (64 KB, one full page)     |  $__sp initialised to 0x1_0000 (65536)
+|                              |  used for local struct variables in functions
 |                              |
 +------------------------------+  0x0001_0000  (65536)  ← __global_base
 |                              |
-|   Static data                |  array literals, struct literals,
-|   (compiler data section)    |  string bytes, string header records
-|                              |  allocated upward from 0x1_0000
+|   Static data                |  array literals, global struct literals,
+|   (compiler data section)    |  string bytes + string header records
+|                              |  allocated upward from 0x1_0000 at compile time
 +------------------------------+  HEAP_BASE  (= 0x1_0000 + static_data_size, aligned to 8)
 |                              |
-|   Heap                       |  malloc / free arena, grows upward
-|   (free/used blocks w/ hdr)  |
-|                              |
-+------------------------------+  heap_end (logical top, grows on demand)
+|   Heap                       |  malloc / free arena, grows upward at runtime
+|   (free/used blocks w/ hdr)  |  free-list allocator with 8-byte chunk headers
+|                              |  coalesces adjacent free blocks on free()
++------------------------------+  heap_end (logical top, grows on demand via memory.grow)
 |                              |
 |   Unused                     |
 |                              |
 +------------------------------+  memory.size × 64 KiB  (default: 2 pages = 128 KB)
 ```
 
+## Regions
+
+### Shadow stack  (0x0000_0000 – 0x0000_FFFF)
+
+The compiler emits a mutable global `$__sp` (stack pointer) initialised to `65536`. Every function that declares one or more local struct variables adjusts `$__sp` in its prologue and epilogue:
+
+```wat
+;; prologue — allocate frame
+(global.set $__sp (i32.sub (global.get $__sp) (i32.const <frame_size>)))
+
+;; epilogue — release frame (fall-through path)
+(global.set $__sp (i32.add (global.get $__sp) (i32.const <frame_size>)))
+```
+
+Explicit `return` statements also restore `$__sp` before returning. If the return expression itself could call other functions (which would allocate their own frames), the value is first saved into a `$__ret_tmp` local so that the frame can be released without corrupting the returned data.
+
+Each local struct variable gets a single `i32` pointer local that is set to `$__sp + offset` in the prologue. Field reads and writes are emitted as `i32.load`/`f32.load` and `i32.store`/`f32.store` instructions against that pointer.
+
+`break` and `continue` do **not** touch `$__sp` — they only exit the current loop, not the function, so the frame is still live.
+
+### Static data  (0x0001_0000 – HEAP_BASE)
+
+Compile-time-only. The compiler's `dataPtr` cursor starts at `65536` and allocates space upward for:
+
+- **Array literals** — element bytes packed contiguously
+- **Global struct literals** — field bytes packed contiguously; the global variable holds the address as an `i32`
+- **String literals** — a padded UTF-8 byte run followed immediately by an 8-byte `{ len: i32, data: *u8 }` header; the `string` variable holds the header address
+
+Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack.
+
+The reason `dataPtr` starts at `65536` rather than a lower address: `wasm-ld` places the data section at `__global_base` (default `65536`), so the `i32.const` addresses baked into the emitted WAT must match. If `dataPtr` started lower, the linker would relocate the data while leaving code references unchanged, causing silent wrong-address reads.
+
+### Heap  (HEAP_BASE – heap_end)
+
+Runtime-managed by the `memory` stdlib module (`src/compiler/stdlib/memory.wat`). The allocator is a free-list allocator:
+
+- Each chunk has an **8-byte header** `{ next: i32, size_and_flags: u32 }` where `size` is 8-aligned and bit 0 is the `ALLOC` flag.
+- `malloc(n)` — scans the free list for a fit, splits oversized blocks, or carves from the wilderness; returns a pointer to the payload (header + 8).
+- `free(ptr)` — marks the block free, coalesces with the next block if it is also free, and reclaims the wilderness top if the freed block is at `heap_end`.
+- `realloc(old, old_size, new_size)` — `malloc` + `memory.copy` + `free`.
+- `memory.grow` is called automatically when `malloc` needs more capacity.
+- `heap_init(data_end)` must be called once before any `malloc`; programs that import `memory` typically call this in their `_start` function, passing the address just past their static data.
+
+Programs that never call `malloc` never touch the heap region.
+
 ## Notes
 
-- `wasm-ld` defaults to `--stack-first`: the shadow stack occupies the first page
-  ([0, 65536)) and `__global_base = 65536`. Static data therefore starts at 65536.
-- The Maple compiler's `dataPtr` starts at **65536** (`ModuleBuilder.dataPtr`) so that
-  the `i32.const` addresses embedded in emitted code match the addresses the linker
-  assigns. If `dataPtr` were lower (e.g. 1024) the linker would relocate the data
-  segment upward while leaving code references unchanged, causing silent wrong reads.
-- Maple programs never use the shadow stack (all locals are native WebAssembly locals),
-  so the 64 KB reservation has no runtime cost.
-- The heap is initialised lazily; programs that do not call `malloc` never touch it.
+- `wasm-ld --stack-first` (the default) places the shadow stack in the first page so `__global_base = 65536`. Maple follows this convention.
+- The shadow stack grows **down** and the heap grows **up**. They could theoretically collide if a program has deeply recursive functions with many large struct locals and simultaneously performs heavy heap allocation. No overflow detection is currently implemented.
+- The static data region is fixed at link time — it never changes at runtime.
+- The default `(import "runtime" "memory" (memory 2))` provides 2 pages (128 KB) to start. `memory.grow` will request additional pages as needed.

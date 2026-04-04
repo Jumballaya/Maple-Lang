@@ -204,13 +204,19 @@ while (n > 0) {
 
 ### Switch
 
-Integer dispatch via `br_table`. Each case must end with a `return`.
+Integer dispatch via `br_table`. Each case body is a block. Cases do not fall through. Use `break` to exit the switch without returning, or `return` to exit the enclosing function. `continue` inside a switch targets the nearest enclosing loop.
 
 ```maple
 switch (x) {
-  case 0: return 10;
-  case 1: return 20;
-  default: return 99;
+  case 0: { return 10; }
+  case 1: { return 20; }
+  default: { return 99; }
+}
+
+// break to exit without returning
+switch (x) {
+  case 0: { total += x; break; }
+  default: { break; }
 }
 ```
 
@@ -245,7 +251,7 @@ let total: i32 = p.x + p.y;
 p.x = 10;
 ```
 
-Local struct variables (`let` declarations in a function body) have their members flattened into separate WASM locals. Struct parameters and global struct variables are memory-backed and accessed via pointer loads.
+All struct variables — local `let` declarations, function parameters, and globals — are memory-backed and accessed via pointer loads and stores. Local structs are allocated on the compiler-managed shadow stack; parameters and globals live in their respective linear-memory regions. See `docs/memory_map.md` for the full layout.
 
 ### Struct methods
 
@@ -268,7 +274,7 @@ let s: i32 = p.sum();
 let scaled: i32 = p.scale(3);
 ```
 
-The receiver must be a pointer-backed struct (function parameter or global), not a flattened local.
+The receiver can be any struct-typed binding — a local `let`, a function parameter, or a global. All structs are memory-backed, so the receiver is always a valid pointer.
 
 ---
 
@@ -368,6 +374,8 @@ Block         := '{' Stmt* '}'
 Stmt          := LetDecl
                | ConstDecl
                | ReturnStmt
+               | BreakStmt
+               | ContinueStmt
                | IfStmt
                | ForStmt
                | WhileStmt
@@ -375,13 +383,15 @@ Stmt          := LetDecl
                | Expr ';'
 
 ReturnStmt    := 'return' Expr? ';'
+BreakStmt     := 'break' ';'
+ContinueStmt  := 'continue' ';'
 
 IfStmt        := 'if' '(' Expr ')' Block ('else' 'if' '(' Expr ')' Block)* ('else' Block)?
 ForStmt       := 'for' '(' LetDecl Expr ';' Expr ')' Block
 WhileStmt     := 'while' '(' Expr ')' Block
 SwitchStmt    := 'switch' '(' Expr ')' '{' CaseClause* DefaultClause? '}'
-CaseClause    := 'case' IntLit ':' ReturnStmt
-DefaultClause := 'default' ':' ReturnStmt
+CaseClause    := 'case' IntLit ':' Block
+DefaultClause := 'default' ':' Block
 
 Expr          := AssignExpr
 

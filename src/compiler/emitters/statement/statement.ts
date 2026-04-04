@@ -53,9 +53,33 @@ export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void 
   }
 
   if (stmt instanceof ReturnStatement) {
+    const fn = emitter.ctx.fn;
+    const frameSize = fn?.frameSize ?? 0;
     if (stmt.returnValue) {
-      emitter.writer.line(`(return ${emitExpression(stmt.returnValue, emitter)})`);
+      const hasRetTmp = !!emitter.getVar("__ret_tmp");
+      if (frameSize > 0 && hasRetTmp) {
+        const val = emitExpression(stmt.returnValue, emitter);
+        emitter.writer.line(`(local.set $__ret_tmp ${val})`);
+        emitter.writer.line(
+          `(global.set $__sp (i32.add (global.get $__sp) (i32.const ${frameSize})))`,
+        );
+        emitter.writer.line(`(return (local.get $__ret_tmp))`);
+      } else if (frameSize > 0) {
+        // Keep emitter robust when type-checking is bypassed (e.g. emitter-only tests):
+        // restore stack frame first, then return value directly.
+        emitter.writer.line(
+          `(global.set $__sp (i32.add (global.get $__sp) (i32.const ${frameSize})))`,
+        );
+        emitter.writer.line(`(return ${emitExpression(stmt.returnValue, emitter)})`);
+      } else {
+        emitter.writer.line(`(return ${emitExpression(stmt.returnValue, emitter)})`);
+      }
       return;
+    }
+    if (frameSize > 0) {
+      emitter.writer.line(
+        `(global.set $__sp (i32.add (global.get $__sp) (i32.const ${frameSize})))`,
+      );
     }
     emitter.writer.line(`(return)`);
     return;

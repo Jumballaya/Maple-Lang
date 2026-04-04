@@ -1,6 +1,6 @@
 import type { IfStatement } from "../../../parser/ast/statements/IfStatement";
-import type { ModuleEmitter } from "../../ModuleEmitter";
 import { MapleError } from "../../errors";
+import type { ModuleEmitter } from "../../ModuleEmitter";
 import { extractIfResultType, extractNeedsReturn } from "../analysis/flow";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";

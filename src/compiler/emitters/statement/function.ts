@@ -1,6 +1,6 @@
 import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { extractLocals } from "../emit.data";
+import { buildLocalStructFrame, extractLocals } from "../emit.data";
 import { valueTypeToWasm } from "../emit.types";
 import { emitStatement } from "./statement";
 
@@ -49,15 +49,42 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       w.newLine();
       w.open();
       extractLocals(fn, emitter);
+      const frame = buildLocalStructFrame(fn.fnExpr.body, emitter);
+      emitter.configureLocalStructFrame(frame.totalSize, frame.offsets);
+
+      if (frame.totalSize > 0 && rType !== "void") {
+        const tmpType = rType === "f32" ? "f32" : "i32";
+        emitter.defLocal({
+          name: "__ret_tmp",
+          type: tmpType,
+          scope: "local",
+        });
+      }
 
       // write local definitions
       for (const v of Object.values(emitter.getLocals())) {
         w.line(`(local $${v.name} ${valueTypeToWasm(v.type)})`);
       }
 
+      if (frame.totalSize > 0) {
+        w.line(`(global.set $__sp (i32.sub (global.get $__sp) (i32.const ${frame.totalSize})))`);
+        const ordered = Object.entries(frame.offsets).sort(([, a], [, b]) => a - b);
+        for (const [varName, off] of ordered) {
+          if (off === 0) {
+            w.line(`(local.set $${varName} (global.get $__sp))`);
+          } else {
+            w.line(`(local.set $${varName} (i32.add (global.get $__sp) (i32.const ${off})))`);
+          }
+        }
+      }
+
       // write body
       for (const s of fn.fnExpr.body.statements) {
         emitStatement(s, emitter);
+      }
+
+      if (frame.totalSize > 0) {
+        w.line(`(global.set $__sp (i32.add (global.get $__sp) (i32.const ${frame.totalSize})))`);
       }
 
       // close

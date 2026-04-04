@@ -119,6 +119,14 @@ export class ModuleEmitter {
     this.currentFn.locals[meta.name] = meta;
   }
 
+  public configureLocalStructFrame(totalSize: number, offsets: Record<string, number>): void {
+    if (!this.currentFn) {
+      throw new Error("[local struct frame] no active function");
+    }
+    this.currentFn.frameSize = totalSize;
+    this.currentFn.structFrameOffsets = offsets;
+  }
+
   //////  Misc
   public getLocals(): Record<string, VariableMeta> {
     if (!this.currentFn) {
@@ -223,13 +231,6 @@ export class ModuleEmitter {
       if (!(expr.parent instanceof Identifier)) return "i32";
       const base = expr.parent.tokenLiteral();
       const member = expr.member;
-      // flat local path: struct was stored as p_x, p_y, etc.
-      const flat = this.getVar(`${base}_${member}`);
-      if (flat) {
-        const t = baseScalar(flat.type);
-        return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
-      }
-      // memory-backed struct path: p is a pointer to struct in memory
       const baseVar = this.getVar(base);
       if (!baseVar) return "i32";
       const structName = baseVar.type.startsWith("*") ? baseVar.type.slice(1) : baseVar.type;
@@ -267,6 +268,8 @@ export class ModuleEmitter {
         params: {},
         locals: {},
         labels: [],
+        frameSize: 0,
+        structFrameOffsets: {},
       };
       const out = emit(writer);
       writer.end();

@@ -1,38 +1,28 @@
-import { BooleanLiteralExpression } from "../../../parser/ast/expressions/BooleanLiteralExpression";
-import { FloatLiteralExpression } from "../../../parser/ast/expressions/FloatLiteralExpression";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
-import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../../../parser/ast/expressions/StructLiteralExpression";
 import type { LetStatement } from "../../../parser/ast/statements/LetStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { asExpr } from "../emitter.utils";
-import { emitSet } from "../expression/core";
+import { wasmStoreOp } from "../emit.types";
+import { emitGet, emitSet } from "../expression/core";
+import { emitExpression } from "../expression/expression";
 
 export function emitLetStatement(stmt: LetStatement, emitter: ModuleEmitter) {
   if (stmt.expression instanceof StructLiteralExpression) {
-    for (const [field, data] of Object.entries(stmt.expression.members)) {
-      const isNumber =
-        data instanceof IntegerLiteralExpression || data instanceof FloatLiteralExpression;
-      const isString = data instanceof StringLiteralExpression;
-      const isBool = data instanceof BooleanLiteralExpression;
-
-      if (!isString && !isNumber && !isBool) {
-        continue; // @TODO: Nested structs
+    const structName = stmt.expression.name;
+    const sd = emitter.getStruct(structName);
+    if (!sd) {
+      throw new Error(`[let] unknown struct: "${structName}"`);
+    }
+    const baseName = stmt.identifier.tokenLiteral();
+    const base = emitGet(baseName, emitter);
+    const fields = Object.values(sd.members).sort((a, b) => a.offset - b.offset);
+    for (const m of fields) {
+      const fieldExpr = stmt.expression.members[m.name];
+      if (!fieldExpr) {
+        throw new Error(`[let] struct "${structName}" initializer missing field "${m.name}"`);
       }
-      // convert bool to 1/0, otherwise extract .value (number | string),
-      // default to blank string for now
-      const val = isBool
-        ? data.value
-          ? 1
-          : 0
-        : isNumber
-          ? data.value
-          : isString
-            ? data.value
-            : "";
-      const name = `${stmt.identifier}_${field}`;
-      const rhs = asExpr(val);
-      emitter.writer.line(emitSet(name, rhs, emitter));
+      const storeOp = wasmStoreOp(m.type);
+      const val = emitExpression(fieldExpr, emitter);
+      emitter.writer.line(`(${storeOp} (i32.add ${base} (i32.const ${m.offset})) ${val})`);
     }
     return;
   }

@@ -22,16 +22,6 @@ export function getPointerMemberData(
   const base = expr.parent.tokenLiteral();
   const member = expr.member;
 
-  // prefer flattened locals like base_member
-  const flat = `${base}_${member}`;
-  const flatVar = emitter.getVar(flat);
-  if (flatVar) {
-    return {
-      identData: flatVar,
-    };
-  }
-
-  // otherwise, use the base var and resolve struct data
   const identData = emitter.getVar(base);
   if (!identData) {
     throw new Error(`[expression member] identifier not found: "${base}"`);
@@ -43,9 +33,7 @@ export function getPointerMemberData(
     structName = identData.type;
   }
   if (!structName) {
-    // No struct metadata available;
-    // fallback (e.g., might be storing a raw field)
-    return { identData };
+    throw new Error(`[expression member] "${base}" is not a struct-typed binding`);
   }
 
   const structData = emitter.ctx.mod.structs[structName];

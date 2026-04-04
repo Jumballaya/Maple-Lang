@@ -2828,9 +2828,7 @@ describe("Parser: Struct methods", () => {
 describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
   test("for loop with syntax error in body recovers and produces for statement", () => {
     // RED: manual body loop returns null on first bad statement, aborting entire for parse
-    const p = new Parser(
-      `fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { let x: = 5; } }`,
-    );
+    const p = new Parser(`fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { let x: = 5; } }`);
     const prog = p.parse("test");
     assert(p.errors.length > 0, "Expected parse errors from syntax error in body");
     const fn = prog.statements[0];
@@ -2858,9 +2856,15 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
 
   test("for loop with valid body still produces all statements", () => {
     // GREEN: normal for loop body parsing must not regress
-    const p = new Parser(`fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { let x: i32 = 1; let y: i32 = 2; } }`);
+    const p = new Parser(
+      `fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { let x: i32 = 1; let y: i32 = 2; } }`,
+    );
     const prog = p.parse("test");
-    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    assert.equal(
+      p.errors.length,
+      0,
+      `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
     const fn = prog.statements[0];
     assert(fn instanceof FunctionStatement);
     const forStmt = fn.fnExpr.body.statements[0];
@@ -2872,7 +2876,11 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
     // GREEN: normal while body parsing must not regress
     const p = new Parser(`fn f(): void { while (1) { let x: i32 = 1; break; } }`);
     const prog = p.parse("test");
-    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    assert.equal(
+      p.errors.length,
+      0,
+      `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
     const fn = prog.statements[0];
     assert(fn instanceof FunctionStatement);
     const whileStmt = fn.fnExpr.body.statements[0];
@@ -2893,7 +2901,11 @@ describe("Parser: Control Flow Hardening - If condition (Fix 9)", () => {
     // GREEN: must not regress
     const p = new Parser(`fn f(): void { if (1) {} }`);
     const prog = p.parse("test");
-    assert.equal(p.errors.length, 0, `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    assert.equal(
+      p.errors.length,
+      0,
+      `Unexpected errors: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
     const fn = prog.statements[0];
     assert(fn instanceof FunctionStatement);
     assert(fn.fnExpr.body.statements[0] instanceof IfStatement);

@@ -4,12 +4,12 @@ import { compiler } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
 import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
+import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
-import { MapleError } from "../src/compiler/errors";
 
 function compile(src: string) {
   const p = new Parser(src);
@@ -131,29 +131,33 @@ describe("Emission: Structs", () => {
     assert.equal(meta.structs.S.size, 8);
   });
 
-  test("struct let with mixed i32 and f32 members emits both", () => {
+  test("struct let with mixed i32 and f32 members emits store instructions", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: f32 }
       fn test(): void {
         let p: Point = { x = 10, y = 3.14 };
       }
     `);
-    assert(wat.includes("p_x"));
-    assert(wat.includes("p_y"));
+    assert(wat.includes("i32.store"), `Missing i32.store for x:\n${wat}`);
+    assert(wat.includes("f32.store"), `Missing f32.store for y:\n${wat}`);
+    assert(!wat.includes("$p_x"), `Must not contain flat $p_x:\n${wat}`);
+    assert(!wat.includes("$p_y"), `Must not contain flat $p_y:\n${wat}`);
   });
 
-  test("struct let with only f32 members emits all members", () => {
+  test("struct let with only f32 members emits f32.store instructions", () => {
     const { wat } = compile(`
       struct Vec2 { x: f32, y: f32 }
       fn test(): void {
         let v: Vec2 = { x = 1.5, y = 2.5 };
       }
     `);
-    assert(wat.includes("v_x"));
-    assert(wat.includes("v_y"));
+    const f32Stores = (wat.match(/f32\.store/g) || []).length;
+    assert(f32Stores >= 2, `Expected at least 2 f32.store, got ${f32Stores}:\n${wat}`);
+    assert(!wat.includes("$v_x"), `Must not contain flat $v_x:\n${wat}`);
+    assert(!wat.includes("$v_y"), `Must not contain flat $v_y:\n${wat}`);
   });
 
-  test("struct i32 member used in binary arithmetic emits i32.add and loads both members", () => {
+  test("struct i32 member used in binary arithmetic emits i32.add and i32.load", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): i32 {
@@ -161,12 +165,14 @@ describe("Emission: Structs", () => {
         return p.x + p.y;
       }
     `);
-    assert(wat.includes("i32.add"));
-    assert(wat.includes("local.get $p_x"));
-    assert(wat.includes("local.get $p_y"));
+    assert(wat.includes("i32.add"), `Missing i32.add:\n${wat}`);
+    const loadCount = (wat.match(/i32\.load/g) || []).length;
+    assert(loadCount >= 2, `Expected at least 2 i32.load for p.x + p.y, got ${loadCount}:\n${wat}`);
+    assert(!wat.includes("local.get $p_x"), `Must not use flat local $p_x:\n${wat}`);
+    assert(!wat.includes("local.get $p_y"), `Must not use flat local $p_y:\n${wat}`);
   });
 
-  test("struct member used in comparison emits comparison opcode and loads member", () => {
+  test("struct member used in comparison emits comparison opcode and i32.load", () => {
     const { wat } = compile(`
       struct Counter { n: i32 }
       fn test(): i32 {
@@ -177,11 +183,12 @@ describe("Emission: Structs", () => {
         return 0;
       }
     `);
-    assert(wat.includes("i32.gt_s"));
-    assert(wat.includes("local.get $c_n"));
+    assert(wat.includes("i32.gt_s"), `Missing i32.gt_s:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for c.n:\n${wat}`);
+    assert(!wat.includes("local.get $c_n"), `Must not use flat local $c_n:\n${wat}`);
   });
 
-  test("struct f32 member used in binary arithmetic emits f32.add and loads both members", () => {
+  test("struct f32 member used in binary arithmetic emits f32.add and f32.load", () => {
     const { wat } = compile(`
       struct Vec2 { x: f32, y: f32 }
       fn test(): f32 {
@@ -189,12 +196,14 @@ describe("Emission: Structs", () => {
         return v.x + v.y;
       }
     `);
-    assert(wat.includes("f32.add"));
-    assert(wat.includes("local.get $v_x"));
-    assert(wat.includes("local.get $v_y"));
+    assert(wat.includes("f32.add"), `Missing f32.add:\n${wat}`);
+    const loadCount = (wat.match(/f32\.load/g) || []).length;
+    assert(loadCount >= 2, `Expected at least 2 f32.load for v.x + v.y, got ${loadCount}:\n${wat}`);
+    assert(!wat.includes("local.get $v_x"), `Must not use flat local $v_x:\n${wat}`);
+    assert(!wat.includes("local.get $v_y"), `Must not use flat local $v_y:\n${wat}`);
   });
 
-  test("struct member as direct while-loop condition emits loop", () => {
+  test("struct member as direct while-loop condition emits loop with i32.load", () => {
     const { wat } = compile(`
       struct Flag { active: i32 }
       fn test(): void {
@@ -204,11 +213,12 @@ describe("Emission: Structs", () => {
         }
       }
     `);
-    assert(wat.includes("(loop"));
-    assert(wat.includes("local.get $f_active"));
+    assert(wat.includes("(loop"), `Missing loop:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for f.active:\n${wat}`);
+    assert(!wat.includes("local.get $f_active"), `Must not use flat local $f_active:\n${wat}`);
   });
 
-  test("prefix minus on struct member emits negation", () => {
+  test("prefix minus on struct member emits negation with i32.load", () => {
     const { wat } = compile(`
       struct Num { val: i32 }
       fn test(): i32 {
@@ -216,8 +226,9 @@ describe("Emission: Structs", () => {
         return -n.val;
       }
     `);
-    assert(wat.includes("i32.sub"));
-    assert(wat.includes("local.get $n_val"));
+    assert(wat.includes("i32.sub"), `Missing i32.sub for negation:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for n.val:\n${wat}`);
+    assert(!wat.includes("local.get $n_val"), `Must not use flat local $n_val:\n${wat}`);
   });
 
   test("memory-backed struct param member used in binary arithmetic resolves type correctly", () => {
@@ -540,7 +551,7 @@ describe("Emission: Member Access", () => {
     });
   });
 
-  test("member assignment compiles for flattened struct locals", () => {
+  test("member assignment on local struct emits i32.store", () => {
     const { wat } = compile(`
       struct Thing { a: i32 }
       fn test(): void {
@@ -548,8 +559,10 @@ describe("Emission: Member Access", () => {
         t.a = 14;
       }
     `);
-    assert(wat.includes("t_a"));
-    assert(wat.includes("(local.set $t_a (i32.const 14))"));
+    assert(wat.includes("i32.store"), `Missing i32.store for t.a = 14:\n${wat}`);
+    assert(wat.includes("(i32.const 14)"), `Missing value 14:\n${wat}`);
+    assert(!wat.includes("$t_a"), `Must not contain flat $t_a:\n${wat}`);
+    assert(!wat.includes("local.set $t_a"), `Must not use local.set $t_a:\n${wat}`);
   });
 });
 
@@ -597,7 +610,7 @@ describe("Emission: Literals", () => {
     const { wat } = compile('fn test(): i32 { let s: string = "hello"; return 0; }');
     assert(wat.includes("(local $s i32)"), `Missing local string slot:\n${wat}`);
     assert(wat.includes("(local.set $s (i32.const"), `Missing pointer constant emit:\n${wat}`);
-    assert(wat.includes('(data (offset (i32.const'), `Missing data segment emit:\n${wat}`);
+    assert(wat.includes("(data (offset (i32.const"), `Missing data segment emit:\n${wat}`);
   });
 
   test("char literal currently fails to parse as expression", () => {
@@ -874,14 +887,14 @@ describe("Emission: Strings", () => {
     const { wat } = compile('fn f(): void { let s: string = "hello"; }');
     assert(wat.includes("(local $s i32)"), `Missing (local $s i32) in:\n${wat}`);
     assert(wat.includes("(local.set $s (i32.const"), `Missing string pointer set in:\n${wat}`);
-    assert(wat.includes('(data (offset (i32.const'), `Missing data segment in:\n${wat}`);
+    assert(wat.includes("(data (offset (i32.const"), `Missing data segment in:\n${wat}`);
   });
 
   test("inferred string local emits i32 local and string pointer set", () => {
     const { wat } = compile('fn f(): void { let s = "world"; }');
     assert(wat.includes("(local $s i32)"), `Missing (local $s i32) in:\n${wat}`);
     assert(wat.includes("(local.set $s (i32.const"), `Missing string pointer set in:\n${wat}`);
-    assert(wat.includes('(data (offset (i32.const'), `Missing data segment in:\n${wat}`);
+    assert(wat.includes("(data (offset (i32.const"), `Missing data segment in:\n${wat}`);
   });
 
   test("string .len member access emits load from string header", () => {
@@ -953,7 +966,10 @@ describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
     const { wat } = compile(
       `fn f(x: i32): f32 { if (x > 0) { return 1.0; } else { return 2.0; } }`,
     );
-    assert(!wat.includes("(result i32)"), `Should not emit (result i32) for f32-returning branches:\n${wat}`);
+    assert(
+      !wat.includes("(result i32)"),
+      `Should not emit (result i32) for f32-returning branches:\n${wat}`,
+    );
   });
 
   test("nested if returns that are all f32 still emit outer (result f32)", () => {
@@ -976,16 +992,23 @@ describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
         if (x > 0) { return; } else { return; }
       }
     `);
-    assert(!wat.includes("(if (result i32)"), `Void-returning if should not emit (result i32):\n${wat}`);
-    assert(!wat.includes("(if (result f32)"), `Void-returning if should not emit (result f32):\n${wat}`);
+    assert(
+      !wat.includes("(if (result i32)"),
+      `Void-returning if should not emit (result i32):\n${wat}`,
+    );
+    assert(
+      !wat.includes("(if (result f32)"),
+      `Void-returning if should not emit (result f32):\n${wat}`,
+    );
   });
 
   test("if/else both returning i32 emits (result i32)", () => {
     // GREEN: i32 case should still work correctly
-    const { wat } = compile(
-      `fn f(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }`,
+    const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }`);
+    assert(
+      wat.includes("(result i32)"),
+      `Expected (result i32) for i32-returning branches:\n${wat}`,
     );
-    assert(wat.includes("(result i32)"), `Expected (result i32) for i32-returning branches:\n${wat}`);
   });
 });
 
@@ -1010,7 +1033,8 @@ describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
   test("for loop with void function as condition throws MapleError", () => {
     // RED: void condition falls through to f32.ne, producing invalid WAT instead of error
     assert.throws(
-      () => compile(`fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`),
+      () =>
+        compile(`fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`),
       (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
     );
   });
@@ -1063,9 +1087,7 @@ describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)
 
   test("break in for loop emits valid br instruction", () => {
     // GREEN: break in a loop must still work
-    const { wat } = compile(
-      "fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }",
-    );
+    const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }");
     assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
   });
 
@@ -1272,9 +1294,738 @@ describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
 
   test("if/else where both branches have explicit returns emits (result i32)", () => {
     // GREEN: genuine both-branches-return case should still get (result i32)
-    const { wat } = compile(
-      `fn f(x: i32): i32 { if (x > 0) { return 1; } else { return -1; } }`,
+    const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return -1; } }`);
+    assert(
+      wat.includes("(result i32)"),
+      `Expected (result i32) when both branches return:\n${wat}`,
     );
-    assert(wat.includes("(result i32)"), `Expected (result i32) when both branches return:\n${wat}`);
+  });
+});
+
+// ─── 8A: Memory-Backed Local Structs ──────────────────────────────────────────
+
+describe("Emission: 8A Shadow stack global", () => {
+  test("A1: any module emits $__sp global", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    assert(
+      wat.includes("(global $__sp (mut i32) (i32.const 65536))"),
+      `Missing $__sp global:\n${wat}`,
+    );
+  });
+
+  test("A2: module with no structs still emits $__sp", () => {
+    const { wat } = compile("fn test(): i32 { return 1; }");
+    assert(
+      wat.includes("(global $__sp (mut i32) (i32.const 65536))"),
+      `Missing $__sp global:\n${wat}`,
+    );
+  });
+
+  test("A3: $__sp appears before any function in WAT", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    const spIdx = wat.indexOf("$__sp");
+    const funcIdx = wat.indexOf("(func");
+    assert(spIdx !== -1, `Missing $__sp:\n${wat}`);
+    assert(spIdx < funcIdx, `$__sp must appear before (func:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Local declaration — flat locals gone", () => {
+  test("B4: local struct does NOT produce flattened $p_x / $p_y locals", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 2, y = 3 }; }
+    `);
+    assert(!wat.includes("$p_x"), `Must not contain $p_x:\n${wat}`);
+    assert(!wat.includes("$p_y"), `Must not contain $p_y:\n${wat}`);
+  });
+
+  test("B5: local struct emits single (local $p i32) pointer", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 2, y = 3 }; }
+    `);
+    assert(wat.includes("(local $p i32)"), `Missing (local $p i32):\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Field init — stores to memory", () => {
+  test("C6: i32 field x at offset 0 emits i32.store", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 2, y = 3 }; }
+    `);
+    assert(
+      wat.includes("(i32.store (i32.add (local.get $p) (i32.const 0)) (i32.const 2))"),
+      `Missing x store:\n${wat}`,
+    );
+  });
+
+  test("C7: i32 field y at offset 4 emits i32.store", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 2, y = 3 }; }
+    `);
+    assert(
+      wat.includes("(i32.store (i32.add (local.get $p) (i32.const 4)) (i32.const 3))"),
+      `Missing y store:\n${wat}`,
+    );
+  });
+
+  test("C8: mixed i32/f32 struct emits correct store ops per field", () => {
+    const { wat } = compile(`
+      struct Mixed { a: i32, b: f32 }
+      fn test(): void { let m: Mixed = { a = 1, b = 3.14 }; }
+    `);
+    assert(wat.includes("i32.store"), `Missing i32.store for field a:\n${wat}`);
+    assert(wat.includes("f32.store"), `Missing f32.store for field b:\n${wat}`);
+  });
+
+  test("C9: f32-only struct emits f32.store for both fields", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn test(): void { let v: Vec2 = { x = 1.5, y = 2.5 }; }
+    `);
+    assert(!wat.includes("$v_x"), `Must not contain $v_x:\n${wat}`);
+    assert(!wat.includes("$v_y"), `Must not contain $v_y:\n${wat}`);
+    const f32Stores = (wat.match(/f32\.store/g) || []).length;
+    assert(f32Stores >= 2, `Expected at least 2 f32.store instructions, got ${f32Stores}:\n${wat}`);
+  });
+
+  test("C10: single-field struct emits one i32.store", () => {
+    const { wat } = compile(`
+      struct Single { val: i32 }
+      fn test(): void { let s: Single = { val = 42 }; }
+    `);
+    assert(wat.includes("(i32.store"), `Missing i32.store:\n${wat}`);
+    assert(wat.includes("(i32.const 42)"), `Missing value 42:\n${wat}`);
+  });
+
+  test("C11: expression field values emit full expressions as store values", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(a: i32, b: i32): void { let p: Point = { x = a + 1, y = b * 2 }; }
+    `);
+    assert(wat.includes("i32.add"), `Missing i32.add for x = a + 1:\n${wat}`);
+    assert(wat.includes("i32.mul"), `Missing i32.mul for y = b * 2:\n${wat}`);
+    assert(wat.includes("i32.store"), `Missing i32.store:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Member read — loads from memory", () => {
+  test("D12: p.x emits i32.load at offset 0", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
+    `);
+    assert(
+      wat.includes("(i32.load (i32.add (local.get $p) (i32.const 0)))"),
+      `Missing i32.load for p.x:\n${wat}`,
+    );
+    assert(!wat.includes("local.get $p_x"), `Must not use flat local $p_x:\n${wat}`);
+  });
+
+  test("D13: p.y emits i32.load at offset 4", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.y; }
+    `);
+    assert(
+      wat.includes("(i32.load (i32.add (local.get $p) (i32.const 4)))"),
+      `Missing i32.load for p.y:\n${wat}`,
+    );
+  });
+
+  test("D14: f32 member emits f32.load", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn test(): f32 { let v: Vec2 = { x = 1.5, y = 2.5 }; return v.x; }
+    `);
+    assert(wat.includes("f32.load"), `Missing f32.load for v.x:\n${wat}`);
+  });
+
+  test("D15: p.x + p.y emits i32.add with two i32.load sub-expressions", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.x + p.y; }
+    `);
+    assert(wat.includes("i32.add"), `Missing i32.add:\n${wat}`);
+    const loadCount = (wat.match(/i32\.load/g) || []).length;
+    assert(loadCount >= 2, `Expected at least 2 i32.load for p.x + p.y, got ${loadCount}:\n${wat}`);
+    assert(!wat.includes("local.get $p_x"), `Must not use flat local:\n${wat}`);
+    assert(!wat.includes("local.get $p_y"), `Must not use flat local:\n${wat}`);
+  });
+
+  test("D16: p.x > 0 emits i32.gt_s with i32.load as left operand", () => {
+    const { wat } = compile(`
+      struct Counter { n: i32 }
+      fn test(): i32 { let c: Counter = { n = 5 }; if (c.n > 0) { return 1; } return 0; }
+    `);
+    assert(wat.includes("i32.gt_s"), `Missing i32.gt_s:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for c.n:\n${wat}`);
+    assert(!wat.includes("local.get $c_n"), `Must not use flat local:\n${wat}`);
+  });
+
+  test("D17: prefix negation on struct member emits i32.sub with i32.load", () => {
+    const { wat } = compile(`
+      struct Num { val: i32 }
+      fn test(): i32 { let n: Num = { val = 7 }; return -n.val; }
+    `);
+    assert(wat.includes("i32.sub"), `Missing i32.sub for negation:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for n.val:\n${wat}`);
+    assert(!wat.includes("local.get $n_val"), `Must not use flat local:\n${wat}`);
+  });
+
+  test("D18: struct member as while-loop condition emits i32.load", () => {
+    const { wat } = compile(`
+      struct Flag { active: i32 }
+      fn test(): void {
+        let f: Flag = { active = 1 };
+        while (f.active) { f.active = 0; }
+      }
+    `);
+    assert(wat.includes("(loop"), `Missing loop:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for f.active:\n${wat}`);
+    assert(!wat.includes("local.get $f_active"), `Must not use flat local:\n${wat}`);
+  });
+
+  test("D19: struct member as for-loop condition emits i32.load", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 5, y = 0 };
+        for (let i: i32 = 0; p.x > 0; i = i + 1) { p.x = p.x - 1; }
+      }
+    `);
+    assert(wat.includes("i32.load"), `Missing i32.load for p.x in for condition:\n${wat}`);
+  });
+
+  test("D20: struct member as if condition emits i32.load", () => {
+    const { wat } = compile(`
+      struct Counter { n: i32 }
+      fn test(): i32 { let c: Counter = { n = 5 }; if (c.n) { return 1; } return 0; }
+    `);
+    assert(wat.includes("i32.load"), `Missing i32.load for c.n in if condition:\n${wat}`);
+    assert(!wat.includes("local.get $c_n"), `Must not use flat local:\n${wat}`);
+  });
+
+  test("D21: struct member as function argument emits i32.load", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn bar(n: i32): i32 { return n; }
+      fn test(): i32 { let p: Point = { x = 7, y = 0 }; return bar(p.x); }
+    `);
+    assert(wat.includes("(call $bar"), `Missing call $bar:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for p.x as argument:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Member write — stores to memory", () => {
+  test("E22: p.x = 10 emits i32.store at offset 0", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 0, y = 0 }; p.x = 10; }
+    `);
+    assert(
+      wat.includes("(i32.store (i32.add (local.get $p) (i32.const 0)) (i32.const 10))"),
+      `Missing i32.store for p.x = 10:\n${wat}`,
+    );
+  });
+
+  test("E23: p.y = 20 emits i32.store at offset 4", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 0, y = 0 }; p.y = 20; }
+    `);
+    assert(
+      wat.includes("(i32.store (i32.add (local.get $p) (i32.const 4)) (i32.const 20))"),
+      `Missing i32.store for p.y = 20:\n${wat}`,
+    );
+  });
+
+  test("E24: write-then-read round-trip emits i32.store then i32.load at same offset", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 0, y = 0 }; p.x = 99; return p.x; }
+    `);
+    assert(wat.includes("i32.store"), `Missing i32.store:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Prologue / epilogue", () => {
+  test("F25: function with one Point local emits SP prologue", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    assert(
+      wat.includes("(global.set $__sp (i32.sub (global.get $__sp) (i32.const 8)))"),
+      `Missing SP prologue:\n${wat}`,
+    );
+  });
+
+  test("F26: function with one Point local emits SP epilogue", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    assert(
+      wat.includes("(global.set $__sp (i32.add (global.get $__sp) (i32.const 8)))"),
+      `Missing SP epilogue:\n${wat}`,
+    );
+  });
+
+  test("F27: prologue appears before stores, epilogue after body", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    const prologueIdx = wat.indexOf("i32.sub (global.get $__sp)");
+    const storeIdx = wat.indexOf("i32.store");
+    const epilogueIdx = wat.indexOf("i32.add (global.get $__sp)");
+    assert(prologueIdx < storeIdx, `Prologue must appear before stores:\n${wat}`);
+    assert(storeIdx < epilogueIdx, `Epilogue must appear after stores:\n${wat}`);
+  });
+
+  test("F28: two Point locals emit frame size 16", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 1, y = 2 };
+        let q: Point = { x = 3, y = 4 };
+      }
+    `);
+    assert(wat.includes("(i32.const 16)"), `Expected frame size 16 for two Points:\n${wat}`);
+  });
+
+  test("F29: Big struct (size=16) emits correct frame size", () => {
+    const { wat } = compile(`
+      struct Big { a: i32, b: i32, c: i32, d: i32 }
+      fn test(): void { let b: Big = { a = 1, b = 2, c = 3, d = 4 }; }
+    `);
+    assert(
+      wat.includes("(i32.sub (global.get $__sp) (i32.const 16))"),
+      `Expected frame size 16 for Big struct:\n${wat}`,
+    );
+  });
+
+  test("F30: function with no local structs does NOT emit SP adjustments", () => {
+    const { wat } = compile("fn test(): i32 { let x: i32 = 5; return x; }");
+    const funcStart = wat.indexOf("(func $test");
+    const funcBody = wat.slice(funcStart);
+    assert(
+      !funcBody.includes("global.set $__sp"),
+      `Function without structs must not adjust SP:\n${wat}`,
+    );
+    assert(
+      !funcBody.includes("global.get $__sp"),
+      `Function without structs must not read SP:\n${wat}`,
+    );
+  });
+
+  test("F31: function with no local structs does NOT emit $__ret_tmp", () => {
+    const { wat } = compile("fn test(): i32 { return 42; }");
+    assert(!wat.includes("__ret_tmp"), `Must not contain __ret_tmp:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Pointer initialization", () => {
+  test("G32: first struct at offset 0 uses direct global.get", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    assert(
+      wat.includes("(local.set $p (global.get $__sp))"),
+      `Missing pointer init for first struct:\n${wat}`,
+    );
+  });
+
+  test("G33: second struct at offset 8 uses i32.add", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 1, y = 2 };
+        let q: Point = { x = 3, y = 4 };
+      }
+    `);
+    assert(
+      wat.includes("(local.set $q (i32.add (global.get $__sp) (i32.const 8)))"),
+      `Missing pointer init for second struct:\n${wat}`,
+    );
+  });
+
+  test("G34: pointer inits appear between prologue and body", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    const prologueIdx = wat.indexOf("i32.sub (global.get $__sp)");
+    const ptrInitIdx = wat.indexOf("(local.set $p (global.get $__sp))");
+    const storeIdx = wat.indexOf("i32.store");
+    assert(prologueIdx < ptrInitIdx, `Pointer init must appear after prologue:\n${wat}`);
+    assert(ptrInitIdx < storeIdx, `Pointer init must appear before field stores:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Return with SP restore via $__ret_tmp", () => {
+  test("H35: value-returning return with local struct uses $__ret_tmp", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
+    `);
+    assert(wat.includes("local.set $__ret_tmp"), `Missing local.set $__ret_tmp:\n${wat}`);
+    assert(wat.includes("local.get $__ret_tmp"), `Missing local.get $__ret_tmp:\n${wat}`);
+  });
+
+  test("H36: void return with local struct emits SP restore then (return)", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; return; }
+    `);
+    assert(
+      wat.includes("(global.set $__sp (i32.add"),
+      `Missing SP restore before void return:\n${wat}`,
+    );
+    assert(wat.includes("(return)"), `Missing (return):\n${wat}`);
+    assert(!wat.includes("__ret_tmp"), `Void return must not use __ret_tmp:\n${wat}`);
+  });
+
+  test("H37: return 42 from function with local struct still uses $__ret_tmp", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 1, y = 2 }; return 42; }
+    `);
+    assert(
+      wat.includes("local.set $__ret_tmp"),
+      `Missing $__ret_tmp even for non-struct return:\n${wat}`,
+    );
+  });
+
+  test("H38: multiple return paths both use $__ret_tmp", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(cond: i32): i32 {
+        let p: Point = { x = 3, y = 4 };
+        if (cond > 0) { return p.x; }
+        return p.y;
+      }
+    `);
+    const retTmpSets = (wat.match(/local\.set \$__ret_tmp/g) || []).length;
+    assert(
+      retTmpSets >= 2,
+      `Expected at least 2 local.set $__ret_tmp for two return paths, got ${retTmpSets}:\n${wat}`,
+    );
+  });
+
+  test("H39: f32-returning function with local struct declares f32 $__ret_tmp", () => {
+    const { wat } = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn test(): f32 { let v: Vec2 = { x = 1.5, y = 2.5 }; return v.x; }
+    `);
+    assert(wat.includes("(local $__ret_tmp f32)"), `Missing (local $__ret_tmp f32):\n${wat}`);
+  });
+
+  test("H40: void function with local struct has no $__ret_tmp", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void { let p: Point = { x = 1, y = 2 }; }
+    `);
+    assert(!wat.includes("__ret_tmp"), `Void function must not declare $__ret_tmp:\n${wat}`);
+  });
+
+  test("H40b: void function with local struct and value return does not reference $__ret_tmp", () => {
+    // Emitter robustness path: type checker would reject this program, but
+    // emitter-only compile should not emit undeclared $__ret_tmp references.
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 1, y = 2 };
+        return 5;
+      }
+    `);
+    assert(!wat.includes("local.set $__ret_tmp"), `Must not set $__ret_tmp in void fn:\n${wat}`);
+    assert(!wat.includes("local.get $__ret_tmp"), `Must not get $__ret_tmp in void fn:\n${wat}`);
+    assert(wat.includes("(return (i32.const 5))"), `Missing direct value return:\n${wat}`);
+    assert(
+      wat.includes("(global.set $__sp (i32.add"),
+      `Missing SP restore before value return in void fn:\n${wat}`,
+    );
+  });
+});
+
+describe("Emission: 8A Negative assertions — flat locals gone", () => {
+  test("I41-43: no $p_x, $p_y, local.set $p_x, local.get $p_x in WAT", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 3, y = 4 };
+        p.x = 10;
+        return p.x + p.y;
+      }
+    `);
+    assert(!wat.includes("$p_x"), `Must not contain $p_x:\n${wat}`);
+    assert(!wat.includes("$p_y"), `Must not contain $p_y:\n${wat}`);
+  });
+
+  test("I44: break/continue in loop with local struct do NOT emit SP restore", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): void {
+        let p: Point = { x = 5, y = 0 };
+        while (p.x > 0) {
+          p.x = p.x - 1;
+          if (p.x == 2) { continue; }
+          if (p.x == 1) { break; }
+        }
+      }
+    `);
+    const brBreak = wat.indexOf("(br $break_");
+    const brLoop = wat.indexOf("(br $loop_");
+    assert(brBreak !== -1, `Expected break instruction:\n${wat}`);
+    assert(brLoop !== -1, `Expected continue instruction:\n${wat}`);
+    const beforeBreak = wat.slice(Math.max(0, brBreak - 120), brBreak);
+    const beforeContinue = wat.slice(Math.max(0, brLoop - 120), brLoop);
+    assert(
+      !beforeBreak.includes("global.set $__sp"),
+      `SP must not be restored before break:\n${wat}`,
+    );
+    assert(
+      !beforeContinue.includes("global.set $__sp"),
+      `SP must not be restored before continue:\n${wat}`,
+    );
+  });
+});
+
+describe("Emission: 8A Global struct regression", () => {
+  test("J45: global struct still emits data segment", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+    `);
+    assert(wat.includes("(data (offset"), `Global struct must have data segment:\n${wat}`);
+  });
+
+  test("J46: global struct emits (global $g (mut i32) ...) with address", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+    `);
+    assert(wat.includes("(global $g (mut i32) (i32.const"), `Missing global with address:\n${wat}`);
+  });
+
+  test("J47: global struct member read uses global.get", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+      fn test(): i32 { return g.x; }
+    `);
+    assert(
+      wat.includes("(i32.load (i32.add (global.get $g) (i32.const 0)))"),
+      `Missing global member load:\n${wat}`,
+    );
+  });
+
+  test("J48: global struct member write uses global.get", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+      fn test(): void { g.x = 5; }
+    `);
+    assert(wat.includes("i32.store"), `Missing i32.store for global write:\n${wat}`);
+    assert(wat.includes("global.get $g"), `Must use global.get for global struct:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Param struct regression", () => {
+  test("K49: struct param still uses (param $p i32) and i32.load + offset", () => {
+    const { wat } = compile(`
+      struct Pair { a: i32, b: i32 }
+      fn test(p: Pair): i32 { return p.a + p.b; }
+    `);
+    assert(wat.includes("(param $p i32)"), `Missing (param $p i32):\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for param member:\n${wat}`);
+    assert(wat.includes("local.get $p"), `Missing local.get $p:\n${wat}`);
+  });
+
+  test("K50: param struct member type resolves correctly (i32.add not f32.add)", () => {
+    const { wat } = compile(`
+      struct Pair { a: i32, b: i32 }
+      fn test(p: Pair): i32 { return p.a + p.b; }
+    `);
+    assert(wat.includes("i32.add"), `Expected i32.add:\n${wat}`);
+    assert(!wat.includes("f32.add"), `Must not use f32.add for i32 members:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Method calls on local structs", () => {
+  test("L51: method call on local struct emits (call $Point_sum (local.get $p))", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn Point.sum(p)(): i32 { return p.x + p.y; }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.sum(); }
+    `);
+    assert(wat.includes("(call $Point_sum"), `Missing method call:\n${wat}`);
+    assert(wat.includes("(local.get $p)"), `Missing receiver local.get $p:\n${wat}`);
+  });
+
+  test("L52: method call WAT does NOT contain flat $p_x / $p_y", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn Point.sum(p)(): i32 { return p.x + p.y; }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.sum(); }
+    `);
+    assert(!wat.includes("$p_x"), `Must not contain $p_x:\n${wat}`);
+    assert(!wat.includes("$p_y"), `Must not contain $p_y:\n${wat}`);
+  });
+
+  test("L53: method with extra arg on two local structs emits both pointers", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn Point.add(self)(other: Point): i32 { return self.x + other.x; }
+      fn test(): i32 {
+        let a: Point = { x = 1, y = 2 };
+        let b: Point = { x = 3, y = 4 };
+        return a.add(b);
+      }
+    `);
+    assert(wat.includes("(call $Point_add"), `Missing method call:\n${wat}`);
+    assert(wat.includes("(local.get $a)"), `Missing receiver local.get $a:\n${wat}`);
+    assert(wat.includes("(local.get $b)"), `Missing arg local.get $b:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Struct member in various expressions", () => {
+  test("M54: struct member as switch expression emits i32.load", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 1, y = 0 };
+        switch (p.x) {
+          case 0: { return 0; }
+          case 1: { return 1; }
+          default: { return 2; }
+        }
+        return 0;
+      }
+    `);
+    assert(wat.includes("i32.load"), `Missing i32.load in switch expression:\n${wat}`);
+  });
+
+  test("M55: struct member in binary chain emits multiple i32.load", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 2, y = 3 }; return p.x * p.y + p.x; }
+    `);
+    const loadCount = (wat.match(/i32\.load/g) || []).length;
+    assert(
+      loadCount >= 3,
+      `Expected at least 3 i32.load for p.x * p.y + p.x, got ${loadCount}:\n${wat}`,
+    );
+  });
+
+  test("M56: struct member in cast emits i32.load + f32.convert_i32_s", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): f32 { let p: Point = { x = 5, y = 0 }; return p.x as f32; }
+    `);
+    assert(wat.includes("i32.load"), `Missing i32.load:\n${wat}`);
+    assert(wat.includes("f32.convert_i32_s"), `Missing f32.convert_i32_s:\n${wat}`);
+  });
+
+  test("M57: struct member read into scalar local works", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 7, y = 0 };
+        let total: i32 = p.x;
+        total++;
+        return total;
+      }
+    `);
+    assert(wat.includes("i32.load"), `Missing i32.load for p.x:\n${wat}`);
+    assert(wat.includes("(local.set $total"), `Missing local.set $total:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A Struct in control flow bodies", () => {
+  test("N58: local struct inside if-then block gets frame slot", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(cond: i32): i32 {
+        if (cond > 0) {
+          let p: Point = { x = 1, y = 2 };
+          return p.x;
+        }
+        return 0;
+      }
+    `);
+    assert(
+      wat.includes("global.set $__sp"),
+      `Missing SP adjustment for struct in if block:\n${wat}`,
+    );
+    assert(wat.includes("i32.store"), `Missing i32.store for struct init in if block:\n${wat}`);
+  });
+
+  test("N59: local struct inside while body gets frame slot", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let i: i32 = 0;
+        while (i < 1) {
+          let p: Point = { x = 5, y = 6 };
+          i = i + 1;
+        }
+        return 0;
+      }
+    `);
+    assert(wat.includes("global.set $__sp"), `Missing SP adjustment:\n${wat}`);
+  });
+
+  test("N61: struct field write inside loop uses store/load", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 {
+        let p: Point = { x = 5, y = 0 };
+        while (p.x > 0) {
+          p.x = p.x - 1;
+          p.y = p.y + 1;
+        }
+        return p.y;
+      }
+    `);
+    assert(wat.includes("i32.store"), `Missing i32.store for field write in loop:\n${wat}`);
+    assert(wat.includes("i32.load"), `Missing i32.load for field read in loop:\n${wat}`);
+  });
+});
+
+describe("Emission: 8A extractGlobalData — local struct skipped", () => {
+  test("O62: function with local struct literal compiles without error", () => {
+    assert.doesNotThrow(() => {
+      compile(`
+        struct Point { x: i32, y: i32 }
+        fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
+      `);
+    });
+  });
+
+  test("O63: local struct literal does NOT appear in data segment", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      fn test(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
+    `);
+    const dataSegments = (wat.match(/\(data \(offset/g) || []).length;
+    assert.equal(
+      dataSegments,
+      0,
+      `Local struct must not produce data segment entries, found ${dataSegments}:\n${wat}`,
+    );
   });
 });
