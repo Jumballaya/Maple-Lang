@@ -100,10 +100,11 @@ export fn _start(seed: i32): i32 {
   let inferred_str = "world!";
   total = total + greeting.len + inferred_str.len;
 
-  // struct methods: call methods on a pointer-backed struct (global)
+  // struct methods: call on a global and on a local (shadow-stack) struct
   let method_sum: i32 = base.sum();
   let method_scaled: i32 = base.scale(3);
-  total = total + method_sum + method_scaled;
+  let local_sum: i32 = lp.sum();
+  total = total + method_sum + method_scaled + local_sum;
 
   return total + flipped + (-tweak);
 }

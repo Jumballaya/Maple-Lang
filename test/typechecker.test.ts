@@ -407,7 +407,7 @@ describe("TypeChecker: If conditions", () => {
 // ─── 8A: Memory-Backed Local Structs — Type Checker ──────────────────────────
 
 describe("TypeChecker: 8A Local struct member access", () => {
-  test("Q78: accessing i32 member on local struct reports no error", () => {
+  test("accessing i32 member on local struct reports no error", () => {
     expectNoErrors(`
       struct Point { x: i32, y: i32 }
       fn f(): i32 {
@@ -417,7 +417,7 @@ describe("TypeChecker: 8A Local struct member access", () => {
     `);
   });
 
-  test("Q79: accessing f32 member on local struct reports no error", () => {
+  test("accessing f32 member on local struct reports no error", () => {
     expectNoErrors(`
       struct Vec2 { x: f32, y: f32 }
       fn f(): f32 {
@@ -427,7 +427,7 @@ describe("TypeChecker: 8A Local struct member access", () => {
     `);
   });
 
-  test("Q80: p.x + p.y type-checks correctly as i32", () => {
+  test("p.x + p.y type-checks correctly as i32", () => {
     expectNoErrors(`
       struct Point { x: i32, y: i32 }
       fn f(): i32 {
@@ -437,7 +437,7 @@ describe("TypeChecker: 8A Local struct member access", () => {
     `);
   });
 
-  test("Q81: method call on local struct reports no error", () => {
+  test("method call on local struct reports no error", () => {
     expectNoErrors(`
       struct Point { x: i32, y: i32 }
       fn Point.sum(p)(): i32 { return p.x + p.y; }
@@ -448,7 +448,7 @@ describe("TypeChecker: 8A Local struct member access", () => {
     `);
   });
 
-  test("Q82: method call with wrong arg count on local struct still reports error", () => {
+  test("method call with wrong arg count on local struct still reports error", () => {
     expectError(
       `
       struct Point { x: i32, y: i32 }
@@ -462,7 +462,7 @@ describe("TypeChecker: 8A Local struct member access", () => {
     );
   });
 
-  test("Q83: accessing nonexistent member on local struct still caught", () => {
+  test("accessing nonexistent member on local struct still caught", () => {
     expectError(
       `
       struct Point { x: i32, y: i32 }

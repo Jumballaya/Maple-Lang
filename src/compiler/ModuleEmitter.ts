@@ -43,6 +43,7 @@ export class ModuleEmitter {
     break: [],
     loop: [],
   };
+  private needsShadowStack = false;
 
   constructor(data: ModuleMeta) {
     this.mod = data;
@@ -96,8 +97,11 @@ export class ModuleEmitter {
   }
 
   public build(): MapleModule {
+    const globals = this.needsShadowStack
+      ? ["(global $__sp (mut i32) (i32.const 65536))", ...this.globals]
+      : this.globals;
     return new MapleModule(this.mod.name, {
-      globals: this.globals,
+      globals,
       data: this.data,
       functions: this.functions,
       imports: this.imports,
@@ -125,6 +129,9 @@ export class ModuleEmitter {
     }
     this.currentFn.frameSize = totalSize;
     this.currentFn.structFrameOffsets = offsets;
+    if (totalSize > 0) {
+      this.needsShadowStack = true;
+    }
   }
 
   //////  Misc

@@ -3,6 +3,9 @@ struct Point {
   y: i32,
 }
 
+// local structs live on the compiler-managed shadow stack.
+// p is an i32 pointer into that stack; field reads/writes are i32.load/i32.store.
+
 // struct member used directly in a return expression
 export fn sum_point(): i32 {
   let p: Point = { x = 3, y = 4 };
@@ -37,7 +40,7 @@ export fn count_down(): i32 {
   return p.y;
 }
 
-// global struct: members accessed via memory load + offset
+// global struct: lives in the static data section (compile-time address)
 let origin: Point = {
   x = 0,
   y = 0,

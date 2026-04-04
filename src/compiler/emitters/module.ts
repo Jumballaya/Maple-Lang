@@ -151,7 +151,6 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
 export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
   resetLabels();
   const emitter = new ModuleEmitter(data);
-  emitter.addGlobalWat("(global $__sp (mut i32) (i32.const 65536))");
   const ctx = emitter.ctx;
 
   // raw strings

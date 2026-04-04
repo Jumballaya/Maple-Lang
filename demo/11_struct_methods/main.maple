@@ -14,8 +14,16 @@ fn Vec2.add(v)(other: Vec2): i32 {
 let a: Vec2 = { x = 2, y = 3 };
 let b: Vec2 = { x = 5, y = 7 };
 
+// local struct as method receiver: allocated on the shadow stack,
+// the receiver pointer is valid just like a parameter or global
+export fn local_method_call(): i32 {
+  let v: Vec2 = { x = 10, y = 20 };
+  return v.sum();
+}
+
 export fn _start(): i32 {
   let s1: i32 = a.sum();
   let s2: i32 = a.add(b);
-  return s1 + s2;
+  let s3: i32 = local_method_call();
+  return s1 + s2 + s3;
 }

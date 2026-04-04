@@ -150,6 +150,8 @@ export async function compiler(
     await writeFile(`build/${mod.name}.wat`, mod.buildWat());
     toCompile.push(mod.name);
   }
+  // remove any stale objects from previous builds before assembling
+  await run("rm -f build/*.o");
   // compile to wasm
   for (const path of toCompile) {
     await run(`wat2wasm -r build/${path}.wat -o build/${path}.o`);
