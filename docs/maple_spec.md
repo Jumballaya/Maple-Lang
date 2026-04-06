@@ -85,8 +85,9 @@ The type is inferred from the right-hand side expression:
 | Struct literal (`{ x = 1 }`)    | matched struct name   |
 | Infix expression                | type of its operands  |
 | Member access (`p.x`)           | type of that member   |
+| Function call (`add(1, 2)`)     | return type of the called function |
 
-Calling a function without an explicit annotation is an error — function return type inference is not supported.
+When the called function is declared earlier in the same file, the return type is inferred automatically. Imported functions and forward references still require an explicit type annotation.
 
 ---
 

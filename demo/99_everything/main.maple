@@ -106,10 +106,10 @@ export fn _start(seed: i32): i32 {
   let inferred_str = "world!";
   total = total + greeting.len + inferred_str.len;
 
-  // struct methods: call on a global and on a local (shadow-stack) struct
-  let method_sum: i32 = base.sum();
-  let method_scaled: i32 = base.scale(3);
-  let local_sum: i32 = lp.sum();
+  // struct methods (locally defined): return type inferred from method signature
+  let method_sum = base.sum();
+  let method_scaled = base.scale(3);
+  let local_sum = lp.sum();
   total = total + method_sum + method_scaled + local_sum + runtime_pair.sum();
 
   return total + flipped + (-tweak);

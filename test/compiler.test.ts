@@ -2187,3 +2187,24 @@ describe("Emission: struct literal expression defense", () => {
     );
   });
 });
+
+describe("Compiler: inferred function call types", () => {
+  test("inferred i32 from function call emits correct local.set", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn f(): void { let x = add(1, 2); }
+    `;
+    const { wat } = compile(src);
+    assert(wat.includes("(local $x i32)"), "Expected i32 local for inferred call result");
+    assert(wat.includes("(local.set $x (call $add"), "Expected local.set with call");
+  });
+
+  test("inferred f32 from function call emits correct local.set", () => {
+    const src = `
+      fn half(x: f32): f32 { return x; }
+      fn f(): void { let y = half(1.0); }
+    `;
+    const { wat } = compile(src);
+    assert(wat.includes("(local $y f32)"), "Expected f32 local for inferred call result");
+  });
+});

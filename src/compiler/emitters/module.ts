@@ -102,6 +102,7 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
       builder.defFunc(name, {
         exported,
         result: returnType ? valueTypeToWasm(returnType) : "void",
+        mapleResult: returnType ?? "void",
         params: params.map(({ identifier, type }) => ({
           name: identifier.tokenLiteral(),
           type,

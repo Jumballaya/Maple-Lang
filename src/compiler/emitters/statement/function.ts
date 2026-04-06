@@ -16,6 +16,7 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       name: fn.name ?? undefined,
       params,
       result: rType,
+      mapleResult: fn.fnExpr.returnType ?? "void",
       exported: !!fn.exported,
       signature: generateFunctionSignature(fn),
     },

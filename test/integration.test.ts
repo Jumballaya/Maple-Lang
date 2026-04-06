@@ -641,3 +641,46 @@ describe("Integration: Struct literal expression values", () => {
     assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
   });
 });
+
+describe("Integration: Inferred function call types", () => {
+  maybeTest("inferred i32 from function call compiles and passes wat2wasm", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      export fn _start(): i32 {
+        let x = add(1, 2);
+        return x;
+      }
+    `;
+    const wat = compile(src);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm failed: ${err}`);
+  });
+
+  maybeTest("inferred struct method call compiles and passes wat2wasm", () => {
+    const src = `
+      struct Pair { left: i32, right: i32, }
+      fn Pair.sum(p)(): i32 { return p.left + p.right; }
+      export fn _start(): i32 {
+        let p: Pair = { left = 3, right = 4 };
+        let s = p.sum();
+        return s;
+      }
+    `;
+    const wat = compile(src);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm failed: ${err}`);
+  });
+
+  maybeTest("inferred f32 from function call compiles and passes wat2wasm", () => {
+    const src = `
+      fn half(x: f32): f32 { return x; }
+      export fn _start(): f32 {
+        let h = half(3.14);
+        return h;
+      }
+    `;
+    const wat = compile(src);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm failed: ${err}`);
+  });
+});

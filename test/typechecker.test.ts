@@ -612,3 +612,51 @@ describe("TypeChecker: Struct literal field validation", () => {
     assert(msg.includes("field 'y': expected 'f32', got 'i32'"), `Missing y mismatch:\n${msg}`);
   });
 });
+
+describe("TypeChecker: inferred call return types", () => {
+  test("inferred i32 from call is type-checked against usage", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn f(): void {
+        let x = add(1, 2);
+        let y: i32 = x + 1;
+      }
+    `;
+    expectNoErrors(src);
+  });
+
+  test("inferred i32 from call used in f32 context without cast is mixed-type error", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn f(): void {
+        let x = add(1, 2);
+        let y: f32 = x + 1.0;
+      }
+    `;
+    expectError(src, "Mixed types");
+  });
+
+  test("inferred struct type from call allows member access", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      fn origin(): P { let p: P = { x = 0, y = 0 }; return p; }
+      fn f(): void {
+        let o = origin();
+        let v: i32 = o.x;
+      }
+    `;
+    expectNoErrors(src);
+  });
+
+  test("inferred struct type from call catches nonexistent member", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      fn origin(): P { let p: P = { x = 0, y = 0 }; return p; }
+      fn f(): i32 {
+        let o = origin();
+        return o.z;
+      }
+    `;
+    expectError(src, "no member");
+  });
+});

@@ -68,6 +68,7 @@ export class Parser {
 
   private identifierTypes: Map<string, string> = new Map();
   private structDefs: Map<string, Record<string, string>> = new Map();
+  private functionReturnTypes: Map<string, string> = new Map();
 
   private locals: string[] = []; // all of the variables local to the current scope
 
@@ -339,6 +340,7 @@ export class Parser {
     }
     this.tokenizer.nextToken();
 
+    this.functionReturnTypes.set(mangledName, expr.returnType ?? "void");
     return new FunctionStatement(statementToken, expr, mangledName, exported, receiverType);
   }
 
@@ -581,6 +583,11 @@ export class Parser {
     }
     if (expr instanceof PostfixExpression) {
       return this.inferTypeFromExpr(expr.left ?? null);
+    }
+    if (expr instanceof CallExpression) {
+      const rt = this.functionReturnTypes.get(expr.func);
+      if (rt && rt !== "void") return rt;
+      return "";
     }
     return "";
   }

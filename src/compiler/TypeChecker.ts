@@ -81,7 +81,7 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
 
   if (expr instanceof CallExpression) {
     const fn = meta.functions[expr.func];
-    if (fn) return fn.result === "void" ? "void" : fn.result;
+    if (fn) return fn.mapleResult === "void" ? "void" : fn.mapleResult;
     const imp = meta.imports[expr.func];
     if (imp?.info?.kind === "func") {
       const resultChar = imp.info.signature.split("_")[1]?.[0];

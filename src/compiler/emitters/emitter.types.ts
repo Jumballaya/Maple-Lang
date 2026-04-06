@@ -12,7 +12,10 @@ export type VariableMeta = {
 export type FunctionMeta = {
   name?: string | undefined;
   params: Array<{ name: string; type: string }>;
+  /** WASM-level return type for emission (`i32` covers struct pointers). */
   result: "i32" | "f32" | "void";
+  /** Maple-level return type for static checking (`Point`, `string`, `i32`, …, or `void`). */
+  mapleResult: string;
   exported?: boolean;
   signature: string;
 };

@@ -284,6 +284,7 @@ export class ModuleEmitter {
         this.mod.functions[meta.name] = {
           params: meta.params,
           result: meta.result,
+          mapleResult: meta.mapleResult,
           exported: !!meta.exported,
           signature: meta.signature,
         };

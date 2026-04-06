@@ -2696,18 +2696,17 @@ describe("Parser: Type inference", () => {
     assert.equal(letStmt.typeAnnotation, "i32");
   });
 
-  test("parse error when let has call expression with no annotation", () => {
+  test("infers i32 from call to previously declared function (no annotation needed)", () => {
     const src = `
       fn add(a: i32, b: i32): i32 { return a + b; }
       let x = add(1, 2);
     `;
     const p = new Parser(src);
-    p.parse("test");
-    assert(p.errors.length > 0, "Expected at least one parse error");
-    assert(
-      p.errors.some((e) => e.message.includes("Cannot infer type")),
-      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
-    );
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
   });
 
   test("string literal as standalone expression parses", () => {
@@ -2727,6 +2726,276 @@ describe("Parser: Type inference", () => {
     const stmt = prog.statements[0];
     assert(stmt instanceof FunctionStatement);
     assertFunctionParams(stmt, [["s", "string"]]);
+  });
+});
+
+describe("Parser: Call return type inference", () => {
+  test("infers f32 from call to previously declared f32 function", () => {
+    const src = `
+      fn half(x: f32): f32 { return x; }
+      let y = half(1.0);
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers bool from call to previously declared bool function", () => {
+    const src = `
+      fn isZero(x: i32): bool { return x == 0; }
+      let b = isZero(5);
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "bool");
+  });
+
+  test("infers struct type from call to struct-returning function", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      fn origin(): P { let p: P = { x = 0, y = 0 }; return p; }
+      let o = origin();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[2];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "P");
+  });
+
+  test("void function call in let is still a parse error", () => {
+    const src = `
+      fn doNothing(): void { }
+      let x = doNothing();
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer type")),
+      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
+  test("forward reference to function declared later still requires annotation", () => {
+    const src = `
+      let x = later(1);
+      fn later(a: i32): i32 { return a; }
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer type")),
+      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
+  test("infers i32 from struct method call", () => {
+    const src = `
+      struct P { x: i32, y: i32, }
+      fn P.sum(p)(): i32 { return p.x + p.y; }
+      let pt: P = { x = 1, y = 2 };
+      let s = pt.sum();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[3];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers f32 from struct method call with params", () => {
+    const src = `
+      struct V { x: f32, y: f32, }
+      fn V.len(v)(): f32 { return v.x; }
+      let vec: V = { x = 1.0, y = 2.0 };
+      let length = vec.len();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[3];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers i32 from call in arithmetic expression", () => {
+    const src = `
+      fn double(x: i32): i32 { return x * 2; }
+      let y = double(5) + 3;
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers f32 when call returns i32 but other operand is f32", () => {
+    const src = `
+      fn one(): i32 { return 1; }
+      let y = one() + 2.0;
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "f32");
+  });
+
+  test("infers i32 from nested function calls", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      let x = add(add(1, 2), 3);
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers bool from comparison involving function call", () => {
+    const src = `
+      fn count(): i32 { return 5; }
+      let over = count() > 3;
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "bool");
+  });
+
+  test("infers i32 from negated function call", () => {
+    const src = `
+      fn val(): i32 { return 5; }
+      let x = -val();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("infers correct types from multiple declared functions", () => {
+    const src = `
+      fn getInt(): i32 { return 1; }
+      fn getFloat(): f32 { return 1.0; }
+      let a = getInt();
+      let b = getFloat();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmtA = prog.statements[2];
+    assert(stmtA instanceof LetStatement);
+    assert.equal(stmtA.typeAnnotation, "i32");
+    const stmtB = prog.statements[3];
+    assert(stmtB instanceof LetStatement);
+    assert.equal(stmtB.typeAnnotation, "f32");
+  });
+
+  test("const infers i32 from function call", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      const x = add(1, 2);
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+    assert.equal(stmt.mutable, false);
+  });
+
+  test("infers string from call to string-returning function", () => {
+    const src = `
+      fn greet(): string { return "hello"; }
+      let s = greet();
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "string");
+  });
+
+  test("imported function call still requires explicit annotation", () => {
+    const src = `
+      import add from "./math.maple"
+      let x = add(1, 2);
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer type")),
+      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
+  test("explicit annotation on function call still works", () => {
+    const src = `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      let x: i32 = add(1, 2);
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const stmt = prog.statements[1];
+    assert(stmt instanceof LetStatement);
+    assert.equal(stmt.typeAnnotation, "i32");
+  });
+
+  test("recursive call within own body requires explicit annotation", () => {
+    const src = `
+      fn fib(n: i32): i32 {
+        let x = fib(n - 1);
+        return x;
+      }
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert(p.errors.length > 0, "Expected at least one parse error");
+    assert(
+      p.errors.some((e) => e.message.includes("Cannot infer type")),
+      `Expected "Cannot infer type" error, got: ${p.errors.map((e) => e.message).join("; ")}`,
+    );
+  });
+
+  test("infers i32 from call to nested function declared earlier in enclosing body", () => {
+    const src = `
+      fn outer(): void {
+        fn inner(): i32 { return 42; }
+        let x = inner();
+      }
+    `;
+    const p = new Parser(src);
+    const prog = p.parse("test");
+    assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+    const outer = prog.statements[0];
+    assert(outer instanceof FunctionStatement);
+    const innerLet = outer.fnExpr.body.statements[1];
+    assert(innerLet instanceof LetStatement);
+    assert.equal(innerLet.typeAnnotation, "i32");
   });
 });
 
