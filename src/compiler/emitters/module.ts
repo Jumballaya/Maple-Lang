@@ -25,13 +25,12 @@ import {
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const name = stmt.identifier.tokenLiteral();
   const type = stmt.typeAnnotation;
-  const value = emitExpression(stmt.expression!, emitter);
   const expr = stmt.expression;
 
   const wasmType = valueTypeToWasm(type);
   const typeDecl = stmt.mutable ? `(mut ${wasmType})` : wasmType;
 
-  // string/array literal
+  // string/array/struct literal
   if (
     expr instanceof StringLiteralExpression ||
     expr instanceof ArrayLiteralExpression ||
@@ -46,6 +45,7 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   }
 
   // everything else
+  const value = emitExpression(expr!, emitter);
   emitter.addGlobalWat(`(global $${name} ${typeDecl} ${value})`);
 }
 
@@ -162,6 +162,10 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
   for (const entry of ctx.mod.data) {
     const { bytes, addr } = entry;
     emitter.addDataWat(`(data (offset (i32.const ${addr})) "${bytes}")`);
+  }
+
+  if (ctx.mod.deferredGlobalInits.length > 0) {
+    emitter.addGlobalWat("(global $__globals_inited (mut i32) (i32.const 0))");
   }
 
   // parse module body

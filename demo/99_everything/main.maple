@@ -18,6 +18,12 @@ let base: Pair = {
   right = 3,
 };
 
+let bonus: i32 = 6;
+let runtime_pair: Pair = {
+  left = bonus + 1,
+  right = add(1, 2),
+};
+
 export fn _start(seed: i32): i32 {
   let nums: i32[] = [10, 20, 30, 40];
   let idx: i32 = 0;
@@ -104,7 +110,7 @@ export fn _start(seed: i32): i32 {
   let method_sum: i32 = base.sum();
   let method_scaled: i32 = base.scale(3);
   let local_sum: i32 = lp.sum();
-  total = total + method_sum + method_scaled + local_sum;
+  total = total + method_sum + method_scaled + local_sum + runtime_pair.sum();
 
   return total + flipped + (-tweak);
 }

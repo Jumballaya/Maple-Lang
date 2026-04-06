@@ -132,7 +132,12 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     writer.line(`${emitNumberGet(expression.value, "f32")}`);
     //
   } else if (expression instanceof StructLiteralExpression) {
-    // @TODO: this should return the pointer to the created struct
+    const t = expression.token;
+    throw new MapleError(
+      "[expression] struct literal must be assigned to a 'let' binding, not used as an inline value",
+      t.line,
+      t.col,
+    );
   } else if (expression instanceof AssignmentExpression) {
     writer.line(`${emitAssignmentExpression(expression, emitter)}`);
     //

@@ -475,3 +475,137 @@ describe("TypeChecker: 8A Local struct member access", () => {
     );
   });
 });
+
+describe("TypeChecker: Struct literal field validation", () => {
+  test("extra field in struct literal is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): void { let p: Point = { x = 1, y = 2, z = 3 }; }
+      `,
+      "has no field 'z'",
+    );
+  });
+
+  test("missing field in struct literal is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): void { let p: Point = { x = 1 }; }
+      `,
+      "field 'y' is not initialized",
+    );
+  });
+
+  test("unknown and missing fields are both reported", () => {
+    const errors = check(`
+      struct Point { x: i32, y: i32 }
+      fn f(): void { let p: Point = { x = 1, w = 9 }; }
+    `);
+    const joined = errors.map((e) => e.message).join("\n");
+    assert(joined.includes("has no field 'w'"), `Missing unknown-field error:\n${joined}`);
+    assert(joined.includes("field 'y' is not initialized"), `Missing missing-field error:\n${joined}`);
+  });
+
+  test("f32 assigned to i32 struct field is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): void { let p: Point = { x = 3.14, y = 2 }; }
+      `,
+      "expected 'i32', got 'f32'",
+    );
+  });
+
+  test("i32 assigned to f32 struct field is an error", () => {
+    expectError(
+      `
+      struct Vec2 { x: f32, y: f32 }
+      fn f(): void { let v: Vec2 = { x = 1, y = 2.0 }; }
+      `,
+      "expected 'f32', got 'i32'",
+    );
+  });
+
+  test("undefined identifier inside struct field expression is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): void { let p: Point = { x = doesNotExist, y = 0 }; }
+      `,
+      "Undefined identifier",
+    );
+  });
+
+  test("wrong function argument count in field expression is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn f(): void { let p: Point = { x = add(1), y = 0 }; }
+      `,
+      "expects 2 arguments",
+    );
+  });
+
+  test("mixed arithmetic in field expression is an error", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      fn f(): void {
+        let i: i32 = 1;
+        let n: f32 = 2.0;
+        let p: Point = { x = i + n, y = 0 };
+      }
+      `,
+      "Mixed types in arithmetic",
+    );
+  });
+
+  test("valid expression-valued fields type-check successfully", () => {
+    expectNoErrors(`
+      struct Point { x: i32, y: i32 }
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn f(): i32 {
+        let a: i32 = 2;
+        let b: i32 = 3;
+        let p: Point = { x = add(a, b), y = a + 1 };
+        return p.x + p.y;
+      }
+    `);
+  });
+
+  test("global struct missing field is caught before emission", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 1 };
+      `,
+      "field 'y' is not initialized",
+    );
+  });
+
+  test("global struct extra field is caught before emission", () => {
+    expectError(
+      `
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 1, y = 2, z = 3 };
+      `,
+      "has no field 'z'",
+    );
+  });
+
+  test("member expression from i32 struct into f32 struct fields reports type errors", () => {
+    const errors = check(`
+      struct Point { x: i32, y: i32 }
+      struct Vec2 { x: f32, y: f32 }
+      fn f(): void {
+        let other: Point = { x = 1, y = 2 };
+        let v: Vec2 = { x = other.x, y = other.y };
+      }
+    `);
+    const msg = errors.map((e) => e.message).join("\n");
+    assert(msg.includes("field 'x': expected 'f32', got 'i32'"), `Missing x mismatch:\n${msg}`);
+    assert(msg.includes("field 'y': expected 'f32', got 'i32'"), `Missing y mismatch:\n${msg}`);
+  });
+});

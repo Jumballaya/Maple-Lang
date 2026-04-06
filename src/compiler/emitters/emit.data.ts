@@ -149,31 +149,39 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuil
 }
 
 function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuilder) {
-  // @TODO -- This needs to go into a 3rd pass: validation
-  // const sd = builder.getStruct(expr.tokenLiteral());
-  // if (!sd) {
-  //   throw new Error(`struct not found: ${expr.tokenLiteral()}`);
-  // }
-  // for (const f of Object.keys(expr.members)) {
-  //   if (!sd.members[f]) {
-  //     throw new Error(`struct "${sd.name}" has no member "${f}"`);
-  //   }
-  // }
-
-  let encoded = "";
-  for (const [, value] of Object.entries(expr.members)) {
-    if (
-      !(value instanceof IntegerLiteralExpression) &&
-      !(value instanceof FloatLiteralExpression) &&
-      !(value instanceof BooleanLiteralExpression)
-    ) {
-      throw new Error("[struct literal member] non-number/boolean literal values not supported");
-    }
-    const val = typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
-    encoded += numToLittleEndian([val], value instanceof FloatLiteralExpression ? "f32" : "i32");
+  const sd = builder.getStruct(expr.name);
+  if (!sd) {
+    const addr = builder.dataAlloc(0);
+    expr.location = addr;
+    return;
   }
 
-  const addr = builder.addBytes(encoded);
+  const addr = builder.dataAlloc(sd.size, 8);
+  let encoded = "";
+  const members = Object.values(sd.members).sort((a, b) => a.offset - b.offset);
+  for (const member of members) {
+    const value = expr.members[member.name];
+    if (
+      value instanceof IntegerLiteralExpression ||
+      value instanceof FloatLiteralExpression ||
+      value instanceof BooleanLiteralExpression
+    ) {
+      const num = typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
+      encoded += numToLittleEndian([num], value instanceof FloatLiteralExpression ? "f32" : "i32");
+    } else {
+      encoded += numToLittleEndian([0], member.type);
+      if (value) {
+        builder.deferredGlobalInits.push({
+          baseAddr: addr,
+          offset: member.offset,
+          fieldType: member.type,
+          expr: value,
+        });
+      }
+    }
+  }
+
+  builder.addBytes(encoded, addr);
   expr.location = addr;
 }
 

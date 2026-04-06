@@ -4,10 +4,14 @@ import { compiler } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
 import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
+import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
+import type { Token } from "../src/lexer/token.types";
+import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
+import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
 
@@ -2026,6 +2030,153 @@ describe("Emission: 8A extractGlobalData — local struct skipped", () => {
       dataSegments,
       0,
       `Local struct must not produce data segment entries, found ${dataSegments}:\n${wat}`,
+    );
+  });
+});
+
+describe("Emission: global struct expression initializers", () => {
+  test("global expression field emits init guard and i32.store", () => {
+    const { wat } = compile(`
+      let offset: i32 = 9;
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = offset, y = 0 };
+      export fn run(): i32 { return g.x; }
+    `);
+    assert(
+      wat.includes("(global $__globals_inited (mut i32) (i32.const 0))"),
+      `Missing $__globals_inited global:\n${wat}`,
+    );
+    assert(
+      wat.includes("(if (i32.eqz (global.get $__globals_inited)) (then"),
+      `Missing init guard if-block:\n${wat}`,
+    );
+    assert(wat.includes("i32.store"), `Missing i32.store in init block:\n${wat}`);
+    assert(wat.includes("global.get $offset"), `Missing global source for init store:\n${wat}`);
+  });
+
+  test("init guard emits in exported function only", () => {
+    const { wat } = compile(`
+      let offset: i32 = 9;
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = offset, y = 0 };
+      fn helper(): i32 { return g.x; }
+      export fn run(): i32 { return helper(); }
+    `);
+    const helperStart = wat.indexOf("(func $helper");
+    const runStart = wat.indexOf("(func $run");
+    const guard = "(if (i32.eqz (global.get $__globals_inited)) (then";
+    const helperBody = wat.slice(helperStart, runStart);
+    const runBody = wat.slice(runStart);
+    assert(!helperBody.includes(guard), `Non-exported helper must not include init guard:\n${wat}`);
+    assert(runBody.includes(guard), `Exported function must include init guard:\n${wat}`);
+  });
+
+  test("literal-only global structs do not emit init guard global", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+      export fn run(): i32 { return g.x; }
+    `);
+    assert(!wat.includes("$__globals_inited"), `Literal-only globals must not emit init flag:\n${wat}`);
+    assert(!wat.includes("i32.eqz (global.get $__globals_inited)"), `Unexpected init guard:\n${wat}`);
+  });
+
+  test("f32 expression field uses f32.store in init block", () => {
+    const { wat } = compile(`
+      let seed: f32 = 1.5;
+      struct Vec2 { x: f32, y: f32 }
+      let v: Vec2 = { x = seed, y = 0.0 };
+      export fn run(): f32 { return v.x; }
+    `);
+    assert(wat.includes("f32.store"), `Missing f32.store for f32 expression field:\n${wat}`);
+    assert(wat.includes("global.get $seed"), `Missing global.get $seed for init:\n${wat}`);
+  });
+
+  test("mixed literal and expression fields emit one deferred store", () => {
+    const { wat } = compile(`
+      let offset: i32 = 11;
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = offset, y = 7 };
+      export fn run(): i32 { return g.y; }
+    `);
+    const storeCount = (wat.match(/i32\.store/g) || []).length;
+    assert.equal(storeCount, 1, `Expected one i32.store from deferred init, got ${storeCount}:\n${wat}`);
+  });
+
+  test("multiple global expression fields emit multiple deferred stores", () => {
+    const { wat } = compile(`
+      let a: i32 = 3;
+      let b: i32 = 5;
+      struct Point { x: i32, y: i32 }
+      let g1: Point = { x = a, y = 0 };
+      let g2: Point = { x = b, y = 0 };
+      export fn run(): i32 { return g1.x + g2.x; }
+    `);
+    const storeCount = (wat.match(/i32\.store/g) || []).length;
+    assert.equal(storeCount, 2, `Expected two deferred i32.store ops, got ${storeCount}:\n${wat}`);
+  });
+
+  test("global struct reversed literal field order still stores by struct layout", () => {
+    const { wat } = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { y = 2, x = 1 };
+      export fn run(): i32 { return g.x; }
+    `);
+    assert(
+      wat.includes("(data (offset"),
+      `Expected data segment for global struct literal:\n${wat}`,
+    );
+    assert(
+      wat.includes("\\01\\00\\00\\00\\02\\00\\00\\00"),
+      `Expected x then y byte ordering in data segment:\n${wat}`,
+    );
+  });
+});
+
+describe("Emission: struct literal expression defense", () => {
+  test("emitExpression throws clear MapleError for struct literal value-position use", () => {
+    const token: Token = { type: "LBrace", literal: "{", start: 0, end: 1, line: 1, col: 1 };
+    const fieldToken: Token = {
+      type: "IntegerLiteral",
+      literal: 1,
+      start: 7,
+      end: 8,
+      line: 1,
+      col: 8,
+    };
+    const expr = new StructLiteralExpression(token, "Point", {
+      x: new IntegerLiteralExpression(fieldToken, 1),
+    });
+    const emitter = new ModuleEmitter({
+      name: "test",
+      globals: {},
+      functions: {},
+      imports: {},
+      exports: {},
+      structs: {
+        Point: {
+          name: "Point",
+          size: 4,
+          members: {
+            x: { name: "x", type: "i32", size: 4, offset: 0 },
+          },
+        },
+      },
+      data: [],
+      stringPool: {},
+      dataPtr: 65536,
+      deferredGlobalInits: [],
+    });
+    assert.throws(
+      () => emitExpression(expr, emitter),
+      (err: unknown) => {
+        assert(err instanceof MapleError);
+        assert(
+          err.message.includes("must be assigned to a 'let' binding"),
+          `Unexpected message: ${String((err as Error).message)}`,
+        );
+        return true;
+      },
     );
   });
 });

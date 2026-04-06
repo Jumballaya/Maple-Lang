@@ -579,3 +579,65 @@ describe("Integration: 8A local struct wat2wasm validation", () => {
     assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
   });
 });
+
+describe("Integration: Struct literal expression values", () => {
+  maybeTest("local struct with binary expression fields passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn run(a: i32, b: i32): i32 {
+        let p: Point = { x = a + b, y = a - b };
+        return p.x + p.y;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("local struct with function-call field passes wat2wasm", () => {
+    const wat = compile(`
+      struct Point { x: i32, y: i32 }
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn run(): i32 {
+        let p: Point = { x = add(1, 2), y = 0 };
+        return p.x;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("local struct with cast field passes wat2wasm", () => {
+    const wat = compile(`
+      struct Vec2 { x: f32, y: f32 }
+      fn run(n: i32): f32 {
+        let v: Vec2 = { x = n as f32, y = 0.0 };
+        return v.x;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("global struct with expression field passes wat2wasm", () => {
+    const wat = compile(`
+      let offset: i32 = 12;
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = offset, y = 3 };
+      export fn run(): i32 { return g.x + g.y; }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+
+  maybeTest("mixed literal-only and expression global structs pass wat2wasm", () => {
+    const wat = compile(`
+      let offset: i32 = 7;
+      struct Point { x: i32, y: i32 }
+      let g1: Point = { x = 1, y = 2 };
+      let g2: Point = { x = offset, y = 0 };
+      export fn run(): i32 { return g1.x + g2.x; }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+  });
+});

@@ -242,6 +242,14 @@ let p = { x = 1, y = 2 };    // type inferred when exactly one struct matches
 
 If two or more defined structs have identical field layouts, a struct literal without an annotation is a parse error.
 
+Struct literal field values can be full expressions, not just literals:
+
+```maple
+let p: Point = { x = a + 1, y = add(2, 3) };
+```
+
+For **global** struct literals, literal-valued fields are encoded in static data at compile time. Expression-valued fields are initialized at runtime once, guarded by a compiler-generated flag before exported function bodies execute.
+
 ### Member access
 
 Dot notation reads or writes a member:
@@ -340,6 +348,7 @@ Maple performs a static type-checking pass after parsing. Errors are reported wi
 4. **Call argument count and types** — the number and types of arguments at a call site must match the declaration.
 5. **Struct member existence** — member access on a known struct type errors if the member does not exist.
 6. **Const mutation** — assigning to a `const` binding, or writing through a member/index expression rooted in a `const` binding, is an error.
+7. **Struct literal field validation** — unknown fields, missing required fields, and field type mismatches are compile-time errors.
 
 ---
 

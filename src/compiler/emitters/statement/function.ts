@@ -1,7 +1,8 @@
 import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { buildLocalStructFrame, extractLocals } from "../emit.data";
-import { valueTypeToWasm } from "../emit.types";
+import { valueTypeToWasm, wasmStoreOp } from "../emit.types";
+import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
 export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): void {
@@ -76,6 +77,18 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
             w.line(`(local.set $${varName} (i32.add (global.get $__sp) (i32.const ${off})))`);
           }
         }
+      }
+
+      const deferredInits = emitter.ctx.mod.deferredGlobalInits;
+      if (fn.exported && deferredInits.length > 0) {
+        w.line(`(if (i32.eqz (global.get $__globals_inited)) (then`);
+        w.line(`(global.set $__globals_inited (i32.const 1))`);
+        for (const init of deferredInits) {
+          const storeOp = wasmStoreOp(init.fieldType);
+          const val = emitExpression(init.expr, emitter);
+          w.line(`(${storeOp} (i32.const ${init.baseAddr + init.offset}) ${val})`);
+        }
+        w.line(`))`);
       }
 
       // write body

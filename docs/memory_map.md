@@ -52,6 +52,8 @@ Compile-time-only. The compiler's `dataPtr` cursor starts at `65536` and allocat
 
 Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack.
 
+When a global struct field uses an expression (for example `{ x = other + 1 }`), the compiler writes a zero placeholder in static data and emits a one-time runtime store guarded by `$__globals_inited`. Literal-valued fields remain fully compile-time encoded.
+
 The reason `dataPtr` starts at `65536` rather than a lower address: `wasm-ld` places the data section at `__global_base` (default `65536`), so the `i32.const` addresses baked into the emitted WAT must match. If `dataPtr` started lower, the linker would relocate the data while leaving code references unchanged, causing silent wrong-address reads.
 
 ### Heap  (HEAP_BASE – heap_end)

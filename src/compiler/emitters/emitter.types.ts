@@ -1,3 +1,6 @@
+import type { ASTExpression } from "../../parser/ast/types/ast.type";
+import type { StructMember } from "../../shared/types";
+
 export type VariableMeta = {
   name: string;
   scope: "global" | "local" | "memory" | "param";
@@ -40,6 +43,12 @@ export type ImportMeta = {
   resolved: boolean;
 };
 export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
+export type DeferredGlobalInit = {
+  baseAddr: number;
+  offset: number;
+  fieldType: string;
+  expr: ASTExpression;
+};
 
 export type FunctionContext = {
   name: string;
@@ -62,9 +71,8 @@ export type ModuleMeta = {
   data: Array<ModuleDataMeta>;
   stringPool: Record<string, number>;
   dataPtr: number;
+  deferredGlobalInits: DeferredGlobalInit[];
 };
-
-import type { StructMember } from "../../shared/types";
 
 export type { StructMember };
 

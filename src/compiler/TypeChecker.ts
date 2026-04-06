@@ -13,6 +13,7 @@ import { PointerMemberExpression } from "../parser/ast/expressions/PointerMember
 import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
+import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
 import { BreakStatement } from "../parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../parser/ast/statements/ContinueStatement";
@@ -108,6 +109,9 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
 
   if (expr instanceof AssignmentExpression) {
     return resolveExprType(expr.left, scope, meta);
+  }
+  if (expr instanceof StructLiteralExpression) {
+    return expr.name;
   }
 
   return null;
@@ -255,6 +259,45 @@ function walkExpression(
     }
     walkExpression(expr.left, scope, meta, errors);
     walkExpression(expr.value, scope, meta, errors);
+    return;
+  }
+
+  if (expr instanceof StructLiteralExpression) {
+    const sd = meta.structs[expr.name];
+    if (!sd) return;
+
+    for (const fieldName of Object.keys(expr.members)) {
+      if (!(fieldName in sd.members)) {
+        const t = expr.token;
+        errors.push(new MapleError(`Struct '${expr.name}' has no field '${fieldName}'`, t.line, t.col));
+      }
+    }
+
+    for (const fieldName of Object.keys(sd.members)) {
+      if (!(fieldName in expr.members)) {
+        const t = expr.token;
+        errors.push(
+          new MapleError(`Struct '${expr.name}' field '${fieldName}' is not initialized`, t.line, t.col),
+        );
+      }
+    }
+
+    for (const [fieldName, fieldExpr] of Object.entries(expr.members)) {
+      const memberMeta = sd.members[fieldName];
+      if (!memberMeta) continue;
+      const fieldType = resolveExprType(fieldExpr, scope, meta);
+      if (fieldType !== null && !typesCompatible(memberMeta.type, fieldType, meta)) {
+        const t = fieldExpr.token;
+        errors.push(
+          new MapleError(
+            `Struct '${expr.name}' field '${fieldName}': expected '${memberMeta.type}', got '${fieldType}'`,
+            t.line,
+            t.col,
+          ),
+        );
+      }
+      walkExpression(fieldExpr, scope, meta, errors);
+    }
     return;
   }
 
