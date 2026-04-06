@@ -269,7 +269,9 @@ function walkExpression(
     for (const fieldName of Object.keys(expr.members)) {
       if (!(fieldName in sd.members)) {
         const t = expr.token;
-        errors.push(new MapleError(`Struct '${expr.name}' has no field '${fieldName}'`, t.line, t.col));
+        errors.push(
+          new MapleError(`Struct '${expr.name}' has no field '${fieldName}'`, t.line, t.col),
+        );
       }
     }
 
@@ -277,7 +279,11 @@ function walkExpression(
       if (!(fieldName in expr.members)) {
         const t = expr.token;
         errors.push(
-          new MapleError(`Struct '${expr.name}' field '${fieldName}' is not initialized`, t.line, t.col),
+          new MapleError(
+            `Struct '${expr.name}' field '${fieldName}' is not initialized`,
+            t.line,
+            t.col,
+          ),
         );
       }
     }

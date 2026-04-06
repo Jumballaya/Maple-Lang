@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { compiler } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
+import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
 import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
-import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import type { Token } from "../src/lexer/token.types";
-import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
+import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
 import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
@@ -1322,10 +1322,7 @@ describe("Emission: 8A Shadow stack global", () => {
 
   test("module with no local structs does not emit $__sp", () => {
     const { wat } = compile("fn test(): i32 { return 1; }");
-    assert(
-      !wat.includes("$__sp"),
-      `Unexpected $__sp in struct-free module:\n${wat}`,
-    );
+    assert(!wat.includes("$__sp"), `Unexpected $__sp in struct-free module:\n${wat}`);
   });
 
   test("$__sp appears before any function in WAT", () => {
@@ -2077,8 +2074,14 @@ describe("Emission: global struct expression initializers", () => {
       let g: Point = { x = 2, y = 3 };
       export fn run(): i32 { return g.x; }
     `);
-    assert(!wat.includes("$__globals_inited"), `Literal-only globals must not emit init flag:\n${wat}`);
-    assert(!wat.includes("i32.eqz (global.get $__globals_inited)"), `Unexpected init guard:\n${wat}`);
+    assert(
+      !wat.includes("$__globals_inited"),
+      `Literal-only globals must not emit init flag:\n${wat}`,
+    );
+    assert(
+      !wat.includes("i32.eqz (global.get $__globals_inited)"),
+      `Unexpected init guard:\n${wat}`,
+    );
   });
 
   test("f32 expression field uses f32.store in init block", () => {
@@ -2100,7 +2103,11 @@ describe("Emission: global struct expression initializers", () => {
       export fn run(): i32 { return g.y; }
     `);
     const storeCount = (wat.match(/i32\.store/g) || []).length;
-    assert.equal(storeCount, 1, `Expected one i32.store from deferred init, got ${storeCount}:\n${wat}`);
+    assert.equal(
+      storeCount,
+      1,
+      `Expected one i32.store from deferred init, got ${storeCount}:\n${wat}`,
+    );
   });
 
   test("multiple global expression fields emit multiple deferred stores", () => {

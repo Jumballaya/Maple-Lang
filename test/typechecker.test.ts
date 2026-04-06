@@ -504,7 +504,10 @@ describe("TypeChecker: Struct literal field validation", () => {
     `);
     const joined = errors.map((e) => e.message).join("\n");
     assert(joined.includes("has no field 'w'"), `Missing unknown-field error:\n${joined}`);
-    assert(joined.includes("field 'y' is not initialized"), `Missing missing-field error:\n${joined}`);
+    assert(
+      joined.includes("field 'y' is not initialized"),
+      `Missing missing-field error:\n${joined}`,
+    );
   });
 
   test("f32 assigned to i32 struct field is an error", () => {
