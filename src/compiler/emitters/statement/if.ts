@@ -2,6 +2,7 @@ import type { IfStatement } from "../../../parser/ast/statements/IfStatement";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { extractIfResultType, extractNeedsReturn } from "../analysis/flow";
+import { valueTypeToWasm } from "../emit.types";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
@@ -24,16 +25,29 @@ export function emitIfStatement(stmt: IfStatement, emitter: ModuleEmitter) {
   let asI32: string;
   if (t === "bool") {
     asI32 = cond;
-  } else if (t === "i32") {
-    asI32 = `(i32.ne ${cond} (i32.const 0))`;
-  } else if (t === "f32") {
-    asI32 = `(f32.ne ${cond} (f32.const 0))`;
-  } else {
+  } else if (t === "void") {
     throw new MapleError(
-      `if condition must be a numeric or boolean expression, got '${t}'`,
+      `if condition must be a numeric or boolean expression, got 'void'`,
       stmt.token.line,
       stmt.token.col,
     );
+  } else {
+    const w = valueTypeToWasm(t);
+    if (w === "i32") {
+      asI32 = `(i32.ne ${cond} (i32.const 0))`;
+    } else if (w === "i64") {
+      asI32 = `(i64.ne ${cond} (i64.const 0))`;
+    } else if (w === "f32") {
+      asI32 = `(f32.ne ${cond} (f32.const 0))`;
+    } else if (w === "f64") {
+      asI32 = `(f64.ne ${cond} (f64.const 0))`;
+    } else {
+      throw new MapleError(
+        `if condition must be a numeric or boolean expression, got '${t}'`,
+        stmt.token.line,
+        stmt.token.col,
+      );
+    }
   }
   emitter.writer.tabIn();
   emitter.writer.line(asI32);

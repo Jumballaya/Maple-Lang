@@ -26,11 +26,12 @@ import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
 import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
-import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
+import { baseScalar, cmpOps, isUnsignedMapleInteger, valueTypeToWasm } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { MapleError } from "./errors";
 
 const ARITHMETIC_OPS = new Set(["+", "-", "*", "/", "%"]);
+const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);
 
 // ─── Scope ────────────────────────────────────────────────────────────────────
 
@@ -44,8 +45,12 @@ type Scope = Map<string, ScopeEntry>;
 // null means "skip this check" — the emitter will surface the error later.
 
 function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): string | null {
-  if (expr instanceof IntegerLiteralExpression) return "i32";
-  if (expr instanceof FloatLiteralExpression) return "f32";
+  if (expr instanceof IntegerLiteralExpression) {
+    return expr.numericType === "i64" ? "i64" : "i32";
+  }
+  if (expr instanceof FloatLiteralExpression) {
+    return expr.numericType === "f64" ? "f64" : "f32";
+  }
   if (expr instanceof BooleanLiteralExpression) return "bool";
   if (expr instanceof StringLiteralExpression) return "string";
 
@@ -62,13 +67,25 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
     const lt = resolveExprType(expr.left, scope, meta);
     const rt = resolveExprType(expr.right, scope, meta);
     if (lt === null || rt === null) return null;
-    if (valueTypeToWasm(lt) === "f32" || valueTypeToWasm(rt) === "f32") return "f32";
+    const wl = valueTypeToWasm(lt);
+    const wr = valueTypeToWasm(rt);
+    if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
+      if (wl === "f64" || wr === "f64") return "f64";
+      return "f32";
+    }
+    if (wl === "i64" || wr === "i64") {
+      if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u64";
+      return "i64";
+    }
+    if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u32";
     return "i32";
   }
 
   if (expr instanceof PrefixExpression) {
     if (expr.operator === "!") return "bool";
-    if (expr.operator === "~") return "i32";
+    if (expr.operator === "~") {
+      return expr.right ? resolveExprType(expr.right, scope, meta) : "i32";
+    }
     if (expr.operator === "-") {
       return expr.right ? resolveExprType(expr.right, scope, meta) : "i32";
     }
@@ -86,7 +103,9 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
     if (imp?.info?.kind === "func") {
       const resultChar = imp.info.signature.split("_")[1]?.[0];
       if (resultChar === "f") return "f32";
+      if (resultChar === "F") return "f64";
       if (resultChar === "v") return "void";
+      if (resultChar === "I") return "i64";
       return "i32";
     }
     return null;
@@ -129,6 +148,7 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
 
 function typesCompatible(declared: string, actual: string, meta: ModuleMeta): boolean {
   if (declared === actual) return true;
+  if (declared === "void" || actual === "void") return false;
   if (declared === "string" || actual === "string") return false;
   if (declared in meta.structs || actual in meta.structs) return false;
   if (declared.endsWith("[]") || actual.endsWith("[]")) return false;
@@ -154,15 +174,13 @@ function walkExpression(
     return;
   }
 
-  // Check 3 — mixed arithmetic
+  // Check 3 — mixed arithmetic / bitwise on float
   if (expr instanceof InfixExpression) {
     if (ARITHMETIC_OPS.has(expr.operator)) {
       const lt = resolveExprType(expr.left, scope, meta);
       const rt = resolveExprType(expr.right, scope, meta);
       if (lt !== null && rt !== null) {
-        const leftIsF32 = valueTypeToWasm(lt) === "f32";
-        const rightIsF32 = valueTypeToWasm(rt) === "f32";
-        if (leftIsF32 !== rightIsF32) {
+        if (valueTypeToWasm(lt) !== valueTypeToWasm(rt)) {
           const t = expr.token;
           errors.push(
             new MapleError(
@@ -172,6 +190,22 @@ function walkExpression(
             ),
           );
         }
+      }
+    }
+    if (BITWISE_OPS.has(expr.operator)) {
+      const lt = resolveExprType(expr.left, scope, meta);
+      const rt = resolveExprType(expr.right, scope, meta);
+      const bad = (x: string | null) =>
+        x !== null && (valueTypeToWasm(x) === "f32" || valueTypeToWasm(x) === "f64");
+      if (bad(lt) || bad(rt)) {
+        const t = expr.token;
+        errors.push(
+          new MapleError(
+            `Bitwise operator '${expr.operator}' is only valid for integer types`,
+            t.line,
+            t.col,
+          ),
+        );
       }
     }
     walkExpression(expr.left, scope, meta, errors);
@@ -358,7 +392,11 @@ type FlowContext = {
 };
 
 function isNumericOrBooleanConditionType(t: string | null): boolean {
-  return t === "bool" || t === "i32" || t === "f32";
+  if (t === null) return false;
+  if (t === "void" || baseScalar(t) === "void") return false;
+  if (t === "bool") return true;
+  const w = valueTypeToWasm(t);
+  return w === "i32" || w === "i64" || w === "f32" || w === "f64";
 }
 
 function walkBlock(
@@ -466,6 +504,17 @@ function walkStatement(
   if (stmt instanceof WhileStatement) {
     const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     walkExpression(stmt.condExpr, scope, meta, errors);
+    const condType = resolveExprType(stmt.condExpr, scope, meta);
+    if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
+      const t = stmt.token;
+      errors.push(
+        new MapleError(
+          `while condition must be a numeric or boolean expression, got '${condType}'`,
+          t.line,
+          t.col,
+        ),
+      );
+    }
     walkBlock(stmt.loopBody, scope, meta, fnReturnType, errors, loopCtx);
     return;
   }
@@ -480,7 +529,21 @@ function walkStatement(
     const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     // Check 1 for for-loop initializer
     checkLetInitializer(stmt.initBlock, loopScope, meta, errors);
-    walkExpression(stmt.conditionExpr.expression, loopScope, meta, errors);
+    const forCondEx = stmt.conditionExpr.expression;
+    if (forCondEx) {
+      walkExpression(forCondEx, loopScope, meta, errors);
+      const forCondType = resolveExprType(forCondEx, loopScope, meta);
+      if (forCondType !== null && !isNumericOrBooleanConditionType(forCondType)) {
+        const t = stmt.conditionExpr.token;
+        errors.push(
+          new MapleError(
+            `for loop condition must be a numeric or boolean expression, got '${forCondType}'`,
+            t.line,
+            t.col,
+          ),
+        );
+      }
+    }
     walkExpression(stmt.updateExpr.expression, loopScope, meta, errors);
     walkBlock(stmt.loopBody, loopScope, meta, fnReturnType, errors, loopCtx);
     return;
@@ -489,6 +552,20 @@ function walkStatement(
   if (stmt instanceof SwitchStatement) {
     const switchCtx: FlowContext = { loopDepth: ctx.loopDepth, switchDepth: ctx.switchDepth + 1 };
     walkExpression(stmt.switchExpr, scope, meta, errors);
+    const st = resolveExprType(stmt.switchExpr, scope, meta);
+    if (st !== null) {
+      const w = valueTypeToWasm(st);
+      if (w === "i64" || w === "f64") {
+        const t = stmt.token;
+        errors.push(
+          new MapleError(
+            `switch discriminant must be an i32-compatible type, got '${st}'`,
+            t.line,
+            t.col,
+          ),
+        );
+      }
+    }
     for (const c of stmt.cases) {
       walkBlock(c.body, scope, meta, fnReturnType, errors, switchCtx);
     }

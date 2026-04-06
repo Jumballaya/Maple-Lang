@@ -12,7 +12,13 @@ import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import type { ASTExpression } from "../parser/ast/types/ast.type";
-import { baseScalar, cmpOps, valueTypeToWasm } from "./emitters/emit.types";
+import {
+  baseScalar,
+  cmpOps,
+  isUnsignedMapleInteger,
+  valueTypeToWasm,
+  type WasmValueType,
+} from "./emitters/emit.types";
 import type {
   FunctionContext,
   FunctionMeta,
@@ -155,12 +161,12 @@ export class ModuleEmitter {
     return this.mod.globals[name];
   }
 
-  public getExprType(expr: ASTExpression): "i32" | "f32" | "bool" | "void" {
+  public getExprType(expr: ASTExpression): string {
     if (expr instanceof IntegerLiteralExpression) {
-      return "i32";
+      return expr.numericType === "i64" ? "i64" : "i32";
     }
     if (expr instanceof FloatLiteralExpression) {
-      return "f32";
+      return expr.numericType === "f64" ? "f64" : "f32";
     }
     if (expr instanceof BooleanLiteralExpression) {
       return "bool";
@@ -174,13 +180,19 @@ export class ModuleEmitter {
         throw new Error(`unknown variable: ${expr.tokenLiteral()}`);
       }
       const t = baseScalar(v.type);
-      return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
+      if (t === "f32" || t === "f64" || t === "bool") return t;
+      if (t === "u8" || t === "u16" || t === "u32" || t === "u64") return t;
+      if (t === "i8" || t === "i16" || t === "i32" || t === "i64") return t;
+      return "i32";
     }
     if (expr instanceof IndexExpression) {
       const meta = this.getVar(expr.left.tokenLiteral());
       const maple = meta?.type ?? "i32[]";
       const elem = baseScalar(maple);
-      return elem === "f32" ? "f32" : elem === "bool" ? "bool" : "i32";
+      if (elem === "f32" || elem === "f64" || elem === "bool") return elem;
+      if (elem === "u8" || elem === "u16" || elem === "u32" || elem === "u64") return elem;
+      if (elem === "i8" || elem === "i16" || elem === "i32" || elem === "i64") return elem;
+      return "i32";
     }
     if (expr instanceof InfixExpression) {
       const lt = this.getExprType(expr.left);
@@ -188,7 +200,18 @@ export class ModuleEmitter {
       if (cmpOps.has(expr.operator)) {
         return "bool";
       }
-      return lt === "f32" || rt === "f32" ? "f32" : "i32";
+      const wl = valueTypeToWasm(lt);
+      const wr = valueTypeToWasm(rt);
+      if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
+        if (wl === "f64" || wr === "f64") return "f64";
+        return "f32";
+      }
+      if (wl === "i64" || wr === "i64") {
+        if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u64";
+        return "i64";
+      }
+      if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u32";
+      return "i32";
     }
     if (expr instanceof PrefixExpression) {
       if (!expr.right) {
@@ -198,11 +221,10 @@ export class ModuleEmitter {
         return "bool";
       }
       if (expr.operator === "~") {
-        return "i32";
+        return this.getExprType(expr.right);
       }
       if (expr.operator === "-") {
-        const t = this.getExprType(expr.right);
-        return t === "f32" ? "f32" : "i32";
+        return this.getExprType(expr.right);
       }
       return "i32";
     }
@@ -215,24 +237,46 @@ export class ModuleEmitter {
     if (expr instanceof CallExpression) {
       const internal = this.mod.functions[expr.func];
       if (internal) {
+        if (internal.result === "void") return "void";
+        const mr = baseScalar(internal.mapleResult);
+        if (
+          mr === "f32" ||
+          mr === "f64" ||
+          mr === "i64" ||
+          mr === "u64" ||
+          mr === "u32" ||
+          mr === "u16" ||
+          mr === "u8" ||
+          mr === "i32" ||
+          mr === "i16" ||
+          mr === "i8"
+        ) {
+          return mr;
+        }
         return internal.result;
       }
       const imp = this.mod.imports[expr.func];
       if (imp?.info && imp.info.kind === "func") {
-        const retType = imp.info.signature.split("_")[1];
-        if (retType === "v") {
+        const retType = imp.info.signature.split("_")[1] ?? "";
+        const ch = retType[0];
+        if (ch === "v" || retType === "v") {
           return "void";
-        } else if (retType === "i") {
-          return "i32";
-        } else if (retType === "f") {
-          return "f32";
         }
+        if (ch === "i") return "i32";
+        if (ch === "I") return "i64";
+        if (ch === "f") return "f32";
+        if (ch === "F") return "f64";
       }
       throw new Error(`[function call expression] unable to determine type`);
     }
     if (expr instanceof CastExpression) {
+      const b = baseScalar(expr.targetType);
+      if (b === "f64" || b === "f32") return b;
+      if (b === "i64" || b === "u64") return b;
+      if (b === "u32" || b === "u16" || b === "u8") return b;
+      if (b === "i32" || b === "i16" || b === "i8") return b;
       const wt = valueTypeToWasm(expr.targetType);
-      return wt === "f32" ? "f32" : "i32";
+      return wt === "f32" ? "f32" : wt === "f64" ? "f64" : wt === "i64" ? "i64" : "i32";
     }
     if (expr instanceof PointerMemberExpression || expr instanceof MemberExpression) {
       if (!(expr.parent instanceof Identifier)) return "i32";
@@ -244,7 +288,10 @@ export class ModuleEmitter {
       const memberData = this.mod.structs[structName]?.members[member];
       if (!memberData) return "i32";
       const t = baseScalar(memberData.type);
-      return t === "f32" ? "f32" : t === "bool" ? "bool" : "i32";
+      if (t === "f32" || t === "f64" || t === "bool") return t;
+      if (t === "u8" || t === "u16" || t === "u32" || t === "u64") return t;
+      if (t === "i8" || t === "i16" || t === "i32" || t === "i64") return t;
+      return "i32";
     }
 
     return "i32";
@@ -253,13 +300,20 @@ export class ModuleEmitter {
   public resolveBinaryOpTypes(
     left: ASTExpression,
     right: ASTExpression,
-  ): ["f32", "f32"] | ["i32", "i32"] {
-    const l = this.getExprType(left);
-    const r = this.getExprType(right);
-    if (l === "f32" || r === "f32") {
-      return ["f32", "f32"];
+  ): [WasmValueType, WasmValueType, boolean] {
+    const lt = this.getExprType(left);
+    const rt = this.getExprType(right);
+    const wl = valueTypeToWasm(lt);
+    const wr = valueTypeToWasm(rt);
+    if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
+      const w: WasmValueType = wl === "f64" || wr === "f64" ? "f64" : "f32";
+      return [w, w, true];
     }
-    return ["i32", "i32"];
+    if (wl !== wr) {
+      throw new Error(`Internal: incompatible binary operand lanes ${wl} vs ${wr}`);
+    }
+    const signed = !(isUnsignedMapleInteger(lt) || isUnsignedMapleInteger(rt));
+    return [wl, wr, signed];
   }
 
   //

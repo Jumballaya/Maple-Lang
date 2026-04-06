@@ -167,7 +167,7 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
       value instanceof BooleanLiteralExpression
     ) {
       const num = typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
-      encoded += numToLittleEndian([num], value instanceof FloatLiteralExpression ? "f32" : "i32");
+      encoded += numToLittleEndian([num], member.type);
     } else {
       encoded += numToLittleEndian([0], member.type);
       if (value) {
@@ -190,12 +190,32 @@ function numToLittleEndian(ns: number[], type: string) {
   const byteSize = sizeofType(baseType);
   const buffer = new ArrayBuffer(byteSize * ns.length);
 
-  if (baseType === "i32") {
+  if (baseType === "i32" || baseType === "u32") {
     const i32 = new Int32Array(buffer);
     i32.set(ns, 0);
   } else if (baseType === "f32") {
     const f32 = new Float32Array(buffer);
     f32.set(ns, 0);
+  } else if (baseType === "i64" || baseType === "u64") {
+    const i64 = new BigInt64Array(buffer);
+    i64.set(
+      ns.map((n) => BigInt(Math.trunc(n))),
+      0,
+    );
+  } else if (baseType === "f64") {
+    const f64 = new Float64Array(buffer);
+    f64.set(ns, 0);
+  } else if (baseType === "i8" || baseType === "u8") {
+    const u8 = new Uint8Array(buffer);
+    u8.set(
+      ns.map((n) => Math.trunc(n) & 0xff),
+      0,
+    );
+  } else if (baseType === "i16" || baseType === "u16") {
+    const view = new DataView(buffer);
+    for (let i = 0; i < ns.length; i++) {
+      view.setInt16(i * 2, Math.trunc(ns[i]!), true);
+    }
   } else {
     throw new Error(`unsupported type: "${baseType}"`);
   }

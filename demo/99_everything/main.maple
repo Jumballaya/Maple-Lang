@@ -101,6 +101,16 @@ export fn _start(seed: i32): i32 {
   let inferred_cast = inferred_int as f32 * inferred_float;
   total = total + inferred_int + (inferred_cast as i32);
 
+  // 64-bit lanes: i64 add, u32 unsigned div, f64 remainder
+  let acc64: i64 = seed as i64;
+  acc64 = acc64 + (1000 as i64);
+  total = total + (acc64 as i32);
+  let uhi: u32 = (200 as u32) / (9 as u32);
+  total = total + uhi as i32;
+  let numer: f64 = 22.0;
+  let denom: f64 = 7.0;
+  total = total + (numer % denom) as i32;
+
   // strings: length of a string literal is accessible via .len
   let greeting: string = "hello";
   let inferred_str = "world!";

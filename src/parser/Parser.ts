@@ -1,4 +1,8 @@
-import { sizeofType } from "../compiler/emitters/emit.types";
+import {
+  isUnsignedMapleInteger,
+  sizeofType,
+  valueTypeToWasm,
+} from "../compiler/emitters/emit.types";
 import { MapleError } from "../compiler/errors";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
@@ -427,7 +431,11 @@ export class Parser {
         return null;
       }
       this.tokenizer.nextToken();
-      const firstType = this.parseTokenType(this.tokenizer.curToken());
+      const firstType = this.parseTyping();
+      if (!firstType || firstType === "void") {
+        this.pushError("struct member cannot use void type", firstIdent);
+        return null;
+      }
       const sz = sizeofType(firstType);
       members[firstName] = {
         name: firstName,
@@ -456,35 +464,6 @@ export class Parser {
     this.tokenizer.nextToken(); // consume RBRACE
 
     return new StructStatement(statementToken, name, members, size, exported);
-  }
-
-  private parseTokenType(token: Token): string {
-    switch (token.type) {
-      case "Identifier": {
-        return "i32"; // struct pointer
-      }
-      case "StringLiteral": {
-        return "i32"; // string pointer
-      }
-      case "Boolean": {
-        return "i32";
-      }
-      case "FloatLiteral": {
-        return "f32";
-      }
-      case "i32":
-      case "i16":
-      case "i8":
-      case "u32":
-      case "u16":
-      case "u8": {
-        return "i32";
-      }
-      case "f32": {
-        return "f32";
-      }
-    }
-    return "";
   }
 
   private parseLetStatement(exported = false, mutable = true): ASTStatement | null {
@@ -534,6 +513,15 @@ export class Parser {
       }
     }
 
+    if (value !== null) {
+      if ((typeAnn === "i64" || typeAnn === "u64") && value instanceof IntegerLiteralExpression) {
+        value.numericType = "i64";
+      }
+      if (typeAnn === "f64" && value instanceof FloatLiteralExpression) {
+        value.numericType = "f64";
+      }
+    }
+
     // typeAnn is now fully resolved (explicit or inferred); register it
     const identifier = new Identifier(identToken, typeAnn);
     this.identifierTypes.set(identToken.literal.toString(), typeAnn);
@@ -551,8 +539,12 @@ export class Parser {
 
   private inferTypeFromExpr(expr: ASTExpression | null): string {
     if (!expr) return "";
-    if (expr instanceof IntegerLiteralExpression) return "i32";
-    if (expr instanceof FloatLiteralExpression) return "f32";
+    if (expr instanceof IntegerLiteralExpression) {
+      return expr.numericType === "i64" ? "i64" : "i32";
+    }
+    if (expr instanceof FloatLiteralExpression) {
+      return expr.numericType === "f64" ? "f64" : "f32";
+    }
     if (expr instanceof BooleanLiteralExpression) return "bool";
     if (expr instanceof StringLiteralExpression) return "string";
     if (expr instanceof CastExpression) return expr.targetType;
@@ -575,7 +567,18 @@ export class Parser {
       const lt = this.inferTypeFromExpr(expr.left);
       const rt = this.inferTypeFromExpr(expr.right);
       if (!lt || !rt) return "";
-      return lt === "f32" || rt === "f32" ? "f32" : "i32";
+      const wl = valueTypeToWasm(lt);
+      const wr = valueTypeToWasm(rt);
+      if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
+        if (wl === "f64" || wr === "f64") return "f64";
+        return "f32";
+      }
+      if (wl === "i64" || wr === "i64") {
+        if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u64";
+        return "i64";
+      }
+      if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u32";
+      return "i32";
     }
     if (expr instanceof PrefixExpression) {
       if (expr.operator === "!") return "bool";

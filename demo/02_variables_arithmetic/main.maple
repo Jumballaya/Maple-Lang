@@ -14,5 +14,26 @@ export fn _start(x: i32): i32 {
     a = a + 1;
   }
 
+  // i64 lane: widen, add on i64 stack, fold back with wrap
+  let wide: i64 = x as i64;
+  wide = wide + (100 as i64);
+  a = a + (wide as i32);
+
+  // u32: unsigned division (i32.div_u at WASM)
+  let uq: u32 = 100 as u32;
+  let ur: u32 = 7 as u32;
+  a = a + (uq / ur) as i32;
+
+  // u64: unsigned right shift (i64.shr_u)
+  let bigu: u64 = 64 as u64;
+  let sh: u64 = bigu >> (3 as u64);
+  a = a + (sh as i32);
+
+  // f64: double lane + floating-point remainder (lowers via trunc/div/mul/sub)
+  let xd: f64 = 22.0;
+  let yd: f64 = 7.0;
+  let rd: f64 = xd % yd;
+  a = a + rd as i32;
+
   return a;
 }

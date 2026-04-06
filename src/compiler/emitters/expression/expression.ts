@@ -19,7 +19,7 @@ import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
-import { valueTypeToWasm, wasmLoadOp } from "../emit.types";
+import { isUnsignedMapleInteger, valueTypeToWasm, wasmLoadOp } from "../emit.types";
 import { emitAssignmentExpression } from "./assignment";
 import { emitBinaryOp } from "./binary";
 import { emitGet, emitNumberGet } from "./core";
@@ -35,18 +35,28 @@ function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitt
   }
 
   const rhs = emitExpression(right, emitter);
+  const mt = emitter.getExprType(right);
+  const w = valueTypeToWasm(mt);
   switch (expression.operator) {
     case "!": {
       return `(i32.eqz ${rhs})`;
     }
     case "-": {
-      const t = emitter.getExprType(right);
-      if (t === "f32") {
+      if (w === "f32") {
         return `(f32.neg ${rhs})`;
+      }
+      if (w === "f64") {
+        return `(f64.neg ${rhs})`;
+      }
+      if (w === "i64") {
+        return `(i64.sub (i64.const 0) ${rhs})`;
       }
       return `(i32.sub (i32.const 0) ${rhs})`;
     }
     case "~": {
+      if (w === "i64") {
+        return `(i64.xor ${rhs} (i64.const -1))`;
+      }
       return `(i32.xor ${rhs} (i32.const -1))`;
     }
     default: {
@@ -90,14 +100,32 @@ function emitPostfixExpression(expression: PostfixExpression, emitter: ModuleEmi
   }
 
   const getVal = emitGet(name, emitter);
+  const mt = emitter.getExprType(expression.left);
+  const w = valueTypeToWasm(mt);
   const delta = expression.operator === "++" ? 1 : -1;
-  const updated = `(i32.add ${getVal} (i32.const ${delta}))`;
+  const deltaOp =
+    w === "f32"
+      ? `(f32.const ${delta})`
+      : w === "f64"
+        ? `(f64.const ${delta})`
+        : w === "i64"
+          ? `(i64.const ${delta})`
+          : `(i32.const ${delta})`;
+  const oneOp =
+    w === "f32"
+      ? "(f32.const 1)"
+      : w === "f64"
+        ? "(f64.const 1)"
+        : w === "i64"
+          ? "(i64.const 1)"
+          : "(i32.const 1)";
+  const updated = `(${w}.add ${getVal} ${deltaOp})`;
   const setOp = v.scope === "global" ? "global.set" : "local.set";
 
   if (expression.operator === "++") {
-    return `(block (result i32) (${setOp} $${name} ${updated}) (i32.sub ${emitGet(name, emitter)} (i32.const 1)))`;
+    return `(block (result ${w}) (${setOp} $${name} ${updated}) (${w}.sub ${emitGet(name, emitter)} ${oneOp}))`;
   }
-  return `(block (result i32) (${setOp} $${name} ${updated}) (i32.add ${emitGet(name, emitter)} (i32.const 1)))`;
+  return `(block (result ${w}) (${setOp} $${name} ${updated}) (${w}.add ${emitGet(name, emitter)} ${oneOp}))`;
 }
 
 export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter): string {
@@ -113,7 +141,7 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     writer.line(emitFunctionCall(expression, emitter));
     //
   } else if (expression instanceof IntegerLiteralExpression) {
-    writer.line(emitNumberGet(expression.value, "i32"));
+    writer.line(emitNumberGet(expression.value, expression.numericType === "i64" ? "i64" : "i32"));
     //
   } else if (expression instanceof BooleanLiteralExpression) {
     writer.line(emitNumberGet(expression.value ? 1 : 0, "i32"));
@@ -129,7 +157,9 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     writer.line(`${emitNumberGet(expression.location, "i32")}`);
     //
   } else if (expression instanceof FloatLiteralExpression) {
-    writer.line(`${emitNumberGet(expression.value, "f32")}`);
+    writer.line(
+      `${emitNumberGet(expression.value, expression.numericType === "f64" ? "f64" : "f32")}`,
+    );
     //
   } else if (expression instanceof StructLiteralExpression) {
     const t = expression.token;
@@ -170,14 +200,38 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     //
   } else if (expression instanceof CastExpression) {
     const inner = emitExpression(expression.expr, emitter);
-    const from = emitter.getExprType(expression.expr);
+    const fromMt = emitter.getExprType(expression.expr);
+    const fromW = valueTypeToWasm(fromMt);
     const toWasm = valueTypeToWasm(expression.targetType);
-    if (from === "i32" && toWasm === "f32") {
+    const unsignedSrc = isUnsignedMapleInteger(fromMt);
+    if (fromW === toWasm) {
+      writer.line(inner);
+    } else if (fromW === "i32" && toWasm === "i64") {
+      writer.line(unsignedSrc ? `(i64.extend_i32_u ${inner})` : `(i64.extend_i32_s ${inner})`);
+    } else if (fromW === "i64" && toWasm === "i32") {
+      writer.line(`(i32.wrap_i64 ${inner})`);
+    } else if (fromW === "i32" && toWasm === "f32") {
       writer.line(`(f32.convert_i32_s ${inner})`);
-    } else if (from === "f32" && toWasm === "i32") {
+    } else if (fromW === "f32" && toWasm === "i32") {
       writer.line(`(i32.trunc_f32_s ${inner})`);
+    } else if (fromW === "i32" && toWasm === "f64") {
+      writer.line(`(f64.convert_i32_s ${inner})`);
+    } else if (fromW === "f64" && toWasm === "i32") {
+      writer.line(`(i32.trunc_f64_s ${inner})`);
+    } else if (fromW === "f32" && toWasm === "f64") {
+      writer.line(`(f64.promote_f32 ${inner})`);
+    } else if (fromW === "f64" && toWasm === "f32") {
+      writer.line(`(f32.demote_f64 ${inner})`);
+    } else if (fromW === "i64" && toWasm === "f64") {
+      writer.line(`(f64.convert_i64_s ${inner})`);
+    } else if (fromW === "f64" && toWasm === "i64") {
+      writer.line(`(i64.trunc_f64_s ${inner})`);
+    } else if (fromW === "f32" && toWasm === "i64") {
+      writer.line(`(i64.trunc_f32_s ${inner})`);
+    } else if (fromW === "i64" && toWasm === "f32") {
+      writer.line(`(f32.convert_i64_s ${inner})`);
     } else {
-      writer.line(inner); // same WASM type (e.g. i32 → u8, i32 → i16): no-op
+      writer.line(inner);
     }
     //
   } else {

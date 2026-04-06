@@ -73,6 +73,7 @@ const math: ModuleMeta = {
     },
   },
   data: [],
+  deferredGlobalInits: [],
 };
 
 const memory: ModuleMeta = {
@@ -102,6 +103,7 @@ const memory: ModuleMeta = {
   stringPool: {},
   structs: {},
   data: [],
+  deferredGlobalInits: [],
 };
 
 const string: ModuleMeta = {
@@ -161,6 +163,7 @@ const string: ModuleMeta = {
     },
   },
   data: [],
+  deferredGlobalInits: [],
 };
 
 export const stdlib: Record<string, ModuleMeta> = {

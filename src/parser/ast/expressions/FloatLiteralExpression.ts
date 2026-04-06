@@ -6,6 +6,7 @@ export class FloatLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public value: number;
+  public numericType: "f32" | "f64" = "f32";
 
   constructor(token: Token, value: number) {
     this.token = token;

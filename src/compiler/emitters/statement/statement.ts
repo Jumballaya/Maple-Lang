@@ -13,6 +13,7 @@ import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../../parser/ast/types/ast.type";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
+import { valueTypeToWasm } from "../emit.types";
 import { emitGet } from "../expression/core";
 import { emitExpression } from "../expression/expression";
 import { emitBreakStatement } from "./break";
@@ -38,8 +39,17 @@ function emitPostfixVoid(expr: PostfixExpression, emitter: ModuleEmitter): strin
     const t = expr.left.token;
     throw new MapleError(`variable not found: "${name}"`, t.line, t.col);
   }
+  const w = valueTypeToWasm(emitter.getExprType(expr.left));
   const delta = expr.operator === "++" ? 1 : -1;
-  const updated = `(i32.add ${emitGet(name, emitter)} (i32.const ${delta}))`;
+  const deltaOp =
+    w === "f32"
+      ? `(f32.const ${delta})`
+      : w === "f64"
+        ? `(f64.const ${delta})`
+        : w === "i64"
+          ? `(i64.const ${delta})`
+          : `(i32.const ${delta})`;
+  const updated = `(${w}.add ${emitGet(name, emitter)} ${deltaOp})`;
   const setOp = v.scope === "global" ? "global.set" : "local.set";
   return `(${setOp} $${name} ${updated})`;
 }

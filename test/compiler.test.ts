@@ -451,6 +451,78 @@ describe("Emission: Cast", () => {
   });
 });
 
+describe("Emission: 64-bit widths and unsigned ops (9A)", () => {
+  test("i64 addition uses i64.add and result i64", () => {
+    const { wat, meta } = compile(`fn add64(a: i64, b: i64): i64 { return a + b; }`);
+    assert(wat.includes("(result i64)"), wat);
+    assert(wat.includes("i64.add"), wat);
+    assert.equal(meta.functions.add64?.signature, "II_I");
+  });
+
+  test("u32 division uses unsigned i32.div_u", () => {
+    const { wat } = compile(`fn udiv(a: u32, b: u32): u32 { return a / b; }`);
+    assert(wat.includes("i32.div_u"), wat);
+  });
+
+  test("i32 division uses signed i32.div_s", () => {
+    const { wat } = compile(`fn sdiv(a: i32, b: i32): i32 { return a / b; }`);
+    assert(wat.includes("i32.div_s"), wat);
+  });
+
+  test("u64 division uses i64.div_u", () => {
+    const { wat } = compile(`fn udiv(a: u64, b: u64): u64 { return a / b; }`);
+    assert(wat.includes("i64.div_u"), wat);
+  });
+
+  test("u64 right shift uses i64.shr_u", () => {
+    const { wat } = compile(`fn shr(a: u64, b: u64): u64 { return a >> b; }`);
+    assert(wat.includes("i64.shr_u"), wat);
+  });
+
+  test("i64 right shift uses i64.shr_s", () => {
+    const { wat } = compile(`fn shr(a: i64, b: i64): i64 { return a >> b; }`);
+    assert(wat.includes("i64.shr_s"), wat);
+  });
+
+  test("f64 remainder lowers via f64.trunc / div / mul / sub", () => {
+    const { wat } = compile(`fn rem(a: f64, b: f64): f64 { return a % b; }`);
+    assert(wat.includes("f64.trunc"), wat);
+    assert(wat.includes("f64.div"), wat);
+    assert(wat.includes("f64.mul"), wat);
+    assert(wat.includes("f64.sub"), wat);
+  });
+
+  test("struct member typed i64 loads with i64.load", () => {
+    const { wat } = compile(`
+      struct S { x: i32, y: i64, }
+      fn loady(): i64 {
+        let s: S = { x = 1, y = 2 as i64, };
+        return s.y;
+      }
+    `);
+    assert(wat.includes("i64.load"), wat);
+  });
+
+  test("resolved import with I_I emits i64 param and result in type", () => {
+    const p = new Parser(`
+      import callee from "m"
+      fn f(x: i64): i64 { return callee(x); }
+    `);
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const meta = extractModuleMeta(ast);
+    meta.imports.callee.resolved = true;
+    meta.imports.callee.info = {
+      kind: "func",
+      signature: "I_I",
+    } as ExportMeta;
+    const wat = emitModule(ast, meta).buildWat();
+    assert(wat.includes("$I_I_type"), wat);
+    assert(wat.includes("(param i64)"), wat);
+    assert(wat.includes("(result i64)"), wat);
+  });
+});
+
 describe("Emission: Postfix Statement", () => {
   test("idx++ as statement emits plain local.set, not block-with-result", () => {
     const { wat } = compile("fn test(): i32 { let idx: i32 = 0; idx++; return idx; }");
@@ -1035,7 +1107,6 @@ describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
   });
 
   test("for loop with void function as condition throws MapleError", () => {
-    // RED: void condition falls through to f32.ne, producing invalid WAT instead of error
     assert.throws(
       () =>
         compile(`fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`),
@@ -1044,7 +1115,6 @@ describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
   });
 
   test("while loop with void function as condition throws MapleError", () => {
-    // RED: same void condition fallthrough bug in while.ts
     assert.throws(
       () => compile(`fn noop(): void {} fn f(): void { while (noop()) { } }`),
       (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),

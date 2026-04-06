@@ -7,6 +7,7 @@ import { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement"
 import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
+import { valueTypeToWasm } from "../emit.types";
 
 export function stmtDefinitelyReturns(stmt: ASTStatement): boolean {
   if (stmt instanceof ReturnStatement) {
@@ -67,10 +68,12 @@ export function extractNeedsReturn(stmt: IfStatement): boolean {
   return false;
 }
 
-type IfResultType = "i32" | "f32";
+type IfResultType = "i32" | "f32" | "i64" | "f64";
 
 function mergeResultTypes(a: IfResultType | null, b: IfResultType | null): IfResultType | null {
+  if (a === "f64" || b === "f64") return "f64";
   if (a === "f32" || b === "f32") return "f32";
+  if (a === "i64" || b === "i64") return "i64";
   if (a === "i32" || b === "i32") return "i32";
   return null;
 }
@@ -81,7 +84,9 @@ function findStatementReturnType(stmt: ASTStatement, emitter: ModuleEmitter): If
   if (stmt instanceof ReturnStatement) {
     if (stmt.returnValue === null) return null;
     const t = emitter.getExprType(stmt.returnValue);
-    return t === "f32" ? "f32" : "i32";
+    const w = valueTypeToWasm(t);
+    if (w === "f64" || w === "f32" || w === "i64" || w === "i32") return w;
+    return "i32";
   }
 
   if (stmt instanceof BlockStatement) {

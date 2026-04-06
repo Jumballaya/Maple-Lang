@@ -3,6 +3,12 @@ struct Point {
   y: i32,
 }
 
+// Mixed layout: 32-bit tag + 64-bit counter (i64.load / i64.store at offset 8)
+struct Metrics {
+  tag: i32,
+  hits: i64,
+}
+
 // local structs live on the compiler-managed shadow stack.
 // p is an i32 pointer into that stack; field reads/writes are i32.load/i32.store.
 
@@ -52,6 +58,12 @@ export fn squared_dist(px: i32, py: i32): i32 {
   return dx * dx + dy * dy;
 }
 
+export fn metrics_tag_plus_hits_low(): i32 {
+  let m: Metrics = { tag = 2, hits = 1000 as i64 };
+  return m.tag + (m.hits as i32);
+}
+
 export fn _start(): i32 {
-  return sum_point() + clamp_to_positive() + swap_and_sum() + count_down() + squared_dist(3, 4);
+  return sum_point() + clamp_to_positive() + swap_and_sum() + count_down() + squared_dist(3, 4)
+    + metrics_tag_plus_hits_low();
 }

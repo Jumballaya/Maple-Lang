@@ -6,6 +6,8 @@ export class IntegerLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public value: number;
+  /** Set by parser when a typed context uses a 64-bit integer lane (e.g. `let x: i64 = 1`). */
+  public numericType: "i32" | "i64" = "i32";
 
   constructor(token: Token, value: number) {
     this.token = token;

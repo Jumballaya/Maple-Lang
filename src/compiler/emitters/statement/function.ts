@@ -1,12 +1,15 @@
 import type { FunctionStatement } from "../../../parser/ast/statements/FunctionStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { buildLocalStructFrame, extractLocals } from "../emit.data";
-import { valueTypeToWasm, wasmStoreOp } from "../emit.types";
+import { valueTypeToWasm, wasmLaneToSignatureChar, wasmStoreOp } from "../emit.types";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
 export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): void {
-  const rType = fn.fnExpr.returnType ? valueTypeToWasm(fn.fnExpr.returnType) : "void";
+  const rType =
+    fn.fnExpr.returnType && fn.fnExpr.returnType !== "void"
+      ? valueTypeToWasm(fn.fnExpr.returnType)
+      : "void";
   const params: Array<{ name: string; type: string }> = [];
   for (const p of fn.fnExpr.params) {
     params.push({ name: p.identifier.tokenLiteral(), type: p.type });
@@ -45,7 +48,7 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       }
 
       // write return result
-      if (fn.fnExpr.returnType) {
+      if (fn.fnExpr.returnType && fn.fnExpr.returnType !== "void") {
         w.append(` (result ${valueTypeToWasm(fn.fnExpr.returnType)})`);
       }
       w.newLine();
@@ -55,10 +58,9 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       emitter.configureLocalStructFrame(frame.totalSize, frame.offsets);
 
       if (frame.totalSize > 0 && rType !== "void") {
-        const tmpType = rType === "f32" ? "f32" : "i32";
         emitter.defLocal({
           name: "__ret_tmp",
-          type: tmpType,
+          type: rType,
           scope: "local",
         });
       }
@@ -110,34 +112,38 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
 
 // returns: [params, results, typeName]
 // ['void', 'void', $v_v_type] or [['i32'], ['i32'], $i_i_type]
+type WasmParam = "i32" | "f32" | "i64" | "f64";
+
+function signatureCharToWasm(c: string): WasmParam | null {
+  if (c === "i") return "i32";
+  if (c === "I") return "i64";
+  if (c === "f") return "f32";
+  if (c === "F") return "f64";
+  return null;
+}
+
 export function extractFunctionSignature(
   signature: string,
-): [Array<"i32" | "f32"> | "void", Array<"i32" | "f32"> | "void", string] {
+): [WasmParam[] | "void", WasmParam[] | "void", string] {
   const typeName = `$${signature}_type`;
-  const params = signature.split("_")[0]?.split("") ?? [];
-  const results = signature.split("_")[1]?.split("") ?? [];
+  const paramStr = signature.split("_")[0] ?? "";
+  const resultStr = signature.split("_")[1] ?? "";
 
-  let p: Array<"i32" | "f32"> | "void" = "void";
-  if (params.length > 0) {
+  let p: WasmParam[] | "void" = "void";
+  if (paramStr.length > 0 && paramStr !== "v") {
     p = [];
-    for (const param of params) {
-      if (param === "i") {
-        p.push("i32");
-      } else if (param === "f") {
-        p.push("f32");
-      }
+    for (const param of paramStr.split("")) {
+      const w = signatureCharToWasm(param);
+      if (w) p.push(w);
     }
   }
 
-  let r: Array<"i32" | "f32"> | "void" = "void";
-  if (results.length > 0) {
+  let r: WasmParam[] | "void" = "void";
+  if (resultStr.length > 0 && resultStr !== "v") {
     r = [];
-    for (const res of results) {
-      if (res === "i") {
-        r.push("i32");
-      } else if (res === "f") {
-        r.push("f32");
-      }
+    for (const res of resultStr.split("")) {
+      const w = signatureCharToWasm(res);
+      if (w) r.push(w);
     }
   }
 
@@ -147,17 +153,19 @@ export function extractFunctionSignature(
 //   (type $i_i_type (func (param i32) (result i32)))
 export function emitFunctionSignature(
   typeName: string,
-  params: ("i32" | "f32")[] | "void",
-  result: ("i32" | "f32")[] | "void",
+  params: WasmParam[] | "void",
+  result: WasmParam[] | "void",
 ): string {
   let func = `(func`;
-  for (const p of params) {
+  const paramList = params === "void" ? [] : params;
+  for (const p of paramList) {
     func += ` (param ${p})`;
   }
 
   let resultLine = " (result";
   let count = 0;
-  for (const p of result) {
+  const resultList = result === "void" ? [] : result;
+  for (const p of resultList) {
     resultLine += ` ${p}`;
     count++;
   }
@@ -187,15 +195,18 @@ export function emitFunctionSignature(
 export function generateFunctionSignature(fn: FunctionStatement): string {
   let signature = "";
   for (const p of fn.fnExpr.params) {
-    signature += valueTypeToWasm(p.type).slice(0, 1);
+    signature += wasmLaneToSignatureChar(valueTypeToWasm(p.type));
   }
   if (signature === "") {
     signature = "v";
   }
   signature += "_";
 
-  const rType = fn.fnExpr.returnType ? valueTypeToWasm(fn.fnExpr.returnType) : "void";
-  signature += `${rType.slice(0, 1)}`;
+  const rType =
+    fn.fnExpr.returnType && fn.fnExpr.returnType !== "void"
+      ? valueTypeToWasm(fn.fnExpr.returnType)
+      : "void";
+  signature += wasmLaneToSignatureChar(rType);
 
   return signature;
 }

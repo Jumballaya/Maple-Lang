@@ -1,5 +1,7 @@
-import add from "./math.maple"
+import add, add64 from "./math.maple"
 
 export fn _start(a: i32, b: i32): i32 {
-  return add(a, b);
+  let lo: i32 = add(a, b);
+  let hi: i64 = add64(a as i64, b as i64);
+  return lo + (hi as i32);
 }

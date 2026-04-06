@@ -23,6 +23,18 @@ export fn mask_byte(n: i32): i32 {
   return n as u8;
 }
 
+// i32 <-> i64: extend (signed/unsigned) and wrap
+export fn widen_then_narrow(n: i32): i32 {
+  let w: i64 = n as i64;
+  return w as i32;
+}
+
+// f32 <-> f64: promote / demote
+export fn promote_halve(n: f32): f32 {
+  let d: f64 = n as f64;
+  return (d * (0.5 as f64)) as f32;
+}
+
 export fn _start(): i32 {
   // int_to_float(7) -> 7.0, then as i32 -> 7
   let a: i32 = int_to_float(7) as i32;
@@ -36,5 +48,8 @@ export fn _start(): i32 {
   // average(3, 7) -> 5.0, then as i32 -> 5
   let d: i32 = average(3, 7) as i32;
 
-  return a + b + c + d;
+  let e: i32 = widen_then_narrow(42);
+  let f: i32 = promote_halve(8.0) as i32;
+
+  return a + b + c + d + e + f;
 }

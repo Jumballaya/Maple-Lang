@@ -36,6 +36,8 @@ Single-line only. No block comment syntax.
 
 All integer variants smaller than `i32` are represented as `i32` in WebAssembly.
 
+`i64` and `u64` use the WebAssembly `i64` lane; `f64` uses the `f64` lane. Struct layout and loads/stores use the full width for these members.
+
 ### Special types
 
 | Type     | Description                                      |
@@ -76,7 +78,9 @@ The type is inferred from the right-hand side expression:
 | Initializer                     | Inferred type         |
 |---------------------------------|-----------------------|
 | Integer literal (`5`, `-1`)     | `i32`                 |
+| Integer literal under `let x: i64` / `let x: u64` | `i64` (same backing lane for both) |
 | Float literal (`3.14`, `0.5`)   | `f32`                 |
+| Float literal under `let x: f64` | `f64`                 |
 | Boolean literal (`true`)        | `bool`                |
 | String literal (`"hello"`)      | `string`              |
 | Integer array literal (`[1, 2]`)| `i32[]`               |
@@ -322,6 +326,18 @@ import malloc, free from "memory"
 ```
 
 Imported names are usable as function calls. The type system uses a signature encoding to check arity at call sites; full type checking of imported functions is limited to argument count.
+
+When a module links against known import metadata, function signatures are encoded as `params_return` where each letter is one lane:
+
+| Letter | Meaning |
+|--------|---------|
+| `i` | `i32` |
+| `I` | `i64` |
+| `f` | `f32` |
+| `F` | `f64` |
+| `v` | no parameter or no return (`void`) |
+
+Example: `ii_i` is `(i32, i32) -> i32`; `I_I` is `(i64) -> i64`; `v_F` is `() -> f64`.
 
 ---
 

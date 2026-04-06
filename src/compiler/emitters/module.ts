@@ -101,7 +101,7 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
       const signature = generateFunctionSignature(stmt);
       builder.defFunc(name, {
         exported,
-        result: returnType ? valueTypeToWasm(returnType) : "void",
+        result: returnType && returnType !== "void" ? valueTypeToWasm(returnType) : "void",
         mapleResult: returnType ?? "void",
         params: params.map(({ identifier, type }) => ({
           name: identifier.tokenLiteral(),

@@ -21,8 +21,7 @@ export function emitGet(ident: string, emitter: ModuleEmitter): string {
     }
 
     case "memory": {
-      const wt = valueTypeToWasm(v.type);
-      const loadOp = wasmLoadOp(wt);
+      const loadOp = wasmLoadOp(v.type);
       return `(${loadOp} ${addrOf(v)})`;
     }
   }
@@ -45,8 +44,7 @@ export function emitSet(ident: string, expr: ASTExpression, emitter: ModuleEmitt
     }
 
     case "memory": {
-      const wt = valueTypeToWasm(v.type);
-      const storeOp = wasmStoreOp(wt);
+      const storeOp = wasmStoreOp(v.type);
       return `(${storeOp} ${addrOf(v)} ${rhs})`;
     }
   }
