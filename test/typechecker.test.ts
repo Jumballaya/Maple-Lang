@@ -660,3 +660,164 @@ describe("TypeChecker: inferred call return types", () => {
     expectError(src, "no member");
   });
 });
+
+describe("TypeChecker: 9B multi-return and destructuring", () => {
+  test("multi-return happy path", () => {
+    expectNoErrors("fn f(): (i32, i32) { return 1, 2; }");
+  });
+
+  test("three-return happy path", () => {
+    expectNoErrors("fn f(): (i32, i32, i32) { return 1, 2, 3; }");
+  });
+
+  test("five-return happy path", () => {
+    expectNoErrors("fn f(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }");
+  });
+
+  test("six-return happy path", () => {
+    expectNoErrors("fn f(): (i32, i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5, 6; }");
+  });
+
+  test("multi-return arity mismatch", () => {
+    expectError("fn f(): (i32, i32) { return 1; }", "Return arity mismatch");
+  });
+
+  test("single-return cannot return multi values", () => {
+    expectError("fn f(): i32 { return 1, 2; }", "Return arity mismatch");
+  });
+
+  test("multi-return rejects bare return", () => {
+    expectError("fn f(): (i32, i32) { return; }", "multi-return function cannot use a void return");
+  });
+
+  test("void function rejects multi-value return", () => {
+    expectError("fn f(): void { return 1, 2; }", "Cannot return a value from a void function");
+  });
+
+  test("multi-return per-position mismatch", () => {
+    expectError("fn f(): (i32, i64) { return 1, 2; }", "Return type mismatch at position 1");
+  });
+
+  test("pass-through return happy path", () => {
+    expectNoErrors(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): (i32, i32) { return swap(1, 2); }
+    `);
+  });
+
+  test("pass-through return arity mismatch", () => {
+    expectError(
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): (i32, i32, i32) { return swap(1, 2); }
+      `,
+      "pass-through return arity mismatch",
+    );
+  });
+
+  test("destructuring let happy path", () => {
+    expectNoErrors(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (x, y) = swap(1, 2); let z: i32 = x + y; }
+    `);
+  });
+
+  test("destructuring let with discards", () => {
+    expectNoErrors(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (_, y) = swap(1, 2); let z: i32 = y; }
+    `);
+  });
+
+  test("destructuring three-return happy path", () => {
+    expectNoErrors(`
+      fn tri(): (i32, i32, i32) { return 1, 2, 3; }
+      fn f(): void { let (a, b, c) = tri(); let z: i32 = a + b + c; }
+    `);
+  });
+
+  test("destructuring five-return with discard happy path", () => {
+    expectNoErrors(`
+      fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+      fn f(): void { let (a, _, c, d, e) = many(); let z: i32 = a + c + d + e; }
+    `);
+  });
+
+  test("destructure five-return arity mismatch", () => {
+    expectError(
+      `
+      fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+      fn f(): void { let (a, b, c, d) = many(); }
+      `,
+      "destructure arity mismatch",
+    );
+  });
+
+  test("destructure rhs must be multi-return call", () => {
+    expectError(
+      `
+      fn single(): i32 { return 1; }
+      fn f(): void { let (x, y) = single(); }
+      `,
+      "destructure RHS must be a multi-return call",
+    );
+  });
+
+  test("destructure arity mismatch", () => {
+    expectError(
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (x, y, z) = swap(1, 2); }
+      `,
+      "destructure arity mismatch",
+    );
+  });
+
+  test("multi-return call cannot be assigned to single binding", () => {
+    expectError(
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let x: i32 = swap(1, 2); }
+      `,
+      "multi-return value cannot be used as a single value",
+    );
+  });
+
+  test("multi-return call cannot be used in arithmetic", () => {
+    expectError(
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let z: i32 = swap(1, 2) + 1; }
+      `,
+      "multi-return value cannot be used as a single value",
+    );
+  });
+
+  test("multi-return call cannot be used as if condition", () => {
+    expectError(
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { if (swap(1, 2)) {} }
+      `,
+      "multi-return value cannot be used as a single value",
+    );
+  });
+
+  test("statement-position multi-return call is allowed", () => {
+    expectNoErrors(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { swap(1, 2); }
+    `);
+  });
+
+  test("top-level destructuring let is rejected", () => {
+    const src = `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      let (x, y) = swap(1, 2);
+    `;
+    const p = new Parser(src);
+    p.parse("test");
+    assert.equal(p.errors.length, 1);
+    assert(p.errors[0]?.message.includes("top-level destructuring let is not supported"));
+  });
+});

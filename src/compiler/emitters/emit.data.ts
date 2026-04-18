@@ -13,6 +13,7 @@ import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement
 import { IfStatement } from "../../parser/ast/statements/IfStatement";
 import { LetStatement } from "../../parser/ast/statements/LetStatement";
 import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
+import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../parser/ast/types/ast.type";
 import type { ModuleBuilder } from "../ModuleBuilder";
@@ -255,6 +256,9 @@ export function buildLocalStructFrame(
       return;
     }
     if (stmt instanceof LetStatement) {
+      if (stmt.pattern instanceof TuplePattern) {
+        return;
+      }
       if (stmt.expression instanceof StructLiteralExpression) {
         recordStructLocal(stmt.identifier.tokenLiteral(), stmt.expression.name);
       }
@@ -305,6 +309,21 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
     return;
   }
   if (s instanceof LetStatement) {
+    if (s.pattern instanceof TuplePattern) {
+      if (s.expression instanceof CallExpression) {
+        const returnTypes = builder.getCallReturnTypes(s.expression.func) ?? [];
+        for (let i = 0; i < s.pattern.names.length; i++) {
+          const name = s.pattern.names[i]!;
+          if (name.kind !== "name") continue;
+          builder.defLocal({
+            name: name.value,
+            type: returnTypes[i] ?? "i32",
+            scope: "local",
+          });
+        }
+      }
+      return;
+    }
     if (s.expression instanceof StructLiteralExpression) {
       builder.defLocal({
         name: s.identifier.tokenLiteral(),
@@ -339,6 +358,22 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   }
   if (s instanceof ForStatement) {
     const init = s.initBlock;
+    if (init.pattern instanceof TuplePattern) {
+      if (init.expression instanceof CallExpression) {
+        const returnTypes = builder.getCallReturnTypes(init.expression.func) ?? [];
+        for (let i = 0; i < init.pattern.names.length; i++) {
+          const name = init.pattern.names[i]!;
+          if (name.kind !== "name") continue;
+          builder.defLocal({
+            name: name.value,
+            type: returnTypes[i] ?? "i32",
+            scope: "local",
+          });
+        }
+      }
+      extractLocals(s.loopBody, builder);
+      return;
+    }
     if (init.expression instanceof StructLiteralExpression) {
       builder.defLocal({
         name: init.identifier.tokenLiteral(),

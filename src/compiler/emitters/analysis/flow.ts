@@ -82,8 +82,12 @@ function mergeResultTypes(a: IfResultType | null, b: IfResultType | null): IfRes
 // Returns null when no value-bearing return statements are found.
 function findStatementReturnType(stmt: ASTStatement, emitter: ModuleEmitter): IfResultType | null {
   if (stmt instanceof ReturnStatement) {
-    if (stmt.returnValue === null) return null;
-    const t = emitter.getExprType(stmt.returnValue);
+    if (stmt.returnValues.length === 0) return null;
+    if (stmt.returnValues.length > 1) {
+      throw new Error("if-as-expression cannot terminate with a multi-return");
+    }
+    const t = emitter.getExprType(stmt.returnValues[0]!);
+    if (t === null) return null;
     const w = valueTypeToWasm(t);
     if (w === "f64" || w === "f32" || w === "i64" || w === "i32") return w;
     return "i32";

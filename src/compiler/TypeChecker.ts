@@ -24,6 +24,7 @@ import { IfStatement } from "../parser/ast/statements/IfStatement";
 import { LetStatement } from "../parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
 import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
+import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
 import { baseScalar, cmpOps, isUnsignedMapleInteger, valueTypeToWasm } from "./emitters/emit.types";
@@ -38,13 +39,39 @@ const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);
 type ScopeEntry = { type: string; mutable: boolean };
 type Scope = Map<string, ScopeEntry>;
 
+function getCallReturnTypes(meta: ModuleMeta, fnName: string): string[] | null {
+  const fn = meta.functions[fnName];
+  if (fn) return fn.mapleResults;
+
+  const imp = meta.imports[fnName];
+  if (imp?.info?.kind === "func") {
+    const resultChars = imp.info.signature.split("_")[1] ?? "";
+    if (resultChars === "v") return [];
+    const out: string[] = [];
+    for (const ch of resultChars) {
+      if (ch === "i") out.push("i32");
+      if (ch === "I") out.push("i64");
+      if (ch === "f") out.push("f32");
+      if (ch === "F") out.push("f64");
+    }
+    return out;
+  }
+
+  return null;
+}
+
 // ─── Expression type resolver ─────────────────────────────────────────────────
 //
 // Returns the Maple-level type string (e.g. "i32", "f32", "bool", "Point",
 // "i32[]") or null when the type cannot be statically determined.  Returning
 // null means "skip this check" — the emitter will surface the error later.
 
-function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): string | null {
+function resolveExprType(
+  expr: ASTExpression,
+  scope: Scope,
+  meta: ModuleMeta,
+  errors?: MapleError[],
+): string | null {
   if (expr instanceof IntegerLiteralExpression) {
     return expr.numericType === "i64" ? "i64" : "i32";
   }
@@ -64,8 +91,8 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
 
   if (expr instanceof InfixExpression) {
     if (cmpOps.has(expr.operator)) return "bool";
-    const lt = resolveExprType(expr.left, scope, meta);
-    const rt = resolveExprType(expr.right, scope, meta);
+    const lt = resolveExprType(expr.left, scope, meta, errors);
+    const rt = resolveExprType(expr.right, scope, meta, errors);
     if (lt === null || rt === null) return null;
     const wl = valueTypeToWasm(lt);
     const wr = valueTypeToWasm(rt);
@@ -84,42 +111,41 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
   if (expr instanceof PrefixExpression) {
     if (expr.operator === "!") return "bool";
     if (expr.operator === "~") {
-      return expr.right ? resolveExprType(expr.right, scope, meta) : "i32";
+      return expr.right ? resolveExprType(expr.right, scope, meta, errors) : "i32";
     }
     if (expr.operator === "-") {
-      return expr.right ? resolveExprType(expr.right, scope, meta) : "i32";
+      return expr.right ? resolveExprType(expr.right, scope, meta, errors) : "i32";
     }
     return "i32";
   }
 
   if (expr instanceof PostfixExpression) {
-    return expr.left ? resolveExprType(expr.left, scope, meta) : "i32";
+    return expr.left ? resolveExprType(expr.left, scope, meta, errors) : "i32";
   }
 
   if (expr instanceof CallExpression) {
-    const fn = meta.functions[expr.func];
-    if (fn) return fn.mapleResult === "void" ? "void" : fn.mapleResult;
-    const imp = meta.imports[expr.func];
-    if (imp?.info?.kind === "func") {
-      const resultChar = imp.info.signature.split("_")[1]?.[0];
-      if (resultChar === "f") return "f32";
-      if (resultChar === "F") return "f64";
-      if (resultChar === "v") return "void";
-      if (resultChar === "I") return "i64";
-      return "i32";
+    const returnTypes = getCallReturnTypes(meta, expr.func);
+    if (!returnTypes) return null;
+    if (returnTypes.length === 0) return "void";
+    if (returnTypes.length === 1) return returnTypes[0] ?? null;
+    if (errors) {
+      const t = expr.token;
+      errors.push(
+        new MapleError("multi-return value cannot be used as a single value", t.line, t.col),
+      );
     }
     return null;
   }
 
   if (expr instanceof IndexExpression) {
-    const containerType = resolveExprType(expr.left, scope, meta);
+    const containerType = resolveExprType(expr.left, scope, meta, errors);
     if (!containerType) return null;
     if (!(containerType.endsWith("[]") || containerType.startsWith("*"))) return null;
     return baseScalar(containerType);
   }
 
   if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
-    const parentType = resolveExprType(expr.parent, scope, meta);
+    const parentType = resolveExprType(expr.parent, scope, meta, errors);
     if (!parentType) return null;
     const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
     const memberData = meta.structs[structName]?.members[expr.member];
@@ -127,7 +153,7 @@ function resolveExprType(expr: ASTExpression, scope: Scope, meta: ModuleMeta): s
   }
 
   if (expr instanceof AssignmentExpression) {
-    return resolveExprType(expr.left, scope, meta);
+    return resolveExprType(expr.left, scope, meta, errors);
   }
   if (expr instanceof StructLiteralExpression) {
     return expr.name;
@@ -177,8 +203,8 @@ function walkExpression(
   // Check 3 — mixed arithmetic / bitwise on float
   if (expr instanceof InfixExpression) {
     if (ARITHMETIC_OPS.has(expr.operator)) {
-      const lt = resolveExprType(expr.left, scope, meta);
-      const rt = resolveExprType(expr.right, scope, meta);
+      const lt = resolveExprType(expr.left, scope, meta, errors);
+      const rt = resolveExprType(expr.right, scope, meta, errors);
       if (lt !== null && rt !== null) {
         if (valueTypeToWasm(lt) !== valueTypeToWasm(rt)) {
           const t = expr.token;
@@ -193,8 +219,8 @@ function walkExpression(
       }
     }
     if (BITWISE_OPS.has(expr.operator)) {
-      const lt = resolveExprType(expr.left, scope, meta);
-      const rt = resolveExprType(expr.right, scope, meta);
+      const lt = resolveExprType(expr.left, scope, meta, errors);
+      const rt = resolveExprType(expr.right, scope, meta, errors);
       const bad = (x: string | null) =>
         x !== null && (valueTypeToWasm(x) === "f32" || valueTypeToWasm(x) === "f64");
       if (bad(lt) || bad(rt)) {
@@ -228,7 +254,7 @@ function walkExpression(
         );
       } else {
         for (let i = 0; i < expr.args.length; i++) {
-          const argType = resolveExprType(expr.args[i]!, scope, meta);
+          const argType = resolveExprType(expr.args[i]!, scope, meta, errors);
           const paramType = fn.params[i]!.type;
           if (argType !== null && !typesCompatible(paramType, argType, meta)) {
             const t = expr.args[i]!.token;
@@ -266,7 +292,7 @@ function walkExpression(
 
   // Check 5 — struct member existence
   if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
-    const parentType = resolveExprType(expr.parent, scope, meta);
+    const parentType = resolveExprType(expr.parent, scope, meta, errors);
     if (parentType) {
       const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
       const structDef = meta.structs[structName];
@@ -325,7 +351,7 @@ function walkExpression(
     for (const [fieldName, fieldExpr] of Object.entries(expr.members)) {
       const memberMeta = sd.members[fieldName];
       if (!memberMeta) continue;
-      const fieldType = resolveExprType(fieldExpr, scope, meta);
+      const fieldType = resolveExprType(fieldExpr, scope, meta, errors);
       if (fieldType !== null && !typesCompatible(memberMeta.type, fieldType, meta)) {
         const t = fieldExpr.token;
         errors.push(
@@ -372,7 +398,7 @@ function checkLetInitializer(
   errors: MapleError[],
 ): void {
   if (stmt.expression === null) return;
-  const actualType = resolveExprType(stmt.expression, scope, meta);
+  const actualType = resolveExprType(stmt.expression, scope, meta, errors);
   if (actualType !== null && !typesCompatible(stmt.typeAnnotation, actualType, meta)) {
     const t = stmt.token;
     errors.push(
@@ -403,12 +429,12 @@ function walkBlock(
   block: BlockStatement,
   scope: Scope,
   meta: ModuleMeta,
-  fnReturnType: string | null,
+  fnReturnTypes: string[],
   errors: MapleError[],
   ctx: FlowContext = { loopDepth: 0, switchDepth: 0 },
 ): void {
   for (const stmt of block.statements) {
-    walkStatement(stmt, scope, meta, fnReturnType, errors, ctx);
+    walkStatement(stmt, scope, meta, fnReturnTypes, errors, ctx);
   }
 }
 
@@ -416,11 +442,44 @@ function walkStatement(
   stmt: ASTStatement,
   scope: Scope,
   meta: ModuleMeta,
-  fnReturnType: string | null,
+  fnReturnTypes: string[],
   errors: MapleError[],
   ctx: FlowContext = { loopDepth: 0, switchDepth: 0 },
 ): void {
   if (stmt instanceof LetStatement) {
+    if (stmt.pattern instanceof TuplePattern) {
+      const rhs = stmt.expression;
+      if (!(rhs instanceof CallExpression)) {
+        const t = stmt.token;
+        errors.push(new MapleError("destructure RHS must be a function call", t.line, t.col));
+        return;
+      }
+      walkExpression(rhs, scope, meta, errors);
+      const returnTypes = getCallReturnTypes(meta, rhs.func);
+      if (!returnTypes || returnTypes.length < 2) {
+        const t = stmt.token;
+        errors.push(new MapleError("destructure RHS must be a multi-return call", t.line, t.col));
+        return;
+      }
+      if (returnTypes.length !== stmt.pattern.names.length) {
+        const t = stmt.token;
+        errors.push(
+          new MapleError(
+            `destructure arity mismatch: expected ${returnTypes.length}, got ${stmt.pattern.names.length}`,
+            t.line,
+            t.col,
+          ),
+        );
+        return;
+      }
+      for (let i = 0; i < stmt.pattern.names.length; i++) {
+        const name = stmt.pattern.names[i]!;
+        if (name.kind !== "name") continue;
+        scope.set(name.value, { type: returnTypes[i] ?? "i32", mutable: stmt.mutable });
+      }
+      return;
+    }
+
     // Add to scope before checking the initializer so later statements in the
     // same block can reference this name as soon as it is declared.
     scope.set(stmt.identifier.tokenLiteral(), {
@@ -433,29 +492,91 @@ function walkStatement(
   }
 
   if (stmt instanceof ReturnStatement) {
-    // Check 2 — return type
-    const isVoid = fnReturnType === null || fnReturnType === "void";
-    if (isVoid && stmt.returnValue !== null) {
+    const isVoid = fnReturnTypes.length === 0;
+    const returnValues = stmt.returnValues;
+    if (isVoid && returnValues.length > 0) {
       const t = stmt.token;
       errors.push(new MapleError("Cannot return a value from a void function", t.line, t.col));
-    } else if (!isVoid && stmt.returnValue === null) {
+      return;
+    }
+
+    if (!isVoid && returnValues.length === 0) {
       const t = stmt.token;
-      errors.push(
-        new MapleError(`Function must return a value of type '${fnReturnType}'`, t.line, t.col),
-      );
-    } else if (!isVoid && stmt.returnValue !== null) {
-      const actualType = resolveExprType(stmt.returnValue, scope, meta);
-      if (actualType !== null && !typesCompatible(fnReturnType!, actualType, meta)) {
-        const t = stmt.token;
+      if (fnReturnTypes.length === 1) {
         errors.push(
           new MapleError(
-            `Return type mismatch: expected '${fnReturnType}', got '${actualType}'`,
+            `Function must return a value of type '${fnReturnTypes[0]}'`,
             t.line,
             t.col,
           ),
         );
+      } else {
+        errors.push(
+          new MapleError("multi-return function cannot use a void return", t.line, t.col),
+        );
       }
-      walkExpression(stmt.returnValue, scope, meta, errors);
+      return;
+    }
+
+    if (
+      fnReturnTypes.length >= 2 &&
+      returnValues.length === 1 &&
+      returnValues[0] instanceof CallExpression
+    ) {
+      const passTypes = getCallReturnTypes(meta, returnValues[0].func);
+      if (passTypes && passTypes.length >= 2) {
+        if (passTypes.length !== fnReturnTypes.length) {
+          const t = stmt.token;
+          errors.push(new MapleError("pass-through return arity mismatch", t.line, t.col));
+          return;
+        }
+        for (let i = 0; i < fnReturnTypes.length; i++) {
+          if (!typesCompatible(fnReturnTypes[i]!, passTypes[i]!, meta)) {
+            const t = stmt.token;
+            errors.push(
+              new MapleError(`pass-through return type mismatch at position ${i}`, t.line, t.col),
+            );
+            return;
+          }
+        }
+        walkExpression(returnValues[0], scope, meta, errors);
+        return;
+      }
+    }
+
+    if (returnValues.length !== fnReturnTypes.length) {
+      const t = stmt.token;
+      errors.push(
+        new MapleError(
+          `Return arity mismatch: expected ${fnReturnTypes.length}, got ${returnValues.length}`,
+          t.line,
+          t.col,
+        ),
+      );
+      return;
+    }
+
+    for (let i = 0; i < returnValues.length; i++) {
+      const actualType = resolveExprType(returnValues[i]!, scope, meta, errors);
+      if (actualType === null) {
+        walkExpression(returnValues[i]!, scope, meta, errors);
+        return;
+      }
+      if (!typesCompatible(fnReturnTypes[i]!, actualType, meta)) {
+        const t = stmt.token;
+        if (fnReturnTypes.length === 1) {
+          errors.push(
+            new MapleError(
+              `Return type mismatch: expected '${fnReturnTypes[0]}', got '${actualType}'`,
+              t.line,
+              t.col,
+            ),
+          );
+        } else {
+          errors.push(new MapleError(`Return type mismatch at position ${i}`, t.line, t.col));
+        }
+      }
+      walkExpression(returnValues[i]!, scope, meta, errors);
     }
     return;
   }
@@ -483,7 +604,7 @@ function walkStatement(
 
   if (stmt instanceof IfStatement) {
     walkExpression(stmt.conditionExpr, scope, meta, errors);
-    const condType = resolveExprType(stmt.conditionExpr, scope, meta);
+    const condType = resolveExprType(stmt.conditionExpr, scope, meta, errors);
     if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
       const t = stmt.token;
       errors.push(
@@ -494,9 +615,9 @@ function walkStatement(
         ),
       );
     }
-    walkBlock(stmt.thenBlock, scope, meta, fnReturnType, errors, ctx);
+    walkBlock(stmt.thenBlock, scope, meta, fnReturnTypes, errors, ctx);
     if (stmt.elseBlock) {
-      walkBlock(stmt.elseBlock, scope, meta, fnReturnType, errors, ctx);
+      walkBlock(stmt.elseBlock, scope, meta, fnReturnTypes, errors, ctx);
     }
     return;
   }
@@ -504,7 +625,7 @@ function walkStatement(
   if (stmt instanceof WhileStatement) {
     const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     walkExpression(stmt.condExpr, scope, meta, errors);
-    const condType = resolveExprType(stmt.condExpr, scope, meta);
+    const condType = resolveExprType(stmt.condExpr, scope, meta, errors);
     if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
       const t = stmt.token;
       errors.push(
@@ -515,24 +636,26 @@ function walkStatement(
         ),
       );
     }
-    walkBlock(stmt.loopBody, scope, meta, fnReturnType, errors, loopCtx);
+    walkBlock(stmt.loopBody, scope, meta, fnReturnTypes, errors, loopCtx);
     return;
   }
 
   if (stmt instanceof ForStatement) {
     // Create an isolated child scope so the init variable doesn't leak after the loop
     const loopScope = new Map(scope);
-    loopScope.set(stmt.initBlock.identifier.tokenLiteral(), {
-      type: stmt.initBlock.typeAnnotation,
-      mutable: stmt.initBlock.mutable,
-    });
+    if (!(stmt.initBlock.pattern instanceof TuplePattern)) {
+      loopScope.set(stmt.initBlock.identifier.tokenLiteral(), {
+        type: stmt.initBlock.typeAnnotation,
+        mutable: stmt.initBlock.mutable,
+      });
+    }
     const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
     // Check 1 for for-loop initializer
     checkLetInitializer(stmt.initBlock, loopScope, meta, errors);
     const forCondEx = stmt.conditionExpr.expression;
     if (forCondEx) {
       walkExpression(forCondEx, loopScope, meta, errors);
-      const forCondType = resolveExprType(forCondEx, loopScope, meta);
+      const forCondType = resolveExprType(forCondEx, loopScope, meta, errors);
       if (forCondType !== null && !isNumericOrBooleanConditionType(forCondType)) {
         const t = stmt.conditionExpr.token;
         errors.push(
@@ -545,14 +668,14 @@ function walkStatement(
       }
     }
     walkExpression(stmt.updateExpr.expression, loopScope, meta, errors);
-    walkBlock(stmt.loopBody, loopScope, meta, fnReturnType, errors, loopCtx);
+    walkBlock(stmt.loopBody, loopScope, meta, fnReturnTypes, errors, loopCtx);
     return;
   }
 
   if (stmt instanceof SwitchStatement) {
     const switchCtx: FlowContext = { loopDepth: ctx.loopDepth, switchDepth: ctx.switchDepth + 1 };
     walkExpression(stmt.switchExpr, scope, meta, errors);
-    const st = resolveExprType(stmt.switchExpr, scope, meta);
+    const st = resolveExprType(stmt.switchExpr, scope, meta, errors);
     if (st !== null) {
       const w = valueTypeToWasm(st);
       if (w === "i64" || w === "f64") {
@@ -567,16 +690,16 @@ function walkStatement(
       }
     }
     for (const c of stmt.cases) {
-      walkBlock(c.body, scope, meta, fnReturnType, errors, switchCtx);
+      walkBlock(c.body, scope, meta, fnReturnTypes, errors, switchCtx);
     }
     if (stmt.default) {
-      walkBlock(stmt.default, scope, meta, fnReturnType, errors, switchCtx);
+      walkBlock(stmt.default, scope, meta, fnReturnTypes, errors, switchCtx);
     }
     return;
   }
 
   if (stmt instanceof BlockStatement) {
-    walkBlock(stmt, scope, meta, fnReturnType, errors, ctx);
+    walkBlock(stmt, scope, meta, fnReturnTypes, errors, ctx);
   }
 }
 
@@ -589,6 +712,16 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const globals: Scope = new Map();
   for (const stmt of program.statements) {
     if (stmt instanceof LetStatement) {
+      if (stmt.pattern instanceof TuplePattern) {
+        errors.push(
+          new MapleError(
+            "top-level destructuring let is not supported",
+            stmt.token.line,
+            stmt.token.col,
+          ),
+        );
+        continue;
+      }
       globals.set(stmt.identifier.tokenLiteral(), {
         type: stmt.typeAnnotation,
         mutable: stmt.mutable,
@@ -599,6 +732,7 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   // Check top-level globals (Check 1)
   for (const stmt of program.statements) {
     if (stmt instanceof LetStatement && stmt.expression !== null) {
+      if (stmt.pattern instanceof TuplePattern) continue;
       checkLetInitializer(stmt, globals, meta, errors);
     }
   }
@@ -625,8 +759,8 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
       });
     }
 
-    const fnReturnType = stmt.fnExpr.returnType ?? null;
-    walkBlock(stmt.fnExpr.body, scope, meta, fnReturnType, errors);
+    const fnReturnTypes = stmt.fnExpr.returnTypes;
+    walkBlock(stmt.fnExpr.body, scope, meta, fnReturnTypes, errors);
   }
 
   return errors;

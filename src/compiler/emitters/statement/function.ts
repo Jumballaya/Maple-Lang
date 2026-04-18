@@ -6,10 +6,7 @@ import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
 export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): void {
-  const rType =
-    fn.fnExpr.returnType && fn.fnExpr.returnType !== "void"
-      ? valueTypeToWasm(fn.fnExpr.returnType)
-      : "void";
+  const rTypes = fn.fnExpr.returnTypes.map((t) => valueTypeToWasm(t));
   const params: Array<{ name: string; type: string }> = [];
   for (const p of fn.fnExpr.params) {
     params.push({ name: p.identifier.tokenLiteral(), type: p.type });
@@ -18,8 +15,8 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
     {
       name: fn.name ?? undefined,
       params,
-      result: rType,
-      mapleResult: fn.fnExpr.returnType ?? "void",
+      results: rTypes,
+      mapleResults: fn.fnExpr.returnTypes,
       exported: !!fn.exported,
       signature: generateFunctionSignature(fn),
     },
@@ -48,8 +45,8 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       }
 
       // write return result
-      if (fn.fnExpr.returnType && fn.fnExpr.returnType !== "void") {
-        w.append(` (result ${valueTypeToWasm(fn.fnExpr.returnType)})`);
+      if (rTypes.length > 0) {
+        w.append(` (result ${rTypes.join(" ")})`);
       }
       w.newLine();
       w.open();
@@ -57,12 +54,21 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
       const frame = buildLocalStructFrame(fn.fnExpr.body, emitter);
       emitter.configureLocalStructFrame(frame.totalSize, frame.offsets);
 
-      if (frame.totalSize > 0 && rType !== "void") {
+      if (frame.totalSize > 0 && rTypes.length === 1) {
         emitter.defLocal({
           name: "__ret_tmp",
-          type: rType,
+          type: rTypes[0]!,
           scope: "local",
         });
+      }
+      if (frame.totalSize > 0 && rTypes.length >= 2) {
+        for (let i = 0; i < rTypes.length; i++) {
+          emitter.defLocal({
+            name: `__mret_${i}`,
+            type: rTypes[i]!,
+            scope: "local",
+          });
+        }
       }
 
       // write local definitions
@@ -202,11 +208,13 @@ export function generateFunctionSignature(fn: FunctionStatement): string {
   }
   signature += "_";
 
-  const rType =
-    fn.fnExpr.returnType && fn.fnExpr.returnType !== "void"
-      ? valueTypeToWasm(fn.fnExpr.returnType)
-      : "void";
-  signature += wasmLaneToSignatureChar(rType);
+  if (fn.fnExpr.returnTypes.length === 0) {
+    signature += "v";
+  } else {
+    for (const returnType of fn.fnExpr.returnTypes) {
+      signature += wasmLaneToSignatureChar(valueTypeToWasm(returnType));
+    }
+  }
 
   return signature;
 }

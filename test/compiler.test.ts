@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, test } from "node:test";
 import { compiler } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
@@ -23,6 +26,15 @@ function compile(src: string) {
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
   return { ast, meta, mod, wat };
+}
+
+function assertContainsInOrder(wat: string, fragments: string[]): void {
+  let cursor = 0;
+  for (const fragment of fragments) {
+    const index = wat.indexOf(fragment, cursor);
+    assert(index >= 0, `Expected to find "${fragment}" after index ${cursor}`);
+    cursor = index + fragment.length;
+  }
 }
 
 describe("Emission: Functions", () => {
@@ -930,6 +942,36 @@ describe("Compiler Pipeline", () => {
         return true;
       },
     );
+  });
+
+  test("compiler reports top-level destructuring let parse error", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "maple-9b-"));
+    const entryPath = path.join(dir, "main.maple");
+    await writeFile(
+      entryPath,
+      `
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      let (x, y) = swap(1, 2);
+      `,
+    );
+
+    const loggedErrors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      loggedErrors.push(args.map((v) => String(v)).join(" "));
+    };
+
+    try {
+      const result = await compiler(entryPath, "main.maple", dir, path.join(dir, "out.wasm"));
+      assert.equal(result, undefined);
+      assert(
+        loggedErrors.some((msg) => msg.includes("top-level destructuring let is not supported")),
+        `Expected parse error log, got: ${loggedErrors.join(" | ")}`,
+      );
+    } finally {
+      console.error = originalError;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("emitted wat is wrapped in module", () => {
@@ -2276,5 +2318,131 @@ describe("Compiler: inferred function call types", () => {
     `;
     const { wat } = compile(src);
     assert(wat.includes("(local $y f32)"), "Expected f32 local for inferred call result");
+  });
+});
+
+describe("Emission: 9B multi-return and destructure", () => {
+  test("multi-return function emits multi result clause", () => {
+    const { wat } = compile("fn swap(a: i32, b: i32): (i32, i32) { return b, a; }");
+    assert(wat.includes("(result i32 i32)"));
+  });
+
+  test("multi-return signature encodes all result lanes", () => {
+    const { meta } = compile("fn pair(): (i32, i64) { return 1, 2 as i64; }");
+    assert.equal(meta.functions.pair?.signature, "v_iI");
+  });
+
+  test("three-return signature encodes all result lanes", () => {
+    const { meta, wat } = compile("fn tri(): (i32, i32, i32) { return 1, 2, 3; }");
+    assert.equal(meta.functions.tri?.signature, "v_iii");
+    assert(wat.includes("(result i32 i32 i32)"));
+  });
+
+  test("five-return signature encodes all result lanes", () => {
+    const { meta, wat } = compile("fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }");
+    assert.equal(meta.functions.many?.signature, "v_iiiii");
+    assert(wat.includes("(result i32 i32 i32 i32 i32)"));
+  });
+
+  test("six-return signature encodes all result lanes", () => {
+    const { meta, wat } = compile(
+      "fn many6(): (i32, i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5, 6; }",
+    );
+    assert.equal(meta.functions.many6?.signature, "v_iiiiii");
+    assert(wat.includes("(result i32 i32 i32 i32 i32 i32)"));
+  });
+
+  test("multi-value return emits both values", () => {
+    const { wat } = compile("fn pair(): (i32, i32) { return 1, 2; }");
+    assert(wat.includes("(return"));
+    assert(wat.includes("i32.const 1"));
+    assert(wat.includes("i32.const 2"));
+  });
+
+  test("pass-through return emits direct call return", () => {
+    const { wat } = compile(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn p(): (i32, i32) { return swap(1, 2); }
+    `);
+    const pBody = wat.split("(func $p")[1] ?? "";
+    assert(pBody.includes("(return (call $swap"), pBody);
+  });
+
+  test("destructuring let emits reverse local.set order", () => {
+    const { wat } = compile(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (x, y) = swap(1, 2); }
+    `);
+    assertContainsInOrder(wat, ["(call $swap", "(local.set $y)", "(local.set $x)"]);
+  });
+
+  test("destructuring let with discard emits drop", () => {
+    const { wat } = compile(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (_, y) = swap(1, 2); }
+    `);
+    assertContainsInOrder(wat, ["(call $swap", "(local.set $y)", "(drop)"]);
+  });
+
+  test("destructure locals are declared with per-result types", () => {
+    const { wat } = compile(`
+      fn pair(): (i32, i64) { return 1, 2 as i64; }
+      fn f(): void { let (x, y) = pair(); }
+    `);
+    assert(wat.includes("(local $x i32)"));
+    assert(wat.includes("(local $y i64)"));
+  });
+
+  test("statement-level multi-return call emits drops", () => {
+    const { wat } = compile(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { swap(1, 2); }
+    `);
+    assertContainsInOrder(wat, ["(call $swap", "(drop)", "(drop)"]);
+  });
+
+  test("statement-level five-return call emits five drops", () => {
+    const { wat } = compile(`
+      fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+      fn f(): void { many(); }
+    `);
+    const body = wat.split("(func $f")[1] ?? "";
+    const dropCount = (body.match(/\(drop\)/g) ?? []).length;
+    assert.equal(dropCount, 5, body);
+  });
+
+  test("destructuring five-return emits reverse order sets with discard drop", () => {
+    const { wat } = compile(`
+      fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+      fn f(): void { let (a, _, c, d, e) = many(); }
+    `);
+    assertContainsInOrder(wat, [
+      "(call $many",
+      "(local.set $e)",
+      "(local.set $d)",
+      "(local.set $c)",
+      "(drop)",
+      "(local.set $a)",
+    ]);
+  });
+
+  test("single-return still emits __ret_tmp for frame functions", () => {
+    const { wat } = compile(`
+      struct P { x: i32, y: i32 }
+      fn f(): i32 { let p: P = { x = 1, y = 2 }; return p.x; }
+    `);
+    assert(wat.includes("(local $__ret_tmp i32)"));
+  });
+
+  test("multi-return frame function emits __mret locals", () => {
+    const { wat } = compile(`
+      struct P { x: i32, y: i32 }
+      fn f(): (i32, i32) {
+        let p: P = { x = 1, y = 2 };
+        return p.x, p.y;
+      }
+    `);
+    assert(wat.includes("(local $__mret_0 i32)"), wat);
+    assert(wat.includes("(local $__mret_1 i32)"), wat);
   });
 });

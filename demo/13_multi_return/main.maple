@@ -1,0 +1,22 @@
+fn swap(a: i32, b: i32): (i32, i32) {
+  return b, a;
+}
+
+fn divmod(n: i32, d: i32): (i32, i32) {
+  return n / d, n % d;
+}
+
+fn pass_through_pair(x: i32, y: i32): (i32, i32) {
+  return swap(x, y);
+}
+
+export fn _start(): i32 {
+  let (left, right) = swap(10, 20);
+  let (q, r) = divmod(17, 5);
+  let (_, y) = pass_through_pair(left, right);
+
+  // statement-position multi-return call (results dropped)
+  swap(1, 2);
+
+  return q + r + y;
+}

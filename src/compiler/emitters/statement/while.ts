@@ -17,6 +17,13 @@ export function emitWhileStatement(stmt: WhileStatement, emitter: ModuleEmitter)
 
   const condTxt = emitExpression(stmt.condExpr, emitter);
   const t = emitter.getExprType(stmt.condExpr);
+  if (t === null) {
+    throw new MapleError(
+      "while loop condition must be a numeric or boolean expression, got '<multi>'",
+      stmt.token.line,
+      stmt.token.col,
+    );
+  }
   let asI32: string;
   if (t === "bool") {
     asI32 = condTxt;

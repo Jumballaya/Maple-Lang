@@ -26,6 +26,7 @@ import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
 import { StructStatement } from "../src/parser/ast/statements/StructStatement";
 import { SwitchStatement } from "../src/parser/ast/statements/SwitchStatement";
+import { TuplePattern } from "../src/parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
@@ -2380,6 +2381,266 @@ describe("Parser: Identifier", () => {
     const fn = ast.statements[0] as FunctionStatement;
     const param = fn.fnExpr.params[0].identifier as Identifier;
     assert.equal(param.toString(), param.tokenLiteral());
+  });
+});
+
+describe("Parser: 9B multi-return and destructure", () => {
+  test("parses tuple function return type", () => {
+    const p = new Parser("fn swap(a: i32, b: i32): (i32, i32) { return b, a; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert.deepEqual(fn.fnExpr.returnTypes, ["i32", "i32"]);
+  });
+
+  test("parses tuple return type with trailing comma", () => {
+    const p = new Parser("fn f(): (i32, i64,) { return 1, 2 as i64; }");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses three-element tuple return type", () => {
+    const p = new Parser("fn f(): (i32, i32, i32) { return 1, 2, 3; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert.deepEqual(fn.fnExpr.returnTypes, ["i32", "i32", "i32"]);
+  });
+
+  test("parses five-element tuple return type", () => {
+    const p = new Parser("fn f(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert.equal(fn.fnExpr.returnTypes.length, 5);
+  });
+
+  test("parses six-element tuple return type", () => {
+    const p = new Parser("fn f(): (i32, i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5, 6; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert.equal(fn.fnExpr.returnTypes.length, 6);
+  });
+
+  test("rejects single-element tuple return type", () => {
+    const p = new Parser("fn f(): (i32) { return 1; }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("multi-return requires at least 2 types")));
+  });
+
+  test("rejects empty tuple return type", () => {
+    const p = new Parser("fn f(): () { return; }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("multi-return requires at least 2 types")));
+  });
+
+  test("rejects void inside tuple return type", () => {
+    const p = new Parser("fn f(): (i32, void) { return 1, 2; }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("return type may not contain void")));
+  });
+
+  test("parses return with multiple expressions", () => {
+    const p = new Parser("fn f(): (i32, i32) { return 1 + 2, 3; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    assert.equal(ret.returnValues.length, 2);
+    assert(ret.returnValue instanceof InfixExpression);
+  });
+
+  test("parses return with trailing comma", () => {
+    const p = new Parser("fn f(): (i32, i32) { return 1, 2,; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    assert.equal(ret.returnValues.length, 2);
+  });
+
+  test("parses return with five expressions", () => {
+    const p = new Parser("fn f(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    const ret = fn.fnExpr.body.statements[0];
+    assert(ret instanceof ReturnStatement);
+    assert.equal(ret.returnValues.length, 5);
+  });
+
+  test("parses destructuring let with names", () => {
+    const p = new Parser(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void {
+        let (x, y) = swap(1, 2);
+        let z: i32 = x + y;
+      }
+    `);
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[1];
+    assert(fn instanceof FunctionStatement);
+    const letStmt = fn.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.pattern instanceof TuplePattern);
+    assert.equal(letStmt.pattern.names.length, 2);
+    assert.equal(letStmt.pattern.names[0]?.kind, "name");
+    assert.equal(letStmt.pattern.names[1]?.kind, "name");
+  });
+
+  test("parses destructuring let with discard", () => {
+    const p = new Parser(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (_, y) = swap(1, 2); }
+    `);
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[1];
+    assert(fn instanceof FunctionStatement);
+    const letStmt = fn.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.pattern instanceof TuplePattern);
+    assert.equal(letStmt.pattern.names[0]?.kind, "discard");
+    assert.equal(letStmt.pattern.names[1]?.kind, "name");
+  });
+
+  test("parses destructuring let trailing comma", () => {
+    const p = new Parser(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let (x, y,) = swap(1, 2); }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses three-name destructuring let", () => {
+    const p = new Parser(`
+      fn tri(): (i32, i32, i32) { return 1, 2, 3; }
+      fn f(): void { let (a, b, c) = tri(); }
+    `);
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[1];
+    assert(fn instanceof FunctionStatement);
+    const letStmt = fn.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.pattern instanceof TuplePattern);
+    assert.equal(letStmt.pattern.names.length, 3);
+  });
+
+  test("parses five-name destructuring let with discard", () => {
+    const p = new Parser(`
+      fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+      fn f(): void { let (a, _, c, d, e) = many(); }
+    `);
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[1];
+    assert(fn instanceof FunctionStatement);
+    const letStmt = fn.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.pattern instanceof TuplePattern);
+    assert.equal(letStmt.pattern.names.length, 5);
+    assert.equal(letStmt.pattern.names[1]?.kind, "discard");
+  });
+
+  test("rejects destructuring let with one name", () => {
+    const p = new Parser("fn f(): void { let (x) = g(); }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("destructuring let requires at least 2 names")));
+  });
+
+  test("rejects empty destructuring let", () => {
+    const p = new Parser("fn f(): void { let () = g(); }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("destructuring let requires at least 2 names")));
+  });
+
+  test("rejects per-binding type annotation", () => {
+    const p = new Parser(`
+      fn s(): (i32, i32) { return 1, 2; }
+      fn f(): void { let (x: i32, y) = s(); }
+    `);
+    p.parse("test");
+    assert(
+      p.errors.some((e) =>
+        e.message.includes("destructuring let does not support per-binding type annotations"),
+      ),
+    );
+  });
+
+  test("rejects tuple type annotation on destructure", () => {
+    const p = new Parser(`
+      fn s(): (i32, i32) { return 1, 2; }
+      fn f(): void { let (x, y): (i32, i32) = s(); }
+    `);
+    p.parse("test");
+    assert(
+      p.errors.some((e) =>
+        e.message.includes("destructuring let does not support a tuple type annotation"),
+      ),
+    );
+  });
+
+  test("rejects non-call rhs for destructure", () => {
+    const p = new Parser("fn f(): void { let (x, y) = 5; }");
+    p.parse("test");
+    assert(
+      p.errors.some((e) => e.message.includes("destructuring let RHS must be a function call")),
+    );
+  });
+
+  test("rejects duplicate names inside destructure", () => {
+    const p = new Parser(`
+      fn s(): (i32, i32) { return 1, 2; }
+      fn f(): void { let (x, x) = s(); }
+    `);
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("duplicate binding in destructure")));
+  });
+
+  test("rejects const destructure", () => {
+    const p = new Parser(`
+      fn s(): (i32, i32) { return 1, 2; }
+      fn f(): void { const (x, y) = s(); }
+    `);
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("const destructure is not supported")));
+  });
+
+  test("rejects top-level destructuring let", () => {
+    const p = new Parser(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      let (x, y) = swap(1, 2);
+    `);
+    p.parse("test");
+    assert(
+      p.errors.some((e) => e.message.includes("top-level destructuring let is not supported")),
+    );
+  });
+
+  test("rejects inferred single let from multi-return call", () => {
+    const p = new Parser(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      fn f(): void { let x = swap(1, 2); }
+    `);
+    p.parse("test");
+    assert(
+      p.errors.some((e) =>
+        e.message.includes("Cannot infer type - for multi-return calls use destructuring"),
+      ),
+    );
   });
 });
 

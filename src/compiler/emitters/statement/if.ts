@@ -22,6 +22,13 @@ export function emitIfStatement(stmt: IfStatement, emitter: ModuleEmitter) {
   // condition
   const cond = emitExpression(stmt.conditionExpr, emitter);
   const t = emitter.getExprType(stmt.conditionExpr);
+  if (t === null) {
+    throw new MapleError(
+      "if condition must be a numeric or boolean expression, got '<multi>'",
+      stmt.token.line,
+      stmt.token.col,
+    );
+  }
   let asI32: string;
   if (t === "bool") {
     asI32 = cond;

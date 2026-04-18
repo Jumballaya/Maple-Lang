@@ -7,6 +7,9 @@ import { emitExpression } from "./expression";
 
 function wasmTypeOfExpr(e: ASTExpression, emitter: ModuleEmitter): WasmValueType {
   const t = emitter.getExprType(e);
+  if (t === null) {
+    throw new Error("unable to resolve expression type");
+  }
   if (t === "bool") return "i32";
   return valueTypeToWasm(t);
 }

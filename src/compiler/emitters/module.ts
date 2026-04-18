@@ -6,6 +6,7 @@ import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement
 import { ImportStatement } from "../../parser/ast/statements/ImportStatement";
 import { LetStatement } from "../../parser/ast/statements/LetStatement";
 import { StructStatement } from "../../parser/ast/statements/StructStatement";
+import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
 import type { MapleModule } from "../MapleModule";
 import { ModuleBuilder } from "../ModuleBuilder";
 import { ModuleEmitter } from "../ModuleEmitter";
@@ -23,6 +24,9 @@ import {
 } from "./statement/function";
 
 function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
+  if (stmt.pattern instanceof TuplePattern) {
+    throw new Error("destructuring let is not allowed at module scope");
+  }
   const name = stmt.identifier.tokenLiteral();
   const type = stmt.typeAnnotation;
   const expr = stmt.expression;
@@ -97,12 +101,12 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
         continue;
       }
       const { exported, name } = stmt;
-      const { params, returnType } = stmt.fnExpr;
+      const { params, returnTypes } = stmt.fnExpr;
       const signature = generateFunctionSignature(stmt);
       builder.defFunc(name, {
         exported,
-        result: returnType && returnType !== "void" ? valueTypeToWasm(returnType) : "void",
-        mapleResult: returnType ?? "void",
+        results: returnTypes.map((returnType) => valueTypeToWasm(returnType)),
+        mapleResults: returnTypes,
         params: params.map(({ identifier, type }) => ({
           name: identifier.tokenLiteral(),
           type,
@@ -128,6 +132,9 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   // get globals
   for (const stmt of program.statements) {
     if (stmt instanceof LetStatement) {
+      if (stmt.pattern instanceof TuplePattern) {
+        continue;
+      }
       const name = stmt.identifier;
       const type = stmt.typeAnnotation;
 

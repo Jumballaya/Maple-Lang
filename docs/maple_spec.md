@@ -109,6 +109,38 @@ fn greet(): void {
 }
 ```
 
+### Multiple return values
+
+Maple supports Go-style multi-return function signatures and return statements.
+
+```maple
+fn swap(a: i32, b: i32): (i32, i32) {
+  return b, a;
+}
+```
+
+Rules:
+
+- Tuple return type syntax must contain at least two types: `(T1, T2, ...)`.
+- `void` is not allowed inside tuple return types.
+- Multi-return calls are only valid in:
+  - destructuring lets: `let (x, y) = swap(1, 2);`
+  - pass-through returns in multi-return functions: `return swap(a, b);`
+  - statement position (results are dropped): `swap(a, b);`
+- Multi-return calls are invalid in single-value positions such as arithmetic, casts, conditions, or single-variable assignment.
+- Destructuring supports `_` discards:
+
+```maple
+let (x, _) = swap(1, 2);
+```
+
+Destructuring constraints:
+
+- Pattern must have at least two entries.
+- RHS must be a function call expression.
+- Duplicate names in one pattern are rejected (`let (x, x) = ...`).
+- `const (x, y) = ...` is not supported.
+
 Exported functions are available to the WebAssembly host:
 
 ```maple

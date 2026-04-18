@@ -13,6 +13,18 @@ fn Pair.scale(p)(factor: i32): i32 {
   return (p.left + p.right) * factor;
 }
 
+fn swap(a: i32, b: i32): (i32, i32) {
+  return b, a;
+}
+
+fn divmod(n: i32, d: i32): (i32, i32) {
+  return n / d, n % d;
+}
+
+fn passthrough_pair(x: i32, y: i32): (i32, i32) {
+  return swap(x, y);
+}
+
 let base: Pair = {
   left = 2,
   right = 3,
@@ -121,6 +133,13 @@ export fn _start(seed: i32): i32 {
   let method_scaled = base.scale(3);
   let local_sum = lp.sum();
   total = total + method_sum + method_scaled + local_sum + runtime_pair.sum();
+
+  // 9B: multi-return + destructuring + discard + pass-through return
+  let (sw_left, sw_right) = swap(total, tweak);
+  let (q, r) = divmod(sw_left, 7);
+  let (_, kept_right) = passthrough_pair(sw_left, sw_right);
+  swap(1, 2);
+  total = q + r + kept_right;
 
   return total + flipped + (-tweak);
 }

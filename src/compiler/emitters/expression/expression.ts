@@ -36,6 +36,10 @@ function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitt
 
   const rhs = emitExpression(right, emitter);
   const mt = emitter.getExprType(right);
+  if (mt === null) {
+    const t = expression.token;
+    throw new MapleError("unable to resolve prefix expression type", t.line, t.col);
+  }
   const w = valueTypeToWasm(mt);
   switch (expression.operator) {
     case "!": {
@@ -101,6 +105,10 @@ function emitPostfixExpression(expression: PostfixExpression, emitter: ModuleEmi
 
   const getVal = emitGet(name, emitter);
   const mt = emitter.getExprType(expression.left);
+  if (mt === null) {
+    const t = expression.token;
+    throw new MapleError("unable to resolve postfix expression type", t.line, t.col);
+  }
   const w = valueTypeToWasm(mt);
   const delta = expression.operator === "++" ? 1 : -1;
   const deltaOp =
@@ -201,6 +209,10 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
   } else if (expression instanceof CastExpression) {
     const inner = emitExpression(expression.expr, emitter);
     const fromMt = emitter.getExprType(expression.expr);
+    if (fromMt === null) {
+      const t = expression.token;
+      throw new MapleError("unable to resolve cast source type", t.line, t.col);
+    }
     const fromW = valueTypeToWasm(fromMt);
     const toWasm = valueTypeToWasm(expression.targetType);
     const unsignedSrc = isUnsignedMapleInteger(fromMt);

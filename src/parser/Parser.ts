@@ -39,6 +39,7 @@ import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
 import { StructStatement } from "./ast/statements/StructStatement";
 import { SwitchStatement } from "./ast/statements/SwitchStatement";
+import { TuplePattern, type TuplePatternName } from "./ast/statements/TuplePattern";
 import { WhileStatement } from "./ast/statements/WhileStatement";
 import type {
   ASTExpression,
@@ -72,7 +73,7 @@ export class Parser {
 
   private identifierTypes: Map<string, string> = new Map();
   private structDefs: Map<string, Record<string, string>> = new Map();
-  private functionReturnTypes: Map<string, string> = new Map();
+  private functionReturnTypes: Map<string, string[]> = new Map();
 
   private locals: string[] = []; // all of the variables local to the current scope
 
@@ -246,10 +247,10 @@ export class Parser {
       }
 
       case "Let": {
-        return this.parseLetStatement(exported, true);
+        return this.parseLetStatement(exported, true, topLevel);
       }
       case "Const": {
-        return this.parseLetStatement(exported, false);
+        return this.parseLetStatement(exported, false, topLevel);
       }
 
       case "Struct": {
@@ -344,7 +345,7 @@ export class Parser {
     }
     this.tokenizer.nextToken();
 
-    this.functionReturnTypes.set(mangledName, expr.returnType ?? "void");
+    this.functionReturnTypes.set(mangledName, expr.returnTypes);
     return new FunctionStatement(statementToken, expr, mangledName, exported, receiverType);
   }
 
@@ -466,8 +467,36 @@ export class Parser {
     return new StructStatement(statementToken, name, members, size, exported);
   }
 
-  private parseLetStatement(exported = false, mutable = true): ASTStatement | null {
+  private parseLetStatement(
+    exported = false,
+    mutable = true,
+    topLevel = false,
+  ): ASTStatement | null {
     const statementToken = this.tokenizer.curToken();
+    if (this.tokenizer.peekTokenIs("LParen")) {
+      if (topLevel) {
+        this.pushError("top-level destructuring let is not supported", statementToken);
+        while (!this.tokenizer.curTokenIs("Semicolon") && !this.tokenizer.curTokenIs("EOF")) {
+          this.tokenizer.nextToken();
+        }
+        if (this.tokenizer.curTokenIs("Semicolon")) {
+          this.tokenizer.nextToken();
+        }
+        return null;
+      }
+      if (!mutable) {
+        this.pushError("const destructure is not supported", statementToken);
+        while (!this.tokenizer.curTokenIs("Semicolon") && !this.tokenizer.curTokenIs("EOF")) {
+          this.tokenizer.nextToken();
+        }
+        if (this.tokenizer.curTokenIs("Semicolon")) {
+          this.tokenizer.nextToken();
+        }
+        return null;
+      }
+      return this.parseDestructureLetStatement(statementToken, exported);
+    }
+
     if (!this.expectPeek("Identifier")) {
       return null;
     }
@@ -508,6 +537,16 @@ export class Parser {
     if (typeAnn === "" && value !== null) {
       typeAnn = this.inferTypeFromExpr(value);
       if (typeAnn === "") {
+        if (value instanceof CallExpression) {
+          const callReturnTypes = this.functionReturnTypes.get(value.func) ?? [];
+          if (callReturnTypes.length >= 2) {
+            this.pushError(
+              "Cannot infer type - for multi-return calls use destructuring `let (a, b) = ...`",
+              statementToken,
+            );
+            return null;
+          }
+        }
         this.pushError("Cannot infer type; add an explicit type annotation", statementToken);
         return null;
       }
@@ -534,6 +573,102 @@ export class Parser {
     const letStmt = new LetStatement(statementToken, identifier, typeAnn, value, exported, mutable);
     letStmt.typeAnnotation = typeAnn;
 
+    return letStmt;
+  }
+
+  private parseDestructureLetStatement(letToken: Token, exported: boolean): ASTStatement | null {
+    if (!this.expectPeek("LParen")) {
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // first item after '(' or ')'
+    const names: TuplePatternName[] = [];
+    const seenNames = new Set<string>();
+
+    while (!this.tokenizer.curTokenIs("RParen")) {
+      if (!this.tokenizer.curTokenIs("Identifier")) {
+        this.pushError("expected identifier or '_' in destructure", this.tokenizer.curToken());
+        return null;
+      }
+
+      const nameToken = this.tokenizer.curToken();
+      const literal = nameToken.literal.toString();
+      if (literal === "_") {
+        names.push({ kind: "discard", token: nameToken });
+      } else {
+        if (seenNames.has(literal)) {
+          this.pushError("duplicate binding in destructure", nameToken);
+          return null;
+        }
+        seenNames.add(literal);
+        names.push({ kind: "name", value: literal, token: nameToken });
+      }
+
+      if (this.tokenizer.peekTokenIs("Colon")) {
+        this.pushError(
+          "destructuring let does not support per-binding type annotations",
+          this.tokenizer.peekToken(),
+        );
+        return null;
+      }
+
+      if (this.tokenizer.peekTokenIs("Comma")) {
+        this.tokenizer.nextToken(); // consume comma
+        if (this.tokenizer.peekTokenIs("RParen")) {
+          this.tokenizer.nextToken(); // consume ')'
+          break;
+        }
+        this.tokenizer.nextToken(); // advance to next name
+        continue;
+      }
+
+      if (this.tokenizer.peekTokenIs("RParen")) {
+        this.tokenizer.nextToken(); // consume ')'
+        break;
+      }
+
+      this.pushError("expected ',' or ')' in destructure", this.tokenizer.curToken());
+      return null;
+    }
+
+    if (names.length < 2) {
+      this.pushError("destructuring let requires at least 2 names", letToken);
+      return null;
+    }
+
+    if (this.tokenizer.peekTokenIs("Colon")) {
+      this.pushError("destructuring let does not support a tuple type annotation", letToken);
+      return null;
+    }
+
+    if (!this.expectPeek("Assign")) {
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // first token of rhs expression
+    const rhs = this.parseExpression(LOWEST);
+    if (!(rhs instanceof CallExpression)) {
+      this.pushError("destructuring let RHS must be a function call", letToken);
+      return null;
+    }
+
+    if (!this.expectPeek("Semicolon")) {
+      return null;
+    }
+    this.tokenizer.nextToken();
+
+    const rhsReturnTypes = this.functionReturnTypes.get(rhs.func) ?? [];
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      if (name?.kind !== "name") continue;
+      const inferredType = rhsReturnTypes[i] ?? "";
+      this.identifierTypes.set(name.value, inferredType);
+      this.locals.push(name.value);
+    }
+
+    const pattern = new TuplePattern(letToken, names);
+    const letStmt = new LetStatement(letToken, pattern, "", rhs, exported, true);
+    letStmt.typeAnnotation = "";
     return letStmt;
   }
 
@@ -588,8 +723,8 @@ export class Parser {
       return this.inferTypeFromExpr(expr.left ?? null);
     }
     if (expr instanceof CallExpression) {
-      const rt = this.functionReturnTypes.get(expr.func);
-      if (rt && rt !== "void") return rt;
+      const rt = this.functionReturnTypes.get(expr.func) ?? [];
+      if (rt.length === 1) return rt[0] ?? "";
       return "";
     }
     return "";
@@ -602,17 +737,34 @@ export class Parser {
     // bare return: return;
     if (this.tokenizer.curTokenIs("Semicolon")) {
       this.tokenizer.nextToken(); // consume ';'
-      return new ReturnStatement(statementToken, null);
+      return new ReturnStatement(statementToken, []);
     }
 
-    const returnValue = this.parseExpression(EQUALS);
+    const returnValues: ASTExpression[] = [];
+    while (true) {
+      const returnExpr = this.parseExpression(EQUALS);
+      if (!returnExpr) {
+        return null;
+      }
+      returnValues.push(returnExpr);
+
+      if (!this.tokenizer.peekTokenIs("Comma")) {
+        break;
+      }
+
+      this.tokenizer.nextToken(); // consume ','
+      if (this.tokenizer.peekTokenIs("Semicolon")) {
+        break;
+      }
+      this.tokenizer.nextToken(); // advance to next expression token
+    }
 
     if (!this.expectPeek("Semicolon")) {
       return null;
     }
     this.tokenizer.nextToken();
 
-    return new ReturnStatement(statementToken, returnValue);
+    return new ReturnStatement(statementToken, returnValues);
   }
 
   private parseBlockStatement(): BlockStatement {
@@ -1200,9 +1352,17 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume the colon
 
-    let t = this.parseTyping();
-    if (t === "void") {
-      t = null;
+    let returnTypes: string[];
+    if (this.tokenizer.curTokenIs("LParen")) {
+      const tupleReturnTypes = this.parseTupleReturnType();
+      if (!tupleReturnTypes) {
+        return null;
+      }
+      returnTypes = tupleReturnTypes;
+    } else {
+      const t = this.parseTyping();
+      if (!t) return null;
+      returnTypes = t === "void" ? [] : [t];
     }
 
     if (!this.expectPeek("LBrace")) {
@@ -1212,7 +1372,56 @@ export class Parser {
     const body = this.parseBlockStatement();
 
     this.deleteLocals(); // deletes all function locals
-    return new FunctionLiteralExpression(literalToken, parameters, body, t);
+    return new FunctionLiteralExpression(literalToken, parameters, body, returnTypes);
+  }
+
+  private parseTupleReturnType(): string[] | null {
+    const startToken = this.tokenizer.curToken();
+    const parsedTypes: string[] = [];
+
+    if (this.tokenizer.peekTokenIs("RParen")) {
+      this.tokenizer.nextToken();
+      this.pushError("multi-return requires at least 2 types", startToken);
+      return null;
+    }
+
+    this.tokenizer.nextToken(); // first type
+    while (true) {
+      const parsedType = this.parseTyping();
+      if (!parsedType) {
+        return null;
+      }
+      if (parsedType === "void") {
+        this.pushError("return type may not contain void", this.tokenizer.curToken());
+        return null;
+      }
+      parsedTypes.push(parsedType);
+
+      if (this.tokenizer.peekTokenIs("Comma")) {
+        this.tokenizer.nextToken(); // consume comma
+        if (this.tokenizer.peekTokenIs("RParen")) {
+          this.tokenizer.nextToken(); // consume closing paren
+          break;
+        }
+        this.tokenizer.nextToken(); // next type
+        continue;
+      }
+
+      if (this.tokenizer.peekTokenIs("RParen")) {
+        this.tokenizer.nextToken(); // consume closing paren
+        break;
+      }
+
+      this.pushError("Parser: expected ',' or ')' in tuple return type", this.tokenizer.curToken());
+      return null;
+    }
+
+    if (parsedTypes.length < 2) {
+      this.pushError("multi-return requires at least 2 types", startToken);
+      return null;
+    }
+
+    return parsedTypes;
   }
 
   private parseFunctionParameters(): FunctionParam[] {

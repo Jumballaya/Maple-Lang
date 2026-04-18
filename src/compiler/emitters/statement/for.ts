@@ -23,6 +23,13 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   const condExpr = stmt.conditionExpr.expression!;
   const cond = emitExpression(condExpr, emitter);
   const t = emitter.getExprType(condExpr);
+  if (t === null) {
+    throw new MapleError(
+      "for loop condition must be a numeric or boolean expression, got '<multi>'",
+      stmt.conditionExpr.token.line,
+      stmt.conditionExpr.token.col,
+    );
+  }
   let asI32: string;
   if (t === "bool") {
     asI32 = cond;

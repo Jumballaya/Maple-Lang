@@ -14,18 +14,31 @@ export class FunctionLiteralExpression implements ASTExpression {
   public token: Token;
   public params: FunctionParam[];
   public body: BlockStatement;
-  public returnType: string | null;
+  public returnTypes: string[];
 
   constructor(
     token: Token,
     params: FunctionParam[],
     body: BlockStatement,
-    returnType: string | null,
+    returnTypes: string[] | string | null,
   ) {
     this.token = token;
     this.params = params;
     this.body = body;
-    this.returnType = returnType;
+    if (Array.isArray(returnTypes)) {
+      this.returnTypes = returnTypes;
+    } else if (returnTypes === null || returnTypes === "void") {
+      this.returnTypes = [];
+    } else {
+      this.returnTypes = [returnTypes];
+    }
+  }
+
+  /**
+   * @deprecated Use returnTypes instead.
+   */
+  public get returnType(): string | null {
+    return this.returnTypes[0] ?? null;
   }
 
   public tokenLiteral(): string {
@@ -35,8 +48,14 @@ export class FunctionLiteralExpression implements ASTExpression {
   public toString(tab_level = 0): string {
     const params = this.params.map((p) => `${p.identifier.toString()}: ${p.type}`).join(", ");
     const lit = this.tokenLiteral();
+    const returnTypeLabel =
+      this.returnTypes.length === 0
+        ? "void"
+        : this.returnTypes.length === 1
+          ? this.returnTypes[0]
+          : `(${this.returnTypes.join(", ")})`;
     return `${"\t".repeat(tab_level)}${lit}(${params}): ${
-      this.returnType ?? "void"
+      returnTypeLabel
     } {\n${this.body.toString(tab_level + 1)}}`;
   }
 }

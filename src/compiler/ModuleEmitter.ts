@@ -161,7 +161,30 @@ export class ModuleEmitter {
     return this.mod.globals[name];
   }
 
-  public getExprType(expr: ASTExpression): string {
+  public getCallReturnTypes(funcName: string): WasmValueType[] | null {
+    const internal = this.mod.functions[funcName];
+    if (internal) {
+      return internal.results;
+    }
+
+    const imp = this.mod.imports[funcName];
+    if (imp?.info && imp.info.kind === "func") {
+      const ret = imp.info.signature.split("_")[1] ?? "";
+      if (ret === "v") return [];
+      const out: WasmValueType[] = [];
+      for (const ch of ret) {
+        if (ch === "i") out.push("i32");
+        if (ch === "I") out.push("i64");
+        if (ch === "f") out.push("f32");
+        if (ch === "F") out.push("f64");
+      }
+      return out;
+    }
+
+    return null;
+  }
+
+  public getExprType(expr: ASTExpression): string | null {
     if (expr instanceof IntegerLiteralExpression) {
       return expr.numericType === "i64" ? "i64" : "i32";
     }
@@ -197,6 +220,7 @@ export class ModuleEmitter {
     if (expr instanceof InfixExpression) {
       const lt = this.getExprType(expr.left);
       const rt = this.getExprType(expr.right);
+      if (lt === null || rt === null) return "i32";
       if (cmpOps.has(expr.operator)) {
         return "bool";
       }
@@ -237,23 +261,24 @@ export class ModuleEmitter {
     if (expr instanceof CallExpression) {
       const internal = this.mod.functions[expr.func];
       if (internal) {
-        if (internal.result === "void") return "void";
-        const mr = baseScalar(internal.mapleResult);
+        if (internal.results.length === 0) return "void";
+        if (internal.results.length > 1) return null;
+        const firstMaple = baseScalar(internal.mapleResults[0] ?? "i32");
         if (
-          mr === "f32" ||
-          mr === "f64" ||
-          mr === "i64" ||
-          mr === "u64" ||
-          mr === "u32" ||
-          mr === "u16" ||
-          mr === "u8" ||
-          mr === "i32" ||
-          mr === "i16" ||
-          mr === "i8"
+          firstMaple === "f32" ||
+          firstMaple === "f64" ||
+          firstMaple === "i64" ||
+          firstMaple === "u64" ||
+          firstMaple === "u32" ||
+          firstMaple === "u16" ||
+          firstMaple === "u8" ||
+          firstMaple === "i32" ||
+          firstMaple === "i16" ||
+          firstMaple === "i8"
         ) {
-          return mr;
+          return firstMaple;
         }
-        return internal.result;
+        return internal.results[0] ?? null;
       }
       const imp = this.mod.imports[expr.func];
       if (imp?.info && imp.info.kind === "func") {
@@ -266,8 +291,9 @@ export class ModuleEmitter {
         if (ch === "I") return "i64";
         if (ch === "f") return "f32";
         if (ch === "F") return "f64";
+        if (retType.length > 1) return null;
       }
-      throw new Error(`[function call expression] unable to determine type`);
+      return null;
     }
     if (expr instanceof CastExpression) {
       const b = baseScalar(expr.targetType);
@@ -303,6 +329,9 @@ export class ModuleEmitter {
   ): [WasmValueType, WasmValueType, boolean] {
     const lt = this.getExprType(left);
     const rt = this.getExprType(right);
+    if (lt === null || rt === null) {
+      throw new Error("Internal: unable to resolve binary operand type");
+    }
     const wl = valueTypeToWasm(lt);
     const wr = valueTypeToWasm(rt);
     if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
@@ -337,8 +366,8 @@ export class ModuleEmitter {
       if (meta.name) {
         this.mod.functions[meta.name] = {
           params: meta.params,
-          result: meta.result,
-          mapleResult: meta.mapleResult,
+          results: meta.results,
+          mapleResults: meta.mapleResults,
           exported: !!meta.exported,
           signature: meta.signature,
         };
