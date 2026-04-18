@@ -189,6 +189,9 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
             `(import "${stmt.importPath}" "${imp}" (func $${imp} (type ${typeName})))`,
           );
           emitter.addSignatureWat(emitFunctionSignature(typeName, params, results));
+        } else if (info && info.kind === "global") {
+          const wt = valueTypeToWasm(info.type);
+          emitter.addImportWat(`(import "${stmt.importPath}" "${imp}" (global $${imp} ${wt}))`);
         }
       }
     }

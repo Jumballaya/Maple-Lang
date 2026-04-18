@@ -371,6 +371,20 @@ When a module links against known import metadata, function signatures are encod
 
 Example: `ii_i` is `(i32, i32) -> i32`; `I_I` is `(i64) -> i64`; `v_F` is `() -> f64`.
 
+### Math standard library (`"math"`)
+
+The bundled `"math"` module exports Tier 1 wrappers (WASM opcodes such as `sqrt`, `floor`, `abs_f32`, `abs_i32`, and `f64` mirrors `sqrt_f64`, `abs_f64`, …) and Tier 2 approximations (`sin`, `cos`, `tan`, `atan2`, `pow`, `fmod`). Constants `PI`, `TWO_PI`, `HALF_PI`, and `E` are **`f32` globals** — import them like functions, but use them as plain identifiers (they are not calls):
+
+```maple
+import sin, sqrt, PI, HALF_PI from "math"
+
+export fn sample(t: f32): f32 {
+  return sin(t * HALF_PI);
+}
+```
+
+Tier 2 functions use range reduction and short polynomials; expect roughly **1e-3** accuracy on spot checks, not full IEEE semantics. Imported globals are immutable in Maple (`cannot assign to imported global`).
+
 ---
 
 ## Exports

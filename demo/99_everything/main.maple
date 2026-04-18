@@ -1,4 +1,5 @@
 import add from "./math.maple"
+import sqrt, sin, PI, floor from "math"
 
 struct Pair {
   left: i32,
@@ -140,6 +141,10 @@ export fn _start(seed: i32): i32 {
   let (_, kept_right) = passthrough_pair(sw_left, sw_right);
   swap(1, 2);
   total = q + r + kept_right;
+
+  // 9C: math stdlib (imports + globals + Tier 1/2 calls)
+  let msum: f32 = floor(sqrt(4.0)) + sin(PI * 0.5);
+  total = total + msum as i32;
 
   return total + flipped + (-tweak);
 }

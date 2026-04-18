@@ -82,7 +82,12 @@ function resolveExprType(
   if (expr instanceof StringLiteralExpression) return "string";
 
   if (expr instanceof Identifier) {
-    return scope.get(expr.tokenLiteral())?.type ?? null;
+    const id = expr.tokenLiteral();
+    const imp = meta.imports[id];
+    if (imp?.info?.kind === "global") {
+      return imp.info.type;
+    }
+    return scope.get(id)?.type ?? null;
   }
 
   if (expr instanceof CastExpression) {
@@ -311,10 +316,16 @@ function walkExpression(
   if (expr instanceof AssignmentExpression) {
     const name = getMutatedBindingName(expr.left);
     if (name !== null) {
-      const entry = scope.get(name);
-      if (entry && !entry.mutable) {
+      const imp = meta.imports[name];
+      if (imp?.info?.kind === "global") {
         const t = expr.token;
-        errors.push(new MapleError(`Cannot assign to constant '${name}'`, t.line, t.col));
+        errors.push(new MapleError("cannot assign to imported global", t.line, t.col));
+      } else {
+        const entry = scope.get(name);
+        if (entry && !entry.mutable) {
+          const t = expr.token;
+          errors.push(new MapleError(`Cannot assign to constant '${name}'`, t.line, t.col));
+        }
       }
     }
     walkExpression(expr.left, scope, meta, errors);
@@ -708,8 +719,13 @@ function walkStatement(
 export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const errors: MapleError[] = [];
 
-  // Build global scope from top-level LetStatements (preserving Maple types)
+  // Build global scope: stdlib imported globals first, then top-level lets
   const globals: Scope = new Map();
+  for (const [id, imp] of Object.entries(meta.imports)) {
+    if (imp.info?.kind === "global") {
+      globals.set(id, { type: imp.info.type, mutable: false });
+    }
+  }
   for (const stmt of program.statements) {
     if (stmt instanceof LetStatement) {
       if (stmt.pattern instanceof TuplePattern) {

@@ -122,6 +122,11 @@ export class Parser {
     return this.errors;
   }
 
+  /** Parser-level type hint for a name (e.g. `<unresolved-import>` for imports). */
+  public getIdentifierTypeHint(name: string): string | undefined {
+    return this.identifierTypes.get(name);
+  }
+
   constructor(source: string, file = "") {
     this.file = file;
     this.tokenizer = new Tokenizer(source);
@@ -371,7 +376,7 @@ export class Parser {
     }
 
     for (const imp of imported) {
-      this.identifierTypes.set(imp, "i32"); // set dummy value for now
+      this.identifierTypes.set(imp, "<unresolved-import>");
     }
 
     if (!this.tokenizer.peekTokenIs("Identifier")) {

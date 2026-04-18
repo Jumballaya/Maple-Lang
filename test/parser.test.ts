@@ -2642,6 +2642,13 @@ describe("Parser: 9B multi-return and destructure", () => {
       ),
     );
   });
+
+  test("import uses unresolved-import placeholder in parser scope", () => {
+    const p = new Parser('import PI from "math"');
+    p.parse("test");
+    assert.equal(p.errors.length, 0);
+    assert.equal(p.getIdentifierTypeHint("PI"), "<unresolved-import>");
+  });
 });
 
 /// Utils

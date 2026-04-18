@@ -8,10 +8,12 @@
  */
 import assert from "node:assert/strict";
 import { execSync, spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { linkStdlibImports } from "../src/compiler/compiler";
 import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
 import { Parser } from "../src/parser/Parser";
 
@@ -22,6 +24,7 @@ function compile(src: string): string {
   const ast = p.parse("integration");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   const meta = extractModuleMeta(ast);
+  linkStdlibImports(meta);
   return emitModule(ast, meta).buildWat();
 }
 
@@ -680,6 +683,15 @@ describe("Integration: Inferred function call types", () => {
       }
     `;
     const wat = compile(src);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm failed: ${err}`);
+  });
+
+  maybeTest("demo 12_math compiles and passes wat2wasm", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
+    const wat = compile(src);
+    assert(wat.includes('(import "math"'), "expected math imports in WAT");
     const err = validateWithWat2Wasm(wat);
     assert.equal(err, null, `wat2wasm failed: ${err}`);
   });

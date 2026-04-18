@@ -9,6 +9,25 @@ import type { MapleModule } from "./MapleModule";
 import { stdlib } from "./stdlib";
 import { typeCheck } from "./TypeChecker";
 
+/** Resolve stdlib imports on a single module (tests, tooling). */
+export function linkStdlibImports(meta: ModuleMeta): void {
+  for (const [impName, imp] of Object.entries(meta.imports)) {
+    if (imp.resolved) {
+      continue;
+    }
+    const stdMod = stdlib[imp.module];
+    if (!stdMod) {
+      continue;
+    }
+    const entry = stdMod.exports[impName];
+    if (!entry) {
+      throw new Error(`no export "${impName}" from stdlib "${imp.module}"`);
+    }
+    imp.info = entry;
+    imp.resolved = true;
+  }
+}
+
 //
 // Compilation pipeline (current):
 //

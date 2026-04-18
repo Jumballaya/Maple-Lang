@@ -158,7 +158,15 @@ export class ModuleEmitter {
       if (fn.locals[name]) return fn.locals[name];
       if (fn.params[name]) return fn.params[name];
     }
-    return this.mod.globals[name];
+    const gl = this.mod.globals[name];
+    if (gl) {
+      return gl;
+    }
+    const imp = this.mod.imports[name];
+    if (imp?.info?.kind === "global") {
+      return { name, scope: "global", type: imp.info.type };
+    }
+    return undefined;
   }
 
   public getCallReturnTypes(funcName: string): WasmValueType[] | null {

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { compiler } from "../src/compiler/compiler";
+import { compiler, linkStdlibImports } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
@@ -23,6 +23,7 @@ function compile(src: string) {
   const ast = p.parse("test");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join(", ")}`);
   const meta = extractModuleMeta(ast);
+  linkStdlibImports(meta);
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
   return { ast, meta, mod, wat };
@@ -2444,5 +2445,51 @@ describe("Emission: 9B multi-return and destructure", () => {
     `);
     assert(wat.includes("(local $__mret_0 i32)"), wat);
     assert(wat.includes("(local $__mret_1 i32)"), wat);
+  });
+});
+
+describe("Emission: 9C stdlib global import", () => {
+  test("imported f32 global emits import and global.get", () => {
+    const { wat } = compile(`
+      import PI from "math"
+      fn f(): f32 { return PI; }
+    `);
+    assert(wat.includes('(import "math" "PI" (global $PI f32))'));
+    assert(wat.includes("(global.get $PI)"));
+  });
+});
+
+describe("Emission: 9C math stdlib calls", () => {
+  test("Tier 1 f32 imports emit call", () => {
+    const { wat } = compile(`
+      import sqrt, floor, abs_f32 from "math"
+      fn f(): f32 { return floor(sqrt(abs_f32(-4.0))); }
+    `);
+    assertContainsInOrder(wat, ['(import "math" "sqrt"', "(call $sqrt"]);
+    assertContainsInOrder(wat, ["(call $floor", "(call $abs_f32"]);
+  });
+
+  test("Tier 1 f64 and abs_i32 imports emit call", () => {
+    const { wat } = compile(`
+      import sqrt_f64, abs_i32 from "math"
+      fn f(): i32 { return abs_i32(-3); }
+      fn g(): f64 { return sqrt_f64(9.0); }
+    `);
+    assert(wat.includes("(call $sqrt_f64"));
+    assert(wat.includes("(call $abs_i32"));
+  });
+
+  test("Tier 2 imports emit call", () => {
+    const { wat } = compile(`
+      import sin, atan2, pow, fmod from "math"
+      fn f(): f32 { return sin(0.1); }
+      fn g(): f32 { return atan2(1.0, 1.0); }
+      fn h(): f32 { return pow(2.0, 3); }
+      fn i(): f32 { return fmod(3.0, 2.0); }
+    `);
+    assert(wat.includes("(call $sin"));
+    assert(wat.includes("(call $atan2"));
+    assert(wat.includes("(call $pow"));
+    assert(wat.includes("(call $fmod"));
   });
 });

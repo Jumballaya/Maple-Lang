@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { linkStdlibImports } from "../src/compiler/compiler";
 import { extractModuleMeta } from "../src/compiler/emitters/module";
 import type { MapleError } from "../src/compiler/errors";
 import { typeCheck } from "../src/compiler/TypeChecker";
@@ -10,6 +11,7 @@ function check(src: string): MapleError[] {
   const ast = p.parse("test");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   const meta = extractModuleMeta(ast);
+  linkStdlibImports(meta);
   return typeCheck(ast, meta);
 }
 
@@ -819,5 +821,34 @@ describe("TypeChecker: 9B multi-return and destructuring", () => {
     p.parse("test");
     assert.equal(p.errors.length, 1);
     assert(p.errors[0]?.message.includes("top-level destructuring let is not supported"));
+  });
+});
+
+describe("TypeChecker: 9C imported stdlib globals", () => {
+  test("imported f32 global used as return value type-checks", () => {
+    expectNoErrors(`
+      import PI from "math"
+      fn f(): f32 { return PI; }
+    `);
+  });
+
+  test("cannot assign to imported global", () => {
+    expectError(
+      `
+      import PI from "math"
+      fn f(): void { PI = 1.0; }
+    `,
+      "cannot assign to imported global",
+    );
+  });
+
+  test("imported f32 global mismatched with i32 return is an error", () => {
+    expectError(
+      `
+      import PI from "math"
+      fn f(): i32 { return PI; }
+    `,
+      "Return type mismatch",
+    );
   });
 });

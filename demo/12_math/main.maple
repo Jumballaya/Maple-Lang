@@ -1,0 +1,13 @@
+import sin, cos, sqrt, floor, abs_i32, pow, PI, HALF_PI from "math"
+
+export fn _start(): i32 {
+  let s: f32 = sin(HALF_PI);
+  let c: f32 = cos(0.0);
+  let r: f32 = sqrt(4.0);
+  let fl: f32 = floor(2.9);
+  let a: i32 = abs_i32(-11);
+  let p: f32 = pow(2.0, 8);
+  let ang: f32 = sin(PI * 0.25);
+  let sum: f32 = s + c + r + fl + (a as f32) + p + ang;
+  return sum as i32;
+}
