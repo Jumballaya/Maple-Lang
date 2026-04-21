@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { StructMember } from "../src/compiler/emitters/emitter.types";
+import { Tokenizer } from "../src/lexer/Tokenizer";
 import { ArrayLiteralExpression } from "../src/parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../src/parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../src/parser/ast/expressions/CallExpression";
 import { CastExpression } from "../src/parser/ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "../src/parser/ast/expressions/FloatLiteralExpression";
+import { FunctionLiteralExpression } from "../src/parser/ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "../src/parser/ast/expressions/Identifier";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
@@ -2648,6 +2650,257 @@ describe("Parser: 9B multi-return and destructure", () => {
     p.parse("test");
     assert.equal(p.errors.length, 0);
     assert.equal(p.getIdentifierTypeHint("PI"), "<unresolved-import>");
+  });
+});
+
+describe("Parser: 10A function types", () => {
+  test("lexer produces Func token for source 'fn'", () => {
+    const tz = new Tokenizer("fn");
+    const tok = tz.curToken();
+    assert.equal(tok.type, "Func");
+  });
+
+  test("parses fn(i32): i32 as callback parameter type", () => {
+    const p = new Parser("fn run(cb: fn(i32): i32): void {}");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0];
+    assert(fn instanceof FunctionStatement);
+    assert.equal(fn.fnExpr.params[0]?.type, "fn(i32):i32");
+  });
+
+  test("parses fn(i32, f32, bool): i32", () => {
+    const p = new Parser("fn g(f: fn(i32, f32, bool): i32): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn(i32): void and fn(): i32 and fn(): void", () => {
+    for (const src of [
+      "fn a(f: fn(i32): void): void {}",
+      "fn b(): fn(): i32 { return 1 as i32; }",
+      "fn c(x: fn(): void): void {}",
+    ]) {
+      const p = new Parser(src);
+      p.parse("test");
+      assert.equal(p.errors.length, 0, `${src}: ${p.errors.map((e) => e.message).join("; ")}`);
+    }
+  });
+
+  test("parses multi-return fn type fn(i32): (i32, i32)", () => {
+    const p = new Parser("fn h(f: fn(i32): (i32, i32)): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses trailing comma in fn type params", () => {
+    const p = new Parser("fn j(f: fn(i32, i32,): void): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses nested return fn(i32): fn(i32): i32", () => {
+    const p = new Parser("fn k(f: fn(i32): fn(i32): i32): void {}");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0] as FunctionStatement;
+    assert.equal(fn.fnExpr.params[0]?.type, "fn(i32):fn(i32):i32");
+  });
+
+  test("parses nested param fn(fn(i32): i32, i32): i32", () => {
+    const p = new Parser("fn m(f: fn(fn(i32): i32, i32): i32): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn-type as struct member", () => {
+    const p = new Parser("struct H { cb: fn(i32): void, }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const st = ast.statements[0];
+    assert(st instanceof StructStatement);
+    assert.equal(st.members.cb?.type, "fn(i32):void");
+  });
+
+  test("parses fn(i32): i32[] as array return", () => {
+    const p = new Parser("fn ar(): fn(i32): i32[] {}");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0] as FunctionStatement;
+    assert.equal(fn.fnExpr.returnTypes[0], "fn(i32):i32[]");
+  });
+
+  test("fn name(...) at top level still parses as function declaration", () => {
+    const p = new Parser("fn add(a: i32, b: i32): i32 { return a + b; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    assert(ast.statements[0] instanceof FunctionStatement);
+  });
+
+  test("fn(x: i32): i32 { } in expression position parses as FunctionLiteralExpression", () => {
+    const p = new Parser("fn outer(): void { let f = fn(x: i32): i32 { return x; }; }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const outer = ast.statements[0] as FunctionStatement;
+    const letStmt = outer.fnExpr.body.statements[0];
+    assert(letStmt instanceof LetStatement);
+    assert(letStmt.expression instanceof FunctionLiteralExpression);
+  });
+
+  test("rejects bare fn in type position without (", () => {
+    const p = new Parser("let f: fn = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("expected '(' after fn in type")));
+  });
+
+  test("rejects missing ':' after fn params", () => {
+    const p = new Parser("let f: fn(i32) i32 = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("expected ':' after fn type params")));
+  });
+
+  test("rejects empty multi-return tuple in fn return position", () => {
+    const p = new Parser("let f: fn(): () = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("multi-return requires at least 2 types")));
+  });
+
+  test("rejects single-tuple fn(): (i32)", () => {
+    const p = new Parser("let f: fn(): (i32) = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("multi-return requires at least 2 types")));
+  });
+
+  test("rejects void as fn type param", () => {
+    const p = new Parser("let f: fn(i32, void): i32 = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("void cannot appear as a parameter type")));
+  });
+
+  test("rejects void in multi-return fn type tuple", () => {
+    const p = new Parser("let f: fn(): (i32, void) = 5;");
+    p.parse("test");
+    assert(
+      p.errors.some(
+        (e) =>
+          e.message.includes("void cannot appear in a multi-return tuple") ||
+          e.message.includes("return type may not contain void"),
+      ),
+    );
+  });
+
+  test("rejects fn() without void after colon", () => {
+    const p = new Parser("let f: fn() = 5;");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("expected ':' after fn type params")));
+  });
+
+  test("rejects forward and reverse fn-type casts", () => {
+    const p1 = new Parser("fn x(): void { let f: fn(i32):i32 = add as fn(i32):i32; }");
+    p1.parse("test");
+    assert(p1.errors.some((e) => e.message.includes("fn-type casts are not supported")));
+
+    const p2 = new Parser("fn run(op: fn(i32):i32): void { let n: i32 = op as i32; }");
+    p2.parse("test");
+    assert(p2.errors.some((e) => e.message.includes("fn-type casts are not supported")));
+  });
+
+  test("rejects integer cast to fn type", () => {
+    const p = new Parser("fn x(): void { let f: fn(i32):i32 = 0 as fn(i32):i32; }");
+    p.parse("test");
+    assert(p.errors.some((e) => e.message.includes("fn-type casts are not supported")));
+  });
+
+  test("rejects reserved prefixes in bindings", () => {
+    for (const name of ["__lambda_x", "__indirect_x", "__env", "__make_fnref", "__fn_table"]) {
+      const p = new Parser(`fn x(): void { let ${name} = 5; }`);
+      p.parse("test");
+      assert(
+        p.errors.some((e) => e.message.includes("reserved prefix")),
+        name,
+      );
+    }
+  });
+
+  test("rejects reserved prefix in fn name struct field and param", () => {
+    const p1 = new Parser("fn __lambda_5(): void {}");
+    p1.parse("test");
+    assert(p1.errors.some((e) => e.message.includes("reserved prefix")));
+
+    const p2 = new Parser("struct H { __lambda_x: i32, }");
+    p2.parse("test");
+    assert(p2.errors.some((e) => e.message.includes("reserved prefix")));
+
+    const p3 = new Parser("fn f(__lambda_x: i32): void {}");
+    p3.parse("test");
+    assert(p3.errors.some((e) => e.message.includes("reserved prefix")));
+  });
+
+  // ─── Compositional regressions for fn-types ─────────────────────────────────
+  // These cover positions where the fn-type isn't the last thing of its kind
+  // (param, struct field, tuple return), plus array types inside fn params.
+
+  test("parses fn-typed param followed by a scalar param", () => {
+    const p = new Parser("fn g(f: fn(i32): i32, x: i32): void {}");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0] as FunctionStatement;
+    assert.equal(fn.fnExpr.params[0]?.type, "fn(i32):i32");
+    assert.equal(fn.fnExpr.params[1]?.type, "i32");
+  });
+
+  test("parses scalar param followed by an fn-typed param", () => {
+    const p = new Parser("fn g(x: i32, f: fn(i32): i32): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses two consecutive fn-typed params", () => {
+    const p = new Parser("fn g(f: fn(i32): i32, h: fn(f32): f32): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn-typed param with multi-return followed by another param", () => {
+    const p = new Parser("fn g(f: fn(i32): (i32, i32), x: i32): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn-type with array param: fn(i32[]): void", () => {
+    const p = new Parser("fn g(f: fn(i32[]): void): void {}");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const fn = ast.statements[0] as FunctionStatement;
+    assert.equal(fn.fnExpr.params[0]?.type, "fn(i32[]):void");
+  });
+
+  test("parses fn-type with mixed array and scalar params", () => {
+    const p = new Parser("fn g(f: fn(i32[], f32): void): void {}");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn-typed struct field followed by another field", () => {
+    const p = new Parser("struct H { cb: fn(i32): i32, n: i32, }");
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+    const st = ast.statements[0];
+    assert(st instanceof StructStatement);
+    assert.equal(st.members.cb?.type, "fn(i32):i32");
+    assert.equal(st.members.n?.type, "i32");
+  });
+
+  test("parses fn-typed struct field without trailing comma", () => {
+    const p = new Parser("struct H { cb: fn(i32): i32 }");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
+  });
+
+  test("parses fn-type inside a multi-return tuple return type", () => {
+    const p = new Parser("fn g(): (i32, fn(i32): i32) { return 0, 0 as i32; }");
+    p.parse("test");
+    assert.equal(p.errors.length, 0, p.errors.map((e) => e.message).join("; "));
   });
 });
 

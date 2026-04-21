@@ -4,6 +4,7 @@ import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiter
 import { CallExpression } from "../parser/ast/expressions/CallExpression";
 import { CastExpression } from "../parser/ast/expressions/CastExpression";
 import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression";
+import { FunctionLiteralExpression } from "../parser/ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "../parser/ast/expressions/Identifier";
 import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
 import { InfixExpression } from "../parser/ast/expressions/InfixExpression";
@@ -27,7 +28,14 @@ import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
-import { baseScalar, cmpOps, isUnsignedMapleInteger, valueTypeToWasm } from "./emitters/emit.types";
+import {
+  baseScalar,
+  canonicalFnType,
+  cmpOps,
+  isFnType,
+  isUnsignedMapleInteger,
+  valueTypeToWasm,
+} from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { MapleError } from "./errors";
 
@@ -164,6 +172,12 @@ function resolveExprType(
     return expr.name;
   }
 
+  if (expr instanceof FunctionLiteralExpression) {
+    const paramTypes = expr.params.map((p) => p.type);
+    const results = expr.returnTypes.length === 0 ? ["void"] : expr.returnTypes;
+    return canonicalFnType(paramTypes, results);
+  }
+
   return null;
 }
 
@@ -179,6 +193,8 @@ function resolveExprType(
 
 function typesCompatible(declared: string, actual: string, meta: ModuleMeta): boolean {
   if (declared === actual) return true;
+  if (isFnType(declared) && isFnType(actual)) return declared === actual;
+  if (isFnType(declared) || isFnType(actual)) return false;
   if (declared === "void" || actual === "void") return false;
   if (declared === "string" || actual === "string") return false;
   if (declared in meta.structs || actual in meta.structs) return false;
@@ -430,6 +446,7 @@ type FlowContext = {
 
 function isNumericOrBooleanConditionType(t: string | null): boolean {
   if (t === null) return false;
+  if (isFnType(t)) return false;
   if (t === "void" || baseScalar(t) === "void") return false;
   if (t === "bool") return true;
   const w = valueTypeToWasm(t);
@@ -618,13 +635,17 @@ function walkStatement(
     const condType = resolveExprType(stmt.conditionExpr, scope, meta, errors);
     if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
       const t = stmt.token;
-      errors.push(
-        new MapleError(
-          `if condition must be a numeric or boolean expression, got '${condType}'`,
-          t.line,
-          t.col,
-        ),
-      );
+      if (isFnType(condType)) {
+        errors.push(new MapleError("fn-typed value is not a valid condition", t.line, t.col));
+      } else {
+        errors.push(
+          new MapleError(
+            `if condition must be a numeric or boolean expression, got '${condType}'`,
+            t.line,
+            t.col,
+          ),
+        );
+      }
     }
     walkBlock(stmt.thenBlock, scope, meta, fnReturnTypes, errors, ctx);
     if (stmt.elseBlock) {
@@ -639,13 +660,17 @@ function walkStatement(
     const condType = resolveExprType(stmt.condExpr, scope, meta, errors);
     if (condType !== null && !isNumericOrBooleanConditionType(condType)) {
       const t = stmt.token;
-      errors.push(
-        new MapleError(
-          `while condition must be a numeric or boolean expression, got '${condType}'`,
-          t.line,
-          t.col,
-        ),
-      );
+      if (isFnType(condType)) {
+        errors.push(new MapleError("fn-typed value is not a valid condition", t.line, t.col));
+      } else {
+        errors.push(
+          new MapleError(
+            `while condition must be a numeric or boolean expression, got '${condType}'`,
+            t.line,
+            t.col,
+          ),
+        );
+      }
     }
     walkBlock(stmt.loopBody, scope, meta, fnReturnTypes, errors, loopCtx);
     return;
@@ -669,13 +694,17 @@ function walkStatement(
       const forCondType = resolveExprType(forCondEx, loopScope, meta, errors);
       if (forCondType !== null && !isNumericOrBooleanConditionType(forCondType)) {
         const t = stmt.conditionExpr.token;
-        errors.push(
-          new MapleError(
-            `for loop condition must be a numeric or boolean expression, got '${forCondType}'`,
-            t.line,
-            t.col,
-          ),
-        );
+        if (isFnType(forCondType)) {
+          errors.push(new MapleError("fn-typed value is not a valid condition", t.line, t.col));
+        } else {
+          errors.push(
+            new MapleError(
+              `for loop condition must be a numeric or boolean expression, got '${forCondType}'`,
+              t.line,
+              t.col,
+            ),
+          );
+        }
       }
     }
     walkExpression(stmt.updateExpr.expression, loopScope, meta, errors);

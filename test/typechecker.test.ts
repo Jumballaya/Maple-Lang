@@ -824,6 +824,85 @@ describe("TypeChecker: 9B multi-return and destructuring", () => {
   });
 });
 
+describe("TypeChecker: 10A function types", () => {
+  test("same canonical fn-types are compatible", () => {
+    expectNoErrors("fn run(cb: fn(i32):i32): void { let local: fn(i32):i32 = cb; }");
+  });
+
+  test("different arity fn-types are incompatible", () => {
+    const errors = check("fn run(cb: fn(i32):i32): void { let local: fn(i32, i32):i32 = cb; }");
+    assert(errors.length > 0);
+    assert(errors.some((e) => e.message.includes("Type mismatch")));
+    assert(errors.some((e) => e.message.includes("fn(i32):i32")));
+    assert(errors.some((e) => e.message.includes("fn(i32,i32):i32")));
+  });
+
+  test("differing param types make fn-types incompatible", () => {
+    const errors = check("fn run(cb: fn(i32):i32): void { let local: fn(f32):i32 = cb; }");
+    assert(errors.some((e) => e.message.includes("Type mismatch")));
+  });
+
+  test("differing return types make fn-types incompatible", () => {
+    const errors = check("fn run(cb: fn(i32):i32): void { let local: fn(i32):f32 = cb; }");
+    assert(errors.some((e) => e.message.includes("Type mismatch")));
+  });
+
+  test("single-return vs multi-return fn-types are incompatible", () => {
+    const errors = check("fn run(cb: fn(i32):i32): void { let local: fn(i32):(i32, i32) = cb; }");
+    assert(errors.some((e) => e.message.includes("Type mismatch")));
+  });
+
+  test("void vs value return fn-types are incompatible", () => {
+    const errors = check("fn run(cb: fn(i32):void): void { let local: fn(i32):i32 = cb; }");
+    assert(errors.some((e) => e.message.includes("Type mismatch")));
+  });
+
+  test("fn-typed value rejected as if condition", () => {
+    expectError(
+      "fn run(cb: fn(i32):i32): void { if (cb) {} }",
+      "fn-typed value is not a valid condition",
+    );
+  });
+
+  test("cannot assign fn-typed value to i32 slot", () => {
+    expectError(
+      "fn run(cb: fn(i32):i32): void { let n: i32 = cb; }",
+      "Type mismatch: cannot assign 'fn(i32):i32' to 'i32'",
+    );
+  });
+
+  test("naming a function as value (10A red, 10B green)", () => {
+    // Until 10B, function names are not in scope as rvalues; flip this test when first-class fn refs land.
+    expectError(
+      `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): void { let op: fn(i32, i32):i32 = add; }
+      `,
+      "Undefined identifier 'add'",
+    );
+  });
+
+  test("rejects top-level let with fn-type annotation (parser)", () => {
+    const p = new Parser("let g: fn(i32):i32 = 0;");
+    p.parse("test");
+    assert(
+      p.errors.some((e) =>
+        e.message.includes("fn-typed bindings are not allowed at module scope yet"),
+      ),
+    );
+  });
+
+  test("rejects top-level const with fn-type annotation (parser)", () => {
+    const p = new Parser("const g: fn(i32):i32 = 0;");
+    p.parse("test");
+    assert(
+      p.errors.some((e) =>
+        e.message.includes("fn-typed bindings are not allowed at module scope yet"),
+      ),
+    );
+  });
+});
+
 describe("TypeChecker: 9C imported stdlib globals", () => {
   test("imported f32 global used as return value type-checks", () => {
     expectNoErrors(`

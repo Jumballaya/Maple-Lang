@@ -1,4 +1,6 @@
 import {
+  canonicalFnType,
+  isFnType,
   isUnsignedMapleInteger,
   sizeofType,
   valueTypeToWasm,
@@ -74,6 +76,15 @@ export class Parser {
   private identifierTypes: Map<string, string> = new Map();
   private structDefs: Map<string, Record<string, string>> = new Map();
   private functionReturnTypes: Map<string, string[]> = new Map();
+  private functionParamTypes: Map<string, string[]> = new Map();
+
+  private static readonly RESERVED_PREFIXES = [
+    "__lambda_",
+    "__indirect_",
+    "__env",
+    "__make_fnref",
+    "__fn_table",
+  ];
 
   private locals: string[] = []; // all of the variables local to the current scope
 
@@ -125,6 +136,19 @@ export class Parser {
   /** Parser-level type hint for a name (e.g. `<unresolved-import>` for imports). */
   public getIdentifierTypeHint(name: string): string | undefined {
     return this.identifierTypes.get(name);
+  }
+
+  private isReservedPrefix(name: string): boolean {
+    return Parser.RESERVED_PREFIXES.some((p) => name.startsWith(p));
+  }
+
+  private rejectIfReserved(name: string, kind: string, token: Token): void {
+    if (this.isReservedPrefix(name)) {
+      this.pushError(
+        `identifier '${name}' uses a reserved prefix; ${kind} names cannot start with __lambda_, __indirect_, __env, __make_fnref, or __fn_table`,
+        token,
+      );
+    }
   }
 
   constructor(source: string, file = "") {
@@ -298,6 +322,7 @@ export class Parser {
     }
     const identToken = this.tokenizer.curToken();
     const ident = identToken.literal.toString();
+    this.rejectIfReserved(ident, "function", identToken);
     let mangledName = ident;
     let receiverType: string | null = null;
     let receiverToken: Token | null = null;
@@ -351,6 +376,10 @@ export class Parser {
     this.tokenizer.nextToken();
 
     this.functionReturnTypes.set(mangledName, expr.returnTypes);
+    this.functionParamTypes.set(
+      mangledName,
+      expr.params.map((p) => p.type),
+    );
     return new FunctionStatement(statementToken, expr, mangledName, exported, receiverType);
   }
 
@@ -419,6 +448,7 @@ export class Parser {
     }
     const identToken = this.tokenizer.curToken();
     const name = identToken.literal.toString();
+    this.rejectIfReserved(name, "struct", identToken);
 
     if (!this.expectPeek("LBrace")) {
       return null;
@@ -427,12 +457,13 @@ export class Parser {
     const members: Record<string, StructMember> = {};
     let size = 0;
 
-    while (!this.tokenizer.peekTokenIs("RBrace")) {
+    while (!this.tokenizer.peekTokenIs("RBrace") && !this.tokenizer.curTokenIs("RBrace")) {
       if (!this.expectPeek("Identifier")) {
         return null;
       }
       const firstIdent = this.tokenizer.curToken();
       const firstName = firstIdent.literal.toString();
+      this.rejectIfReserved(firstName, "struct field", firstIdent);
       if (!this.expectPeek("Colon")) {
         return null;
       }
@@ -451,14 +482,22 @@ export class Parser {
       };
       size += sz;
 
-      // account for last item skipping its comma
-      if (this.tokenizer.peekTokenIs("RBrace")) {
-        this.tokenizer.nextToken();
+      // After parseTyping, cur is either on the last type token (scalar/array)
+      // or already past it (fn-type, which is fully consuming). Normalize to
+      // "cur on the separator (',' or '}')".
+      if (!this.tokenizer.curTokenIs("Comma") && !this.tokenizer.curTokenIs("RBrace")) {
+        if (this.tokenizer.peekTokenIs("RBrace")) {
+          this.tokenizer.nextToken();
+          break;
+        }
+        if (!this.expectPeek("Comma")) {
+          return null;
+        }
+      } else if (this.tokenizer.curTokenIs("RBrace")) {
         break;
       }
-      if (!this.expectPeek("Comma")) {
-        return null;
-      }
+      // cur is now ',': the next iteration's while-header or expectPeek("Identifier")
+      // will handle trailing comma vs. another field.
     }
 
     if (this.tokenizer.curTokenIs("Comma")) {
@@ -506,6 +545,7 @@ export class Parser {
       return null;
     }
     const identToken = this.tokenizer.curToken();
+    this.rejectIfReserved(identToken.literal.toString(), "binding", identToken);
 
     let typeAnn = "";
 
@@ -518,8 +558,10 @@ export class Parser {
       typeAnn = t; // full type: "i32", "f32", "Point", "i32[]", etc.
     }
 
-    if (!this.expectPeek("Assign")) {
-      return null;
+    if (!this.tokenizer.curTokenIs("Assign")) {
+      if (!this.expectPeek("Assign")) {
+        return null;
+      }
     }
 
     this.tokenizer.nextToken();
@@ -555,6 +597,11 @@ export class Parser {
         this.pushError("Cannot infer type; add an explicit type annotation", statementToken);
         return null;
       }
+    }
+
+    if (topLevel && typeAnn !== "" && isFnType(typeAnn)) {
+      this.pushError("fn-typed bindings are not allowed at module scope yet", statementToken);
+      return null;
     }
 
     if (value !== null) {
@@ -606,6 +653,7 @@ export class Parser {
           return null;
         }
         seenNames.add(literal);
+        this.rejectIfReserved(literal, "binding", nameToken);
         names.push({ kind: "name", value: literal, token: nameToken });
       }
 
@@ -689,7 +737,19 @@ export class Parser {
     if (expr instanceof StringLiteralExpression) return "string";
     if (expr instanceof CastExpression) return expr.targetType;
     if (expr instanceof Identifier) {
-      return this.identifierTypes.get(expr.tokenLiteral()) ?? "";
+      const name = expr.tokenLiteral();
+      const fnReturns = this.functionReturnTypes.get(name);
+      if (fnReturns !== undefined) {
+        const paramTypes = this.functionParamTypes.get(name) ?? [];
+        const results = fnReturns.length === 0 ? ["void"] : fnReturns;
+        return canonicalFnType(paramTypes, results);
+      }
+      return this.identifierTypes.get(name) ?? "";
+    }
+    if (expr instanceof FunctionLiteralExpression) {
+      const paramTypes = expr.params.map((p) => p.type);
+      const results = expr.returnTypes.length === 0 ? ["void"] : expr.returnTypes;
+      return canonicalFnType(paramTypes, results);
     }
     if (expr instanceof StructLiteralExpression) return expr.name;
     if (expr instanceof ArrayLiteralExpression) {
@@ -1121,6 +1181,15 @@ export class Parser {
     if (!targetType) {
       return null;
     }
+    if (isFnType(targetType)) {
+      this.pushError("fn-type casts are not supported", token);
+      return null;
+    }
+    const sourceType = this.inferTypeFromExpr(left);
+    if (sourceType !== "" && isFnType(sourceType)) {
+      this.pushError("fn-type casts are not supported", token);
+      return null;
+    }
     return new CastExpression(token, left, targetType);
   }
 
@@ -1352,8 +1421,10 @@ export class Parser {
 
     const parameters = this.parseFunctionParameters();
 
-    if (!this.expectPeek("Colon")) {
-      return null;
+    if (!this.tokenizer.curTokenIs("Colon")) {
+      if (!this.expectPeek("Colon")) {
+        return null;
+      }
     }
     this.tokenizer.nextToken(); // consume the colon
 
@@ -1370,8 +1441,10 @@ export class Parser {
       returnTypes = t === "void" ? [] : [t];
     }
 
-    if (!this.expectPeek("LBrace")) {
-      return null;
+    if (!this.tokenizer.curTokenIs("LBrace")) {
+      if (!this.expectPeek("LBrace")) {
+        return null;
+      }
     }
 
     const body = this.parseBlockStatement();
@@ -1380,7 +1453,7 @@ export class Parser {
     return new FunctionLiteralExpression(literalToken, parameters, body, returnTypes);
   }
 
-  private parseTupleReturnType(): string[] | null {
+  private parseTupleReturnType(consuming = false): string[] | null {
     const startToken = this.tokenizer.curToken();
     const parsedTypes: string[] = [];
 
@@ -1392,7 +1465,7 @@ export class Parser {
 
     this.tokenizer.nextToken(); // first type
     while (true) {
-      const parsedType = this.parseTyping();
+      const parsedType = consuming ? this.parseTypingConsuming() : this.parseTyping();
       if (!parsedType) {
         return null;
       }
@@ -1402,19 +1475,50 @@ export class Parser {
       }
       parsedTypes.push(parsedType);
 
-      if (this.tokenizer.peekTokenIs("Comma")) {
-        this.tokenizer.nextToken(); // consume comma
+      if (consuming) {
+        if (this.tokenizer.curTokenIs("Comma")) {
+          this.tokenizer.nextToken();
+          if (this.tokenizer.curTokenIs("RParen")) {
+            this.tokenizer.nextToken();
+            break;
+          }
+          continue;
+        }
+        if (this.tokenizer.curTokenIs("RParen")) {
+          this.tokenizer.nextToken();
+          break;
+        }
+      } else {
+        // Non-consuming path: cur may be on the last type token (scalar/array)
+        // or already past it (fn-type). Handle both by normalizing to
+        // "cur on the separator".
+        if (this.tokenizer.curTokenIs("Comma")) {
+          this.tokenizer.nextToken();
+          if (this.tokenizer.curTokenIs("RParen")) {
+            this.tokenizer.nextToken();
+            break;
+          }
+          continue;
+        }
+        if (this.tokenizer.curTokenIs("RParen")) {
+          this.tokenizer.nextToken();
+          break;
+        }
+
+        if (this.tokenizer.peekTokenIs("Comma")) {
+          this.tokenizer.nextToken(); // consume comma
+          if (this.tokenizer.peekTokenIs("RParen")) {
+            this.tokenizer.nextToken(); // consume closing paren
+            break;
+          }
+          this.tokenizer.nextToken(); // next type
+          continue;
+        }
+
         if (this.tokenizer.peekTokenIs("RParen")) {
           this.tokenizer.nextToken(); // consume closing paren
           break;
         }
-        this.tokenizer.nextToken(); // next type
-        continue;
-      }
-
-      if (this.tokenizer.peekTokenIs("RParen")) {
-        this.tokenizer.nextToken(); // consume closing paren
-        break;
       }
 
       this.pushError("Parser: expected ',' or ')' in tuple return type", this.tokenizer.curToken());
@@ -1443,18 +1547,29 @@ export class Parser {
       params.push(first);
     }
 
-    while (this.tokenizer.peekTokenIs("Comma")) {
-      this.tokenizer.nextToken();
-      this.tokenizer.nextToken();
+    while (true) {
+      // After parseTypedParameter, cur is either on the last type token
+      // (scalar/array — legacy `parseTyping` doesn't consume) or already past
+      // it (fn-type, which is fully consuming). Normalize to "cur on the
+      // separator (',' or ')')".
+      if (!this.tokenizer.curTokenIs("Comma") && !this.tokenizer.curTokenIs("RParen")) {
+        if (this.tokenizer.peekTokenIs("Comma") || this.tokenizer.peekTokenIs("RParen")) {
+          this.tokenizer.nextToken();
+        } else {
+          this.peekError("RParen");
+          return [];
+        }
+      }
+
+      if (this.tokenizer.curTokenIs("RParen")) {
+        this.tokenizer.nextToken();
+        return params;
+      }
+
+      this.tokenizer.nextToken(); // consume ','
       const p = this.parseTypedParameter();
       if (p) params.push(p);
     }
-
-    if (!this.expectPeek("RParen")) {
-      return [];
-    }
-
-    return params;
   }
 
   private parseTypedParameter(): FunctionParam | null {
@@ -1473,6 +1588,7 @@ export class Parser {
     }
     const ident = new Identifier(identToken, type);
     const varName = identToken.literal.toString();
+    this.rejectIfReserved(varName, "parameter", identToken);
     this.identifierTypes.set(varName, type);
     this.locals.push(varName);
     return {
@@ -1512,8 +1628,83 @@ export class Parser {
     return precedence ?? LOWEST;
   }
 
+  private parseFnTypeAnnotation(): string | null {
+    const fnTok = this.tokenizer.curToken();
+    if (!this.tokenizer.curTokenIs("Func")) {
+      this.pushError("expected fn in type position", fnTok);
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume Func — current token is '('
+    if (!this.tokenizer.curTokenIs("LParen")) {
+      this.pushError("expected '(' after fn in type", fnTok);
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume '('
+
+    const params: string[] = [];
+    if (!this.tokenizer.curTokenIs("RParen")) {
+      while (true) {
+        const t = this.parseTypingConsuming();
+        if (t === null) return null;
+        if (t === "void") {
+          this.pushError("void cannot appear as a parameter type", this.tokenizer.curToken());
+          return null;
+        }
+        params.push(t);
+        if (this.tokenizer.curTokenIs("Comma")) {
+          this.tokenizer.nextToken();
+          if (this.tokenizer.curTokenIs("RParen")) {
+            this.tokenizer.nextToken();
+            break;
+          }
+          continue;
+        }
+        if (this.tokenizer.curTokenIs("RParen")) {
+          this.tokenizer.nextToken();
+          break;
+        }
+        this.pushError("expected ',' or ')' in fn type parameter list", this.tokenizer.curToken());
+        return null;
+      }
+    } else {
+      this.tokenizer.nextToken(); // consume ')'
+    }
+
+    if (!this.tokenizer.curTokenIs("Colon")) {
+      this.pushError("expected ':' after fn type params", this.tokenizer.curToken());
+      return null;
+    }
+    this.tokenizer.nextToken(); // consume ':'
+
+    let results: string[];
+    if (this.tokenizer.curTokenIs("LParen")) {
+      const tuple = this.parseTupleReturnType(true);
+      if (!tuple) return null;
+      results = tuple;
+    } else {
+      const r = this.parseTypingConsuming();
+      if (!r) return null;
+      results = [r];
+    }
+
+    if (results.length === 0) {
+      this.pushError("multi-return requires at least 2 types", fnTok);
+      return null;
+    }
+    if (results.includes("void") && results.length > 1) {
+      this.pushError("void cannot appear in a multi-return tuple", fnTok);
+      return null;
+    }
+
+    return canonicalFnType(params, results);
+  }
+
   private parseTyping(): string | null {
     const curToken = this.tokenizer.curToken();
+    if (this.tokenizer.curTokenIs("Func")) {
+      return this.parseFnTypeAnnotation();
+    }
+
     let type = curToken.literal.toString();
 
     const isIdent = this.tokenizer.curTokenIs("Identifier");
@@ -1535,6 +1726,39 @@ export class Parser {
       }
       type += "[]";
     }
+
+    return type;
+  }
+
+  /** Like `parseTyping` but consumes the type tokens; used only for `fn(...)` type syntax. */
+  private parseTypingConsuming(): string | null {
+    const curToken = this.tokenizer.curToken();
+    if (this.tokenizer.curTokenIs("Func")) {
+      return this.parseFnTypeAnnotation();
+    }
+
+    let type = curToken.literal.toString();
+
+    const isIdent = this.tokenizer.curTokenIs("Identifier");
+    const isBuiltin = BUILTIN_TYPES.includes(curToken.type);
+
+    if (!isIdent && !isBuiltin) {
+      this.pushError("Parser: Expected type, none found", this.tokenizer.curToken());
+      return null;
+    }
+
+    if (this.tokenizer.peekTokenIs("LBracket")) {
+      this.tokenizer.nextToken();
+      if (!this.expectPeek("RBracket")) {
+        this.pushError(
+          "Parser: array types must include the ending bracket",
+          this.tokenizer.curToken(),
+        );
+        return null;
+      }
+      type += "[]";
+    }
+    this.tokenizer.nextToken();
 
     return type;
   }
