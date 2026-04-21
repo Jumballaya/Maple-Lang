@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import { extractModuleMeta } from "../src/compiler/emitters/module";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
 import type { MapleError } from "../src/compiler/errors";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
@@ -11,6 +11,7 @@ function check(src: string): MapleError[] {
   const ast = p.parse("test");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   const meta = extractModuleMeta(ast);
+  collectFnReferences(ast, meta);
   linkStdlibImports(meta);
   return typeCheck(ast, meta);
 }
@@ -871,15 +872,27 @@ describe("TypeChecker: 10A function types", () => {
     );
   });
 
-  test("naming a function as value (10A red, 10B green)", () => {
-    // Until 10B, function names are not in scope as rvalues; flip this test when first-class fn refs land.
-    expectError(
-      `
+  test("naming a function as value", () => {
+    const errors = check(`
       fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): void { let op: fn(i32, i32):i32 = add; }
-      `,
-      "Undefined identifier 'add'",
+      fn outer(): void { let op: fn(i32,i32):i32 = add; }
+    `);
+    assert.equal(
+      errors.length,
+      0,
+      `Expected 0 errors, got: ${errors.map((e) => e.message).join("; ")}`,
     );
+    const p = new Parser(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): void { let op: fn(i32,i32):i32 = add; }
+    `);
+    const ast = p.parse("test");
+    const meta = extractModuleMeta(ast);
+    collectFnReferences(ast, meta);
+    linkStdlibImports(meta);
+    assert(meta.fnTable.has("add"), "add should be in fnTable");
+    const entry = meta.fnTable.get("add")!;
+    assert.equal(entry.signatureKey, "fn(i32,i32):i32");
   });
 
   test("rejects top-level let with fn-type annotation (parser)", () => {
@@ -900,6 +913,106 @@ describe("TypeChecker: 10A function types", () => {
         e.message.includes("fn-typed bindings are not allowed at module scope yet"),
       ),
     );
+  });
+});
+
+describe("TypeChecker: 10B named function references", () => {
+  test("function name in scope has canonical fn-type", () => {
+    const p = new Parser(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): void { let op: fn(i32,i32):i32 = add; }
+    `);
+    const ast = p.parse("test");
+    const meta = extractModuleMeta(ast);
+    collectFnReferences(ast, meta);
+    linkStdlibImports(meta);
+    const errors = typeCheck(ast, meta);
+    assert.equal(errors.length, 0, errors.map((e) => e.message).join("; "));
+  });
+
+  test("fn-type mismatch when assigning wrong function", () => {
+    expectError(
+      `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn sub(a: f32): f32 { return a; }
+      fn outer(): void { let op: fn(i32,i32):i32 = sub; }
+      `,
+      "Type mismatch",
+    );
+  });
+
+  test("indirect call through fn-typed variable type-checks", () => {
+    expectNoErrors(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1, 2);
+      }
+    `);
+  });
+
+  test("indirect call arg count mismatch is an error", () => {
+    expectError(
+      `
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1);
+      }
+      `,
+      "expects 2 arguments, got 1",
+    );
+  });
+
+  test("non-callable variable error", () => {
+    expectError(`fn outer(): i32 { let x: i32 = 5; return x(1); }`, "'x' is not callable");
+  });
+
+  test("cannot take reference to _start", () => {
+    expectError(
+      `
+      fn _start(): void {}
+      fn outer(): void { let op: fn():void = _start; }
+      `,
+      "cannot take a reference to '_start'",
+    );
+  });
+
+  test("cannot take reference to imported function", () => {
+    expectError(
+      `
+      import malloc from "memory"
+      fn outer(): void { let op: fn(i32):i32 = malloc; }
+      `,
+      "cannot take a reference to imported function 'malloc'",
+    );
+  });
+
+  test("void function reference has fn():void type", () => {
+    expectNoErrors(`
+      fn noop(): void {}
+      fn outer(): void {
+        let cb: fn():void = noop;
+      }
+    `);
+  });
+
+  test("multi-return function reference type", () => {
+    expectNoErrors(`
+      fn pair(): (i32, i32) { return 1, 2; }
+      fn outer(): void {
+        let cb: fn():(i32,i32) = pair;
+      }
+    `);
+  });
+
+  test("getCallReturnTypes resolves through fn-typed variable for pass-through", () => {
+    expectNoErrors(`
+      fn pair(): (i32, i32) { return 1, 2; }
+      fn forward(op: fn():(i32,i32)): (i32, i32) {
+        return op();
+      }
+    `);
   });
 });
 

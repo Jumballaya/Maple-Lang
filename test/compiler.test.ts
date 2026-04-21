@@ -7,7 +7,11 @@ import { compiler, linkStdlibImports } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
-import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
+import {
+  collectFnReferences,
+  emitModule,
+  extractModuleMeta,
+} from "../src/compiler/emitters/module";
 import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import type { Token } from "../src/lexer/token.types";
@@ -23,6 +27,7 @@ function compile(src: string) {
   const ast = p.parse("test");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join(", ")}`);
   const meta = extractModuleMeta(ast);
+  collectFnReferences(ast, meta);
   linkStdlibImports(meta);
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
@@ -2456,6 +2461,162 @@ describe("Emission: 9C stdlib global import", () => {
     `);
     assert(wat.includes('(import "math" "PI" (global $PI f32))'));
     assert(wat.includes("(global.get $PI)"));
+  });
+});
+
+describe("Emission: 10B named function references", () => {
+  test("WAT section order: imports before table before globals before signatures before functions", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assertContainsInOrder(wat, ["(import", "(table", "(type $sig_", "(func $add"]);
+  });
+
+  test("fn table is emitted with correct size", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes("(table $__fn_table 1 1 funcref)"), `Missing table: ${wat}`);
+  });
+
+  test("elem segment declares trampoline as address-takable", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    // Declarative elem (rather than an active segment with a constant offset)
+    // is used because wasm-ld strips active elem segments from relocatable
+    // objects. The table is populated at runtime inside __make_fnref.
+    assert(wat.includes("(elem declare func $__indirect_add)"), `Missing elem: ${wat}`);
+    assert(
+      wat.includes("(table.set $__fn_table (i32.const 0) (ref.func $__indirect_add))"),
+      `Missing runtime table.set: ${wat}`,
+    );
+  });
+
+  test("trampoline function forwards to original", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes("(func $__indirect_add"), `Missing trampoline: ${wat}`);
+    assert(wat.includes("(param $__env i32)"), `Trampoline missing env param: ${wat}`);
+    assert(wat.includes("(call $add"), `Trampoline missing call: ${wat}`);
+  });
+
+  test("fn-type signature declared with env param", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes("$sig_fn_i32_i32__i32"), `Missing sig name: ${wat}`);
+    assert(
+      wat.includes(
+        "(type $sig_fn_i32_i32__i32 (func (param i32) (param i32) (param i32) (result i32)))",
+      ),
+      `Wrong sig decl: ${wat}`,
+    );
+  });
+
+  test("__make_fnref helper is emitted when closure runtime needed", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes("(func $__make_fnref"), `Missing __make_fnref: ${wat}`);
+    assert(wat.includes("(call $alloc"), `__make_fnref missing alloc call: ${wat}`);
+  });
+
+  test("alloc import synthesized when closure runtime is needed", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes('(import "memory" "malloc"'), `Missing alloc import: ${wat}`);
+  });
+
+  test("emitGet for function name produces call to __make_fnref", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
+    `);
+    assert(wat.includes("(call $__make_fnref (i32.const 0))"), `Missing fnref creation: ${wat}`);
+  });
+
+  test("indirect call emits call_indirect with env+args+idx order", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1, 2);
+      }
+    `);
+    assertContainsInOrder(wat, [
+      "(call_indirect (type $sig_fn_i32_i32__i32)",
+      "(i32.load offset=4",
+      "(i32.const 1)",
+      "(i32.const 2)",
+      "(i32.load offset=0",
+    ]);
+  });
+
+  test("two different functions get distinct slots", () => {
+    const { meta } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn sub(a: i32, b: i32): i32 { return a - b; }
+      fn outer(): void {
+        let op1: fn(i32,i32):i32 = add;
+        let op2: fn(i32,i32):i32 = sub;
+      }
+    `);
+    assert(meta.fnTable.has("add") && meta.fnTable.has("sub"));
+    const s1 = meta.fnTable.get("add")!.slot;
+    const s2 = meta.fnTable.get("sub")!.slot;
+    assert.notEqual(s1, s2, "add and sub should have different slots");
+  });
+
+  test("same function referenced twice gets one slot (dedup)", () => {
+    const { meta } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn outer(): void {
+        let a: fn(i32,i32):i32 = add;
+        let b: fn(i32,i32):i32 = add;
+      }
+    `);
+    assert(meta.fnTable.size === 1, `Expected 1 table entry, got ${meta.fnTable.size}`);
+  });
+
+  test("same fn-type signature used by two functions is declared once", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn sub(a: i32, b: i32): i32 { return a - b; }
+      fn outer(): void {
+        let a: fn(i32,i32):i32 = add;
+        let b: fn(i32,i32):i32 = sub;
+      }
+    `);
+    const count = (wat.match(/\$sig_fn_i32_i32__i32/g) ?? []).length;
+    assert(count >= 1, "Signature should appear at least once");
+    const typeCount = (wat.match(/\(type \$sig_fn_i32_i32__i32/g) ?? []).length;
+    assert.equal(typeCount, 1, "Type declaration should appear exactly once");
+  });
+
+  test("no closure runtime when no fn-refs used", () => {
+    const { wat } = compile(`fn add(a: i32, b: i32): i32 { return a + b; }`);
+    assert(!wat.includes("(table"), `Should not emit table: ${wat}`);
+    assert(!wat.includes("__make_fnref"), `Should not emit __make_fnref: ${wat}`);
+    assert(!wat.includes("alloc"), `Should not emit alloc: ${wat}`);
+  });
+
+  test("void function reference emits correct sig type", () => {
+    const { wat } = compile(`
+      fn noop(): void {}
+      fn outer(): void { let cb: fn():void = noop; }
+    `);
+    assert(wat.includes("$sig_fn___void"), `Missing void sig: ${wat}`);
+    assert(wat.includes("(type $sig_fn___void (func (param i32)))"), `Wrong void sig decl: ${wat}`);
   });
 });
 

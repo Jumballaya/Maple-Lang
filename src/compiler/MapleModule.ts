@@ -4,6 +4,8 @@ type ModuleSections = {
   functions: string[];
   signatures: string[];
   imports: string[];
+  tables: string[];
+  elem: string[];
 };
 
 export class MapleModule {
@@ -13,6 +15,8 @@ export class MapleModule {
     functions: [],
     signatures: [],
     imports: [],
+    tables: [],
+    elem: [],
   };
 
   public readonly name: string;
@@ -25,13 +29,14 @@ export class MapleModule {
   public buildWat(): string {
     const out: string[] = ["(module"];
 
-    out.push(`(import "runtime" "memory" (memory 2))`);
-
-    for (const s of this.sections.signatures) out.push(`  ${s}`);
+    out.push(`  (import "runtime" "memory" (memory 2))`);
     for (const s of this.sections.imports) out.push(`  ${s}`);
+    for (const s of this.sections.tables) out.push(`  ${s}`);
     for (const s of this.sections.globals) out.push(`  ${s}`);
-    for (const s of this.sections.data) out.push(`  ${s}`);
+    for (const s of this.sections.signatures) out.push(`  ${s}`);
     for (const s of this.sections.functions) out.push(`  ${s}`);
+    for (const s of this.sections.data) out.push(`  ${s}`);
+    for (const s of this.sections.elem) out.push(`  ${s}`);
     out.push(")");
     return out.join("\n");
   }

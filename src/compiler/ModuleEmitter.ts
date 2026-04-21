@@ -41,6 +41,8 @@ export class ModuleEmitter {
   private functions: string[] = []; // full (func ... ) declaration
   private signatures: string[] = []; // function signatures, e.g. (type $i_i_type (func (param i32) (result i32)))
   private imports: string[] = []; // imports, e.g. (import "env" "malloc" (func $malloc (type $i_i_type)))
+  private tables: string[] = []; // table declarations, e.g. (table $__fn_table N N funcref)
+  private elem: string[] = []; // elem segments, e.g. (elem (i32.const 0) func $__indirect_foo ...)
 
   // Context
   private mod: ModuleMeta;
@@ -101,6 +103,15 @@ export class ModuleEmitter {
   public addDataWat(s: string) {
     this.data.push(s);
   }
+  public addTableWat(s: string): void {
+    this.tables.push(s);
+  }
+  public addElemWat(s: string): void {
+    this.elem.push(s);
+  }
+  public addFunctionWat(s: string): void {
+    this.functions.push(s);
+  }
 
   public build(): MapleModule {
     const globals = this.needsShadowStack
@@ -112,6 +123,8 @@ export class ModuleEmitter {
       functions: this.functions,
       imports: this.imports,
       signatures: this.signatures,
+      tables: this.tables,
+      elem: this.elem,
     });
   }
 

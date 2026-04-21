@@ -34,6 +34,7 @@ import {
   cmpOps,
   isFnType,
   isUnsignedMapleInteger,
+  parseFnType,
   valueTypeToWasm,
 } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
@@ -47,9 +48,21 @@ const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);
 type ScopeEntry = { type: string; mutable: boolean };
 type Scope = Map<string, ScopeEntry>;
 
-function getCallReturnTypes(meta: ModuleMeta, fnName: string): string[] | null {
+function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): string[] | null {
   const fn = meta.functions[fnName];
   if (fn) return fn.mapleResults;
+
+  if (scope) {
+    const entry = scope.get(fnName);
+    if (entry && isFnType(entry.type)) {
+      const parsed = parseFnType(entry.type);
+      if (parsed) {
+        const r = parsed.results;
+        if (r.length === 1 && r[0] === "void") return [];
+        return r;
+      }
+    }
+  }
 
   const imp = meta.imports[fnName];
   if (imp?.info?.kind === "func") {
@@ -137,7 +150,7 @@ function resolveExprType(
   }
 
   if (expr instanceof CallExpression) {
-    const returnTypes = getCallReturnTypes(meta, expr.func);
+    const returnTypes = getCallReturnTypes(meta, expr.func, scope);
     if (!returnTypes) return null;
     if (returnTypes.length === 0) return "void";
     if (returnTypes.length === 1) return returnTypes[0] ?? null;
@@ -212,11 +225,23 @@ function walkExpression(
 ): void {
   if (!expr) return;
 
-  // Undefined identifier check
+  // Identifier checks
   if (expr instanceof Identifier) {
-    if (!scope.has(expr.tokenLiteral())) {
-      const t = expr.token;
-      errors.push(new MapleError(`Undefined identifier '${expr.tokenLiteral()}'`, t.line, t.col));
+    const id = expr.tokenLiteral();
+    const t = expr.token;
+    if (id === "_start") {
+      errors.push(new MapleError("cannot take a reference to '_start'", t.line, t.col));
+      return;
+    }
+    const imp = meta.imports[id];
+    if (imp?.info?.kind === "func") {
+      errors.push(
+        new MapleError(`cannot take a reference to imported function '${id}'`, t.line, t.col),
+      );
+      return;
+    }
+    if (!scope.has(id)) {
+      errors.push(new MapleError(`Undefined identifier '${id}'`, t.line, t.col));
     }
     return;
   }
@@ -290,20 +315,40 @@ function walkExpression(
         }
       }
     } else {
-      // imported function — check count only (no Maple-level param types available)
-      const imp = meta.imports[expr.func];
-      if (imp?.info?.kind === "func") {
-        const paramChars = imp.info.signature.split("_")[0] ?? "";
-        const expectedCount = paramChars === "v" ? 0 : paramChars.length;
-        if (expr.args.length !== expectedCount) {
+      const localEntry = scope.get(expr.func);
+      if (localEntry && isFnType(localEntry.type)) {
+        // Indirect call through fn-typed variable
+        const parsed = parseFnType(localEntry.type);
+        if (parsed && expr.args.length !== parsed.params.length) {
           const t = expr.token;
           errors.push(
             new MapleError(
-              `Function '${expr.func}' expects ${expectedCount} arguments, got ${expr.args.length}`,
+              `Indirect call to '${expr.func}' expects ${parsed.params.length} arguments, got ${expr.args.length}`,
               t.line,
               t.col,
             ),
           );
+        }
+      } else if (localEntry) {
+        // Variable exists but is not callable
+        const t = expr.token;
+        errors.push(new MapleError(`'${expr.func}' is not callable`, t.line, t.col));
+      } else {
+        // imported function — check count only (no Maple-level param types available)
+        const imp = meta.imports[expr.func];
+        if (imp?.info?.kind === "func") {
+          const paramChars = imp.info.signature.split("_")[0] ?? "";
+          const expectedCount = paramChars === "v" ? 0 : paramChars.length;
+          if (expr.args.length !== expectedCount) {
+            const t = expr.token;
+            errors.push(
+              new MapleError(
+                `Function '${expr.func}' expects ${expectedCount} arguments, got ${expr.args.length}`,
+                t.line,
+                t.col,
+              ),
+            );
+          }
         }
       }
     }
@@ -483,7 +528,7 @@ function walkStatement(
         return;
       }
       walkExpression(rhs, scope, meta, errors);
-      const returnTypes = getCallReturnTypes(meta, rhs.func);
+      const returnTypes = getCallReturnTypes(meta, rhs.func, scope);
       if (!returnTypes || returnTypes.length < 2) {
         const t = stmt.token;
         errors.push(new MapleError("destructure RHS must be a multi-return call", t.line, t.col));
@@ -551,7 +596,7 @@ function walkStatement(
       returnValues.length === 1 &&
       returnValues[0] instanceof CallExpression
     ) {
-      const passTypes = getCallReturnTypes(meta, returnValues[0].func);
+      const passTypes = getCallReturnTypes(meta, returnValues[0].func, scope);
       if (passTypes && passTypes.length >= 2) {
         if (passTypes.length !== fnReturnTypes.length) {
           const t = stmt.token;
@@ -748,7 +793,7 @@ function walkStatement(
 export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const errors: MapleError[] = [];
 
-  // Build global scope: stdlib imported globals first, then top-level lets
+  // Build global scope: stdlib imported globals first, then top-level lets, then functions
   const globals: Scope = new Map();
   for (const [id, imp] of Object.entries(meta.imports)) {
     if (imp.info?.kind === "global") {
@@ -772,6 +817,13 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
         mutable: stmt.mutable,
       });
     }
+  }
+  // All user-defined functions are callable values (fn-type)
+  for (const [fnName, fnMeta] of Object.entries(meta.functions)) {
+    const paramTypes = fnMeta.params.map((p) => p.type);
+    const results = fnMeta.mapleResults;
+    const key = canonicalFnType(paramTypes, results);
+    globals.set(fnName, { type: key, mutable: false });
   }
 
   // Check top-level globals (Check 1)

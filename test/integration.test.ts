@@ -14,7 +14,11 @@ import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import { emitModule, extractModuleMeta } from "../src/compiler/emitters/module";
+import {
+  collectFnReferences,
+  emitModule,
+  extractModuleMeta,
+} from "../src/compiler/emitters/module";
 import { Parser } from "../src/parser/Parser";
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -24,6 +28,7 @@ function compile(src: string): string {
   const ast = p.parse("integration");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   const meta = extractModuleMeta(ast);
+  collectFnReferences(ast, meta);
   linkStdlibImports(meta);
   return emitModule(ast, meta).buildWat();
 }

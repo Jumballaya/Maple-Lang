@@ -1,6 +1,10 @@
 import type { ModuleMeta } from "./emitters/emitter.types";
 
 const math: ModuleMeta = {
+  fnTable: new Map(),
+  fnSignatures: new Map(),
+  liftedLambdas: [],
+  needsClosureRuntime: false,
   name: "math",
   dataPtr: 0,
   exports: {
@@ -102,6 +106,10 @@ const math: ModuleMeta = {
 };
 
 const memory: ModuleMeta = {
+  fnTable: new Map(),
+  fnSignatures: new Map(),
+  liftedLambdas: [],
+  needsClosureRuntime: false,
   name: "memory",
   dataPtr: 0,
   exports: {
@@ -132,6 +140,10 @@ const memory: ModuleMeta = {
 };
 
 const string: ModuleMeta = {
+  fnTable: new Map(),
+  fnSignatures: new Map(),
+  liftedLambdas: [],
+  needsClosureRuntime: false,
   name: "string",
   dataPtr: 0,
   exports: {

@@ -27,6 +27,11 @@ export function isFnType(t: string): boolean {
   return t.startsWith("fn(");
 }
 
+/** Maps a canonical fn-type key to its WAT `$sig_` name, e.g. `fn(i32):i32` → `$sig_fn_i32__i32`. */
+export function fnTypeToSigName(key: string): string {
+  return `$sig_${key.replace(/[(),:]/g, "_")}`;
+}
+
 /** Inverse of `canonicalFnType` for tooling / error messages (handles nested `fn` in params). */
 export function parseFnType(key: string): { params: string[]; results: string[] } | null {
   if (!key.startsWith("fn(")) return null;

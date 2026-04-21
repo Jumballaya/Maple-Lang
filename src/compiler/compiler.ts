@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
 import type { ModuleMeta } from "./emitters/emitter.types";
-import { emitModule, extractModuleMeta } from "./emitters/module";
+import { collectFnReferences, emitModule, extractModuleMeta } from "./emitters/module";
 import type { MapleModule } from "./MapleModule";
 import { stdlib } from "./stdlib";
 import { typeCheck } from "./TypeChecker";
@@ -105,6 +105,22 @@ export async function compiler(
       throw new Error(`unable to find module: ${imp.module}`);
     }
     pass1[imp.module] = { data: extractModuleMeta(userMod), ast: userMod };
+  }
+
+  // 1b. Collect function references for closure runtime
+  for (const mod of Object.values(pass1)) {
+    collectFnReferences(mod.ast, mod.data);
+  }
+
+  // 1c. Re-scan imports for stdlib modules synthesized in step 1b
+  // (collectFnReferences may inject e.g. memory.malloc for __make_fnref).
+  for (const mod of Object.values(pass1)) {
+    for (const imp of Object.values(mod.data.imports)) {
+      const stdMod = stdlib[imp.module];
+      if (stdMod && !stdLibList[imp.module]) {
+        stdLibList[imp.module] = stdMod;
+      }
+    }
   }
 
   // 2. Link module imports/exports

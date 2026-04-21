@@ -45,6 +45,10 @@ export class ModuleBuilder {
       dataPtr,
       imports,
       deferredGlobalInits: this.deferredGlobalInits,
+      fnTable: new Map(),
+      fnSignatures: new Map(),
+      liftedLambdas: [],
+      needsClosureRuntime: false,
     };
   }
 

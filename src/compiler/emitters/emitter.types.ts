@@ -1,12 +1,38 @@
 import type { ASTExpression } from "../../parser/ast/types/ast.type";
 import type { StructMember } from "../../shared/types";
 
+export type FnTypeKey = string;
+
+export type FnSignature = {
+  key: FnTypeKey;
+  params: string[];
+  results: string[];
+  isVoid: boolean;
+};
+
+export type FnTableEntry = {
+  slot: number;
+  trampolineName: string;
+  originalName: string;
+  signatureKey: FnTypeKey;
+  isLambda: boolean;
+};
+
+export type LambdaLiftedFn = {
+  syntheticName: string;
+  ordinal: number;
+  captures: Array<{ name: string; type: string; envOffset: number }>;
+  envSize: number;
+  signatureKey: FnTypeKey;
+};
+
 export type VariableMeta = {
   name: string;
-  scope: "global" | "local" | "memory" | "param";
+  scope: "global" | "local" | "memory" | "param" | "env";
   type: "i32" | "f32" | "bool" | `*${string}` | `${string}[]` | string;
   addr?: number;
   offset?: number;
+  envOffset?: number;
 };
 
 export type FunctionMeta = {
@@ -44,6 +70,7 @@ export type ImportMeta = {
   results?: string[] | undefined;
   info?: ExportMeta | undefined;
   resolved: boolean;
+  synthesized?: boolean;
 };
 export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
 export type DeferredGlobalInit = {
@@ -75,6 +102,10 @@ export type ModuleMeta = {
   stringPool: Record<string, number>;
   dataPtr: number;
   deferredGlobalInits: DeferredGlobalInit[];
+  fnTable: Map<string, FnTableEntry>;
+  fnSignatures: Map<FnTypeKey, FnSignature>;
+  liftedLambdas: LambdaLiftedFn[];
+  needsClosureRuntime: boolean;
 };
 
 export type { StructMember };
