@@ -3,13 +3,13 @@ import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 
 export function emitContinueStatement(stmt: ContinueStatement, emitter: ModuleEmitter): void {
-  const lp = emitter.getCurrentLabel("loop");
-  if (lp === undefined) {
+  const target = emitter.getCurrentLabel("continue");
+  if (target === undefined) {
     throw new MapleError(
       "continue statement must be inside a loop",
       stmt.token.line,
       stmt.token.col,
     );
   }
-  emitter.writer.line(`(br ${lp})`);
+  emitter.writer.line(`(br ${target})`);
 }

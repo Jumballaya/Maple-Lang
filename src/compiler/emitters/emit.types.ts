@@ -32,6 +32,14 @@ export function fnTypeToSigName(key: string): string {
   return `$sig_${key.replace(/[(),:]/g, "_")}`;
 }
 
+/** Number of WASM result values a fn-type produces: 0 for void, N for tuple, 1 otherwise. */
+export function fnTypeResultCount(key: string): number {
+  const parsed = parseFnType(key);
+  if (!parsed) return 0;
+  if (parsed.results.length === 1 && parsed.results[0] === "void") return 0;
+  return parsed.results.length;
+}
+
 /** Inverse of `canonicalFnType` for tooling / error messages (handles nested `fn` in params). */
 export function parseFnType(key: string): { params: string[]; results: string[] } | null {
   if (!key.startsWith("fn(")) return null;

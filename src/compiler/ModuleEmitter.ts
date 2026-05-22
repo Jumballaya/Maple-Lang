@@ -47,9 +47,10 @@ export class ModuleEmitter {
   // Context
   private mod: ModuleMeta;
   private currentFn: FunctionContext | undefined = undefined;
-  private labelStack: Record<"break" | "loop", string[]> = {
+  private labelStack: Record<"break" | "loop" | "continue", string[]> = {
     break: [],
     loop: [],
+    continue: [],
   };
   private needsShadowStack = false;
 
@@ -70,13 +71,13 @@ export class ModuleEmitter {
   }
 
   // loop labels
-  public makeLabel(type: "break" | "loop"): string {
+  public makeLabel(type: "break" | "loop" | "continue"): string {
     const label = makeLabel(type);
     this.labelStack[type].push(label);
     return label;
   }
 
-  public destroyLabel(type: "break" | "loop", name: string): void {
+  public destroyLabel(type: "break" | "loop" | "continue", name: string): void {
     const lastLabel = this.labelStack[type][this.labelStack[type].length - 1];
     if (lastLabel !== name) {
       throw new Error(`incorrect label: ${name}, expected: ${lastLabel}`);
@@ -84,8 +85,23 @@ export class ModuleEmitter {
     this.labelStack[type].pop();
   }
 
-  public getCurrentLabel(type: "break" | "loop"): string | undefined {
+  public getCurrentLabel(type: "break" | "loop" | "continue"): string | undefined {
     return this.labelStack[type][this.labelStack[type].length - 1];
+  }
+
+  // For `while`, the loop label IS the continue target (jumping to the loop
+  // top re-checks the condition). Push the existing loop label onto the
+  // continue stack instead of allocating a new one.
+  public pushContinueAlias(label: string): void {
+    this.labelStack.continue.push(label);
+  }
+
+  public popContinueAlias(label: string): void {
+    const top = this.labelStack.continue[this.labelStack.continue.length - 1];
+    if (top !== label) {
+      throw new Error(`continue alias mismatch: expected ${label}, got ${top}`);
+    }
+    this.labelStack.continue.pop();
   }
 
   // text API

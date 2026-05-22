@@ -59,8 +59,14 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
   }
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
+  const cont = emitter.makeLabel("continue");
+  emitter.writer.open(`(block ${cont}`);
+
   // body
   emitStatement(stmt.loopBody, emitter);
+
+  emitter.writer.close(")");
+  emitter.destroyLabel("continue", cont);
 
   // update function
   emitter.writer.line(emitExpression(stmt.updateExpr.expression!, emitter));

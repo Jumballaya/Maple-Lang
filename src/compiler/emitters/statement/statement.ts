@@ -14,7 +14,7 @@ import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../../parser/ast/types/ast.type";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { valueTypeToWasm } from "../emit.types";
+import { fnTypeResultCount, isFnType, valueTypeToWasm } from "../emit.types";
 import { emitGet } from "../expression/core";
 import { emitExpression } from "../expression/expression";
 import { emitBreakStatement } from "./break";
@@ -141,14 +141,20 @@ export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void 
       // not be left on the WASM stack (which would corrupt subsequent instructions).
       emitter.writer.line(emitPostfixVoid(stmt.expression, emitter));
     } else if (stmt.expression instanceof CallExpression) {
+      emitter.writer.line(emitExpression(stmt.expression, emitter));
       const returnTypes = emitter.getCallReturnTypes(stmt.expression.func);
-      if (returnTypes && returnTypes.length >= 2) {
-        emitter.writer.line(emitExpression(stmt.expression, emitter));
+      if (returnTypes) {
         for (let i = 0; i < returnTypes.length; i++) {
           emitter.writer.line("(drop)");
         }
       } else {
-        emitter.writer.line(emitExpression(stmt.expression!, emitter));
+        const fnVar = emitter.getVar(stmt.expression.func);
+        if (fnVar && isFnType(fnVar.type)) {
+          const resultCount = fnTypeResultCount(fnVar.type);
+          for (let i = 0; i < resultCount; i++) {
+            emitter.writer.line("(drop)");
+          }
+        }
       }
     } else {
       emitter.writer.line(emitExpression(stmt.expression!, emitter));

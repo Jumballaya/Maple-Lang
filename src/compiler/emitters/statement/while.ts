@@ -55,8 +55,14 @@ export function emitWhileStatement(stmt: WhileStatement, emitter: ModuleEmitter)
   // loop condition
   emitter.writer.line(`(br_if ${br} (i32.eqz ${asI32}))`);
 
+  // For while, the loop label is also the continue target — jumping there
+  // re-evaluates the condition, which is what `continue` should do.
+  emitter.pushContinueAlias(lp);
+
   // loop body
   emitStatement(stmt.loopBody, emitter);
+
+  emitter.popContinueAlias(lp);
 
   // loop to top
   emitter.writer.line(`(br ${lp})`);
