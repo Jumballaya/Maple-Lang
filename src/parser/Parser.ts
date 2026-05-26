@@ -53,14 +53,21 @@ import type {
 import { BUILTIN_TYPES } from "./ast/types/builtin_types";
 import {
   ASSIGN,
+  BIT_AND,
+  BIT_OR,
+  BIT_XOR,
   CALL,
+  CAST,
   EQUALS,
   INDEX,
   LESSGREATER,
+  LOGICAL_AND,
+  LOGICAL_OR,
   LOWEST,
   type ParserPrecedence,
   PREFIX,
   PRODUCT,
+  SHIFT,
   SUM,
 } from "./ast/types/parser.type";
 
@@ -89,32 +96,31 @@ export class Parser {
   private locals: string[] = []; // all of the variables local to the current scope
 
   private precendences: Partial<Record<Token["type"], ParserPrecedence>> = {
-    Equals: LESSGREATER,
-    NotEquals: LESSGREATER,
+    LogicalOr: LOGICAL_OR,
+    LogicalAnd: LOGICAL_AND,
+    Pipe: BIT_OR,
+    Caret: BIT_XOR,
+    Ampersand: BIT_AND,
+    Equals: EQUALS,
+    NotEquals: EQUALS,
     LessThan: LESSGREATER,
     GreaterThan: LESSGREATER,
     LessThanEquals: LESSGREATER,
     GreaterThanEquals: LESSGREATER,
-    LogicalOr: LESSGREATER,
-    LogicalAnd: LESSGREATER,
+    LeftShift: SHIFT,
+    RightShift: SHIFT,
     Plus: SUM,
     Minus: SUM,
     Slash: PRODUCT,
     Star: PRODUCT,
     Percent: PRODUCT,
 
-    Ampersand: PRODUCT,
-    Caret: PRODUCT,
-    Pipe: PRODUCT,
-    LeftShift: PRODUCT,
-    RightShift: PRODUCT,
-
     LParen: CALL,
 
     LBracket: INDEX,
     Period: INDEX,
 
-    As: PRODUCT,
+    As: CAST,
 
     Assign: ASSIGN,
     AddAssign: ASSIGN,
@@ -807,7 +813,8 @@ export class Parser {
 
     const returnValues: ASTExpression[] = [];
     while (true) {
-      const returnExpr = this.parseExpression(EQUALS);
+      // ASSIGN so `return a = b;` is rejected, but every other operator is in.
+      const returnExpr = this.parseExpression(ASSIGN);
       if (!returnExpr) {
         return null;
       }

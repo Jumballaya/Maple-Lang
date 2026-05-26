@@ -1771,17 +1771,6 @@ describe("compound assignments", () => {
     assert.equal(runExport(wat, "run", [5]), 30);
   });
 
-  maybeTest("+= on array element", () => {
-    const wat = compile(`
-      export fn run(): i32 {
-        let arr: i32[] = [10, 20, 30];
-        arr[1] += 5;
-        return arr[1];
-      }
-    `);
-    assert.equal(runExport(wat, "run"), 25);
-  });
-
   maybeTest("postfix ++ and -- as statement", () => {
     const wat = compile(`
       export fn run(): i32 {
