@@ -2,7 +2,13 @@ import type { InfixExpression } from "../../../parser/ast/expressions/InfixExpre
 import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import type { WasmValueType } from "../emit.types";
-import { f64CompareOp, i32CompareOp, i64CompareOp, valueTypeToWasm } from "../emit.types";
+import {
+  f64CompareOp,
+  i32CompareOp,
+  i64CompareOp,
+  isUnsignedMapleInteger,
+  valueTypeToWasm,
+} from "../emit.types";
 import { emitExpression } from "./expression";
 
 function wasmTypeOfExpr(e: ASTExpression, emitter: ModuleEmitter): WasmValueType {
@@ -22,14 +28,19 @@ export function emitOperand(
   const raw = emitExpression(e, emitter);
   const src = wasmTypeOfExpr(e, emitter);
   if (src === target) return raw;
+  // Integer signedness drives convert/extend opcodes. Float-side signs are
+  // bitwise (promote/demote/wrap), and unused float→int paths still default
+  // to signed because the operand's *target* signedness isn't reachable here.
+  const srcMt = emitter.getExprType(e);
+  const srcSign = srcMt !== null && isUnsignedMapleInteger(srcMt) ? "u" : "s";
   if (src === "i32" && target === "f32") {
-    return `(f32.convert_i32_s ${raw})`;
+    return `(f32.convert_i32_${srcSign} ${raw})`;
   }
   if (src === "f32" && target === "i32") {
     return `(i32.trunc_f32_s ${raw})`;
   }
   if (src === "i32" && target === "i64") {
-    return `(i64.extend_i32_s ${raw})`;
+    return `(i64.extend_i32_${srcSign} ${raw})`;
   }
   if (src === "i64" && target === "i32") {
     return `(i32.wrap_i64 ${raw})`;
@@ -41,13 +52,13 @@ export function emitOperand(
     return `(f32.demote_f64 ${raw})`;
   }
   if (src === "i32" && target === "f64") {
-    return `(f64.convert_i32_s ${raw})`;
+    return `(f64.convert_i32_${srcSign} ${raw})`;
   }
   if (src === "f64" && target === "i32") {
     return `(i32.trunc_f64_s ${raw})`;
   }
   if (src === "i64" && target === "f64") {
-    return `(f64.convert_i64_s ${raw})`;
+    return `(f64.convert_i64_${srcSign} ${raw})`;
   }
   if (src === "f64" && target === "i64") {
     return `(i64.trunc_f64_s ${raw})`;
@@ -56,7 +67,7 @@ export function emitOperand(
     return `(i64.trunc_f32_s ${raw})`;
   }
   if (src === "i64" && target === "f32") {
-    return `(f32.convert_i64_s ${raw})`;
+    return `(f32.convert_i64_${srcSign} ${raw})`;
   }
   throw new Error(`emitOperand: cannot widen/narrow ${src} to ${target}`);
 }
@@ -140,12 +151,12 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
     case "&&": {
       const li = truthyToI32(expr.left, numType, emitter);
       const ri = truthyToI32(expr.right, numType, emitter);
-      return `(i32.and ${li} ${ri})`;
+      return `(if (result i32) ${li} (then ${ri}) (else (i32.const 0)))`;
     }
     case "||": {
       const li = truthyToI32(expr.left, numType, emitter);
       const ri = truthyToI32(expr.right, numType, emitter);
-      return `(i32.or ${li} ${ri})`;
+      return `(if (result i32) ${li} (then (i32.const 1)) (else ${ri}))`;
     }
     case "&": {
       return `(${numType}.and ${l} ${r})`;

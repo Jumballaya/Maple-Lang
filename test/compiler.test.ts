@@ -381,14 +381,16 @@ describe("Emission: Comparisons", () => {
 });
 
 describe("Emission: Bitwise / Logical / Shift Ops", () => {
-  test("&& and || emit i32.and / i32.or", () => {
+  test("&& and || emit short-circuiting if blocks", () => {
     const { wat } = compile(`
       fn test(a: i32, b: i32): i32 {
         return (a && b) || (a && 1);
       }
     `);
-    assert(wat.includes("i32.and"));
-    assert(wat.includes("i32.or"));
+    // && short-circuits to 0 when the left side is false.
+    assert.match(wat, /\(if \(result i32\)[^\n]*\(then[^\n]*\)\s*\(else \(i32\.const 0\)\)\)/);
+    // || short-circuits to 1 when the left side is true.
+    assert.match(wat, /\(if \(result i32\)[^\n]*\(then \(i32\.const 1\)\)\s*\(else[^\n]*\)\)/);
   });
 
   test("& | ^ emit bitwise opcodes", () => {

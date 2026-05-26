@@ -176,8 +176,12 @@ export async function compiler(
     toWrite.push(emitModule(mod.ast, mod.data));
   }
 
-  // create build folder
+  // create build folder + output destination
   await run("mkdir -p build");
+  const outputDir = path.dirname(outputPath);
+  if (outputDir && outputDir !== "." && outputDir !== "build") {
+    await run(`mkdir -p ${outputDir}`);
+  }
   // build .wat files
   const toCompile: string[] = [];
   for (const mod of toWrite) {

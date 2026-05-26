@@ -994,6 +994,198 @@ describe("for-loop continue runs the update clause", () => {
   });
 });
 
+// ─── && and || short-circuit ───────────────────────────────────────────────
+// Side-effect probes: each subject calls a helper that mutates a global
+// counter, then returns. If the operator evaluates the right-hand side when
+// it shouldn't, the counter will be too high. The runtime invocations are
+// the source of truth — pure WAT structure tests can't distinguish "emitted
+// the right opcode" from "actually short-circuits."
+
+describe("&& and || short-circuit", () => {
+  maybeTest("&& with false LHS does not evaluate RHS", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = 0 && tick();
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 0);
+  });
+
+  maybeTest("&& with true LHS does evaluate RHS", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = 1 && tick();
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("|| with true LHS does not evaluate RHS", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = 1 || tick();
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 0);
+  });
+
+  maybeTest("|| with false LHS does evaluate RHS", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = 0 || tick();
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("&& and || still produce correct boolean results", () => {
+    const wat = compile(`
+      export fn and_ff(): i32 { let r: i32 = 0 && 0; return r; }
+      export fn and_ft(): i32 { let r: i32 = 0 && 1; return r; }
+      export fn and_tf(): i32 { let r: i32 = 1 && 0; return r; }
+      export fn and_tt(): i32 { let r: i32 = 1 && 1; return r; }
+      export fn or_ff(): i32  { let r: i32 = 0 || 0; return r; }
+      export fn or_ft(): i32  { let r: i32 = 0 || 1; return r; }
+      export fn or_tf(): i32  { let r: i32 = 1 || 0; return r; }
+      export fn or_tt(): i32  { let r: i32 = 1 || 1; return r; }
+    `);
+    assert.equal(runExport(wat, "and_ff"), 0);
+    assert.equal(runExport(wat, "and_ft"), 0);
+    assert.equal(runExport(wat, "and_tf"), 0);
+    assert.equal(runExport(wat, "and_tt"), 1);
+    assert.equal(runExport(wat, "or_ff"), 0);
+    assert.equal(runExport(wat, "or_ft"), 1);
+    assert.equal(runExport(wat, "or_tf"), 1);
+    assert.equal(runExport(wat, "or_tt"), 1);
+  });
+
+  maybeTest("chained && short-circuits at first false", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = tick() && 0 && tick();
+        return count;
+      }
+    `);
+    // first tick (1) → 0 → short-circuit. RHS tick must not run.
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("chained || short-circuits at first true", () => {
+    const wat = compile(`
+      let count: i32 = 0;
+      fn tick(): i32 { count = count + 1; return 1; }
+      export fn run(): i32 {
+        let r: i32 = tick() || tick() || tick();
+        return count;
+      }
+    `);
+    // first tick returns 1 → short-circuit; only one tick.
+    assert.equal(runExport(wat, "run"), 1);
+  });
+});
+
+// ─── unsigned float casts use _u opcodes ───────────────────────────────────
+// For values ≥ 2^31, signed convert/trunc opcodes give the wrong answer. The
+// runtime tests use round-trips and bit-level comparisons because wasmtime
+// displays u32 as signed, which can mask the bug at the CLI but not at the
+// language level.
+
+describe("unsigned int <-> float casts", () => {
+  maybeTest("u32 → f32 → u32 round-trips for values above 2^31", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: u32 = 3000000000;
+        let f: f32 = x as f32;
+        let back: u32 = f as u32;
+        if (back == x) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("u32 → f64 → u32 round-trips for values above 2^31", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: u32 = 3500000000;
+        let f: f64 = x as f64;
+        let back: u32 = f as u32;
+        if (back == x) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("u32 → f32 emits convert_i32_u in WAT", () => {
+    const wat = compile(`
+      export fn run(): f32 {
+        let x: u32 = 1;
+        return x as f32;
+      }
+    `);
+    assert.match(wat, /f32\.convert_i32_u/);
+    assert(!wat.includes("f32.convert_i32_s"));
+  });
+
+  maybeTest("f32 → u32 emits trunc_f32_u in WAT", () => {
+    const wat = compile(`
+      export fn run(): u32 {
+        let f: f32 = 100.0;
+        return f as u32;
+      }
+    `);
+    assert.match(wat, /i32\.trunc_f32_u/);
+    assert(!wat.includes("i32.trunc_f32_s"));
+  });
+
+  maybeTest("signed i32 → f32 still uses convert_i32_s", () => {
+    const wat = compile(`
+      export fn run(): f32 {
+        let x: i32 = 0 - 5;
+        return x as f32;
+      }
+    `);
+    assert.match(wat, /f32\.convert_i32_s/);
+    assert(!wat.includes("f32.convert_i32_u"));
+  });
+
+  maybeTest("signed i32 → f32 → i32 preserves negative values", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 0 - 42;
+        let f: f32 = x as f32;
+        return f as i32;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), -42);
+  });
+
+  maybeTest("u8 → f32 emits unsigned convert", () => {
+    const wat = compile(`
+      export fn run(): f32 {
+        let x: u8 = 200;
+        return x as f32;
+      }
+    `);
+    assert.match(wat, /f32\.convert_i32_u/);
+  });
+});
+
 // ─── unused call results are dropped at statement position ─────────────────
 // Pins both (a) the WAT contains the right number of (drop)s and (b) the
 // resulting module instantiates and runs without trapping. A leftover stack
@@ -1177,5 +1369,635 @@ describe("unused call results are dropped at statement position", () => {
     assert(endIdx > 0, "could not find end of call_indirect");
     const tail = after.slice(endIdx, endIdx + 40);
     assert.match(tail, /\s*\(drop\)/, `expected (drop) after call_indirect: ${tail}`);
+  });
+});
+
+// ─── for-loop semantics with non-zero starts and varied steps ──────────────
+// The demos only use `for (let i = 0; i < n; i = i + 1)`. These exercise
+// non-zero starts, decrementing counters, expression bounds, and varied
+// step sizes.
+
+describe("for-loop non-trivial bounds", () => {
+  maybeTest("counts up from 5", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 5; i < 10; i = i + 1) {
+          total = total + i;
+        }
+        return total;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 5 + 6 + 7 + 8 + 9);
+  });
+
+  maybeTest("counts down from 10 to 0 exclusive", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 10; i > 0; i = i - 1) {
+          total = total + i;
+        }
+        return total;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 55);
+  });
+
+  maybeTest("counts down inclusive to zero", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 5; i >= 0; i = i - 1) {
+          total = total + i;
+        }
+        return total;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 15);
+  });
+
+  maybeTest("steps by 2", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 0; i < 10; i = i + 2) {
+          total = total + 1;
+        }
+        return total;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 5);
+  });
+
+  maybeTest("init from parameter expression", () => {
+    const wat = compile(`
+      export fn run(start: i32, count: i32): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = start; i < start + count; i = i + 1) {
+          total = total + i;
+        }
+        return total;
+      }
+    `);
+    assert.equal(runExport(wat, "run", [3, 4]), 3 + 4 + 5 + 6);
+    assert.equal(runExport(wat, "run", [-2, 5]), -2 + -1 + 0 + 1 + 2);
+    assert.equal(runExport(wat, "run", [100, 0]), 0);
+  });
+
+  maybeTest("update is an expression call to itself", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 1; i < 100; i = i * 2) {
+          total = total + 1;
+        }
+        return total;
+      }
+    `);
+    // 1, 2, 4, 8, 16, 32, 64 → 7
+    assert.equal(runExport(wat, "run"), 7);
+  });
+
+  maybeTest("zero iterations when init violates condition", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let touched: i32 = 0;
+        for (let i: i32 = 100; i < 50; i = i + 1) {
+          touched = 999;
+        }
+        return touched;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 0);
+  });
+
+  maybeTest("break exits at exact iteration", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let last: i32 = -1;
+        for (let i: i32 = 10; i < 100; i = i + 1) {
+          if (i == 15) { break; }
+          last = i;
+        }
+        return last;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 14);
+  });
+
+  maybeTest("nested for with distinct bounds runs full cartesian", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let pairs: i32 = 0;
+        for (let i: i32 = 1; i < 4; i = i + 1) {
+          for (let j: i32 = 10; j < 13; j = j + 1) {
+            pairs = pairs + 1;
+          }
+        }
+        return pairs;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 9);
+  });
+
+  maybeTest("i64 counter from non-zero start", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let total: i64 = 0 as i64;
+        for (let i: i64 = 100 as i64; i < 105 as i64; i = i + 1 as i64) {
+          total = total + i;
+        }
+        return total as i32;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 100 + 101 + 102 + 103 + 104);
+  });
+});
+
+// ─── while-loop conditions and break placement ─────────────────────────────
+
+describe("while-loop variations", () => {
+  maybeTest("condition involving function call re-evaluated each iteration", () => {
+    const wat = compile(`
+      fn under(n: i32, limit: i32): i32 {
+        if (n < limit) { return 1; }
+        return 0;
+      }
+      export fn run(limit: i32): i32 {
+        let i: i32 = 0;
+        while (under(i, limit)) {
+          i = i + 1;
+        }
+        return i;
+      }
+    `);
+    assert.equal(runExport(wat, "run", [7]), 7);
+    assert.equal(runExport(wat, "run", [0]), 0);
+  });
+
+  maybeTest("break mid-loop returns the partial count", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let i: i32 = 0;
+        while (i < 100) {
+          if (i == 13) { break; }
+          i = i + 1;
+        }
+        return i;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 13);
+  });
+
+  maybeTest("condition uses && — both subconditions checked", () => {
+    const wat = compile(`
+      export fn run(a: i32, b: i32): i32 {
+        let n: i32 = 0;
+        while (n < a && n < b) {
+          n = n + 1;
+        }
+        return n;
+      }
+    `);
+    assert.equal(runExport(wat, "run", [5, 10]), 5);
+    assert.equal(runExport(wat, "run", [10, 5]), 5);
+    assert.equal(runExport(wat, "run", [0, 100]), 0);
+  });
+});
+
+// ─── recursion ─────────────────────────────────────────────────────────────
+
+describe("recursion", () => {
+  maybeTest("factorial via recursion", () => {
+    const wat = compile(`
+      fn fact(n: i32): i32 {
+        if (n <= 1) { return 1; }
+        return n * fact(n - 1);
+      }
+      export fn run(n: i32): i32 { return fact(n); }
+    `);
+    assert.equal(runExport(wat, "run", [0]), 1);
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [5]), 120);
+    assert.equal(runExport(wat, "run", [10]), 3628800);
+  });
+
+  maybeTest("fibonacci via recursion", () => {
+    const wat = compile(`
+      fn fib(n: i32): i32 {
+        if (n < 2) { return n; }
+        return fib(n - 1) + fib(n - 2);
+      }
+      export fn run(n: i32): i32 { return fib(n); }
+    `);
+    assert.equal(runExport(wat, "run", [0]), 0);
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [10]), 55);
+  });
+
+  maybeTest("mutual recursion: even/odd", () => {
+    const wat = compile(`
+      fn is_even(n: i32): i32 {
+        if (n == 0) { return 1; }
+        return is_odd(n - 1);
+      }
+      fn is_odd(n: i32): i32 {
+        if (n == 0) { return 0; }
+        return is_even(n - 1);
+      }
+      export fn run(n: i32): i32 { return is_even(n); }
+    `);
+    assert.equal(runExport(wat, "run", [0]), 1);
+    assert.equal(runExport(wat, "run", [1]), 0);
+    assert.equal(runExport(wat, "run", [10]), 1);
+    assert.equal(runExport(wat, "run", [11]), 0);
+  });
+
+  maybeTest("accumulator-passing recursion (tail style)", () => {
+    const wat = compile(`
+      fn sum_acc(n: i32, acc: i32): i32 {
+        if (n == 0) { return acc; }
+        return sum_acc(n - 1, acc + n);
+      }
+      export fn run(n: i32): i32 { return sum_acc(n, 0); }
+    `);
+    assert.equal(runExport(wat, "run", [5]), 15);
+    assert.equal(runExport(wat, "run", [10]), 55);
+  });
+});
+
+// ─── arithmetic edge cases ─────────────────────────────────────────────────
+
+describe("arithmetic edge cases", () => {
+  maybeTest("signed integer division with negative dividend", () => {
+    const wat = compile(`
+      export fn run(a: i32, b: i32): i32 { return a / b; }
+    `);
+    assert.equal(runExport(wat, "run", [-10, 3]), -3);
+    assert.equal(runExport(wat, "run", [10, -3]), -3);
+    assert.equal(runExport(wat, "run", [-10, -3]), 3);
+  });
+
+  maybeTest("signed modulo preserves sign of dividend", () => {
+    const wat = compile(`
+      export fn run(a: i32, b: i32): i32 { return a % b; }
+    `);
+    assert.equal(runExport(wat, "run", [-10, 3]), -1);
+    assert.equal(runExport(wat, "run", [10, -3]), 1);
+  });
+
+  maybeTest("i32 wraps on overflow", () => {
+    const wat = compile(`
+      export fn run(): i32 { return 2147483647 + 1; }
+    `);
+    assert.equal(runExport(wat, "run"), -2147483648);
+  });
+
+  maybeTest("i64 arithmetic above i32 range", () => {
+    const wat = compile(`
+      export fn run(a: i32, b: i32): i32 {
+        let x: i64 = a as i64;
+        let y: i64 = b as i64;
+        let prod: i64 = x * y;
+        return prod as i32;
+      }
+    `);
+    // 100000 * 100000 = 10_000_000_000 which is > i32 range,
+    // truncated as i32 → 1410065408
+    assert.equal(runExport(wat, "run", [100000, 100000]), 1410065408);
+  });
+
+  maybeTest("float division and float mod (custom lowering)", () => {
+    const wat = compile(`
+      export fn divf(a: f32, b: f32): f32 { return a / b; }
+      export fn modf(a: f32, b: f32): f32 { return a % b; }
+    `);
+    const divResult = runExport(wat, "divf", [9, 4]) as number;
+    assert(Math.abs(divResult - 2.25) < 1e-6);
+    const modResult = runExport(wat, "modf", [9, 4]) as number;
+    assert(Math.abs(modResult - 1.0) < 1e-6);
+  });
+
+  maybeTest("comparison ops produce 0/1 i32", () => {
+    const wat = compile(`
+      export fn lt(a: i32, b: i32): i32 {
+        if (a < b) { return 1; }
+        return 0;
+      }
+      export fn ge(a: i32, b: i32): i32 {
+        if (a >= b) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "lt", [1, 2]), 1);
+    assert.equal(runExport(wat, "lt", [2, 1]), 0);
+    assert.equal(runExport(wat, "lt", [1, 1]), 0);
+    assert.equal(runExport(wat, "ge", [1, 1]), 1);
+    assert.equal(runExport(wat, "ge", [0, 1]), 0);
+  });
+});
+
+// ─── bitwise and shift ops ─────────────────────────────────────────────────
+
+describe("bitwise and shift", () => {
+  maybeTest("AND/OR/XOR with concrete bit patterns", () => {
+    const wat = compile(`
+      export fn band(a: i32, b: i32): i32 { return a & b; }
+      export fn bor(a: i32, b: i32): i32 { return a | b; }
+      export fn bxor(a: i32, b: i32): i32 { return a ^ b; }
+    `);
+    assert.equal(runExport(wat, "band", [0b1100, 0b1010]), 0b1000);
+    assert.equal(runExport(wat, "bor", [0b1100, 0b1010]), 0b1110);
+    assert.equal(runExport(wat, "bxor", [0b1100, 0b1010]), 0b0110);
+  });
+
+  maybeTest("left shift", () => {
+    const wat = compile(`
+      export fn shl(a: i32, b: i32): i32 { return a << b; }
+    `);
+    assert.equal(runExport(wat, "shl", [1, 0]), 1);
+    assert.equal(runExport(wat, "shl", [1, 5]), 32);
+    assert.equal(runExport(wat, "shl", [3, 4]), 48);
+  });
+
+  maybeTest("signed right shift preserves sign", () => {
+    const wat = compile(`
+      export fn shr(a: i32, b: i32): i32 { return a >> b; }
+    `);
+    assert.equal(runExport(wat, "shr", [-16, 2]), -4);
+    assert.equal(runExport(wat, "shr", [16, 2]), 4);
+  });
+
+  maybeTest("XOR with -1 flips all bits", () => {
+    const wat = compile(`
+      export fn run(a: i32): i32 { return a ^ (0 - 1); }
+    `);
+    assert.equal(runExport(wat, "run", [0]), -1);
+    assert.equal(runExport(wat, "run", [-1]), 0);
+    assert.equal(runExport(wat, "run", [5]), -6);
+  });
+});
+
+// ─── compound assignment operators ─────────────────────────────────────────
+
+describe("compound assignments", () => {
+  maybeTest("+= -= *= /= %= on local", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 100;
+        x += 5;     // 105
+        x -= 10;    // 95
+        x *= 2;     // 190
+        x /= 4;     // 47
+        x %= 10;    // 7
+        return x;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 7);
+  });
+
+  maybeTest("+= with expression rhs", () => {
+    const wat = compile(`
+      export fn run(n: i32): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 1; i <= n; i = i + 1) {
+          total += i * 2;
+        }
+        return total;
+      }
+    `);
+    // sum(2,4,6,8,10) = 30 for n=5
+    assert.equal(runExport(wat, "run", [5]), 30);
+  });
+
+  maybeTest("+= on array element", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let arr: i32[] = [10, 20, 30];
+        arr[1] += 5;
+        return arr[1];
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 25);
+  });
+
+  maybeTest("postfix ++ and -- as statement", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 10;
+        x++;
+        x++;
+        x--;
+        return x;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 11);
+  });
+});
+
+// ─── struct field access on offsets > 0 ────────────────────────────────────
+
+describe("struct field access", () => {
+  maybeTest("read fields at every offset", () => {
+    const wat = compile(`
+      struct Quad { a: i32, b: i32, c: i32, d: i32 }
+      export fn run(): i32 {
+        let q: Quad = { a = 10, b = 20, c = 30, d = 40 };
+        return q.d - q.c + q.b - q.a;
+      }
+    `);
+    // 40 - 30 + 20 - 10 = 20
+    assert.equal(runExport(wat, "run"), 20);
+  });
+
+  maybeTest("write field at non-first offset preserves others", () => {
+    const wat = compile(`
+      struct Triple { x: i32, y: i32, z: i32 }
+      export fn run(): i32 {
+        let t: Triple = { x = 1, y = 2, z = 3 };
+        t.y = 99;
+        return t.x * 1000 + t.y * 100 + t.z;
+      }
+    `);
+    // x=1 unchanged, y=99 written, z=3 unchanged → 1 * 1000 + 99 * 100 + 3
+    assert.equal(runExport(wat, "run"), 1000 + 9900 + 3);
+  });
+
+  maybeTest("struct with i64 field reads back correctly", () => {
+    const wat = compile(`
+      struct Big { tag: i32, big: i64 }
+      export fn run(): i32 {
+        let b: Big = { tag = 7, big = 1000000 as i64 };
+        return b.tag + (b.big as i32);
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1000007);
+  });
+
+  maybeTest("struct with f32 fields", () => {
+    const wat = compile(`
+      struct V { x: f32, y: f32 }
+      export fn run(): i32 {
+        let v: V = { x = 3.0, y = 4.0 };
+        let m: f32 = v.x * v.x + v.y * v.y;
+        return m as i32;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 25);
+  });
+});
+
+// ─── array operations driven by loops ──────────────────────────────────────
+
+describe("array operations with computed indices", () => {
+  maybeTest("write all elements via loop, read back via loop", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let arr: i32[] = [0, 0, 0, 0, 0];
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          arr[i] = i * i;
+        }
+        let total: i32 = 0;
+        for (let i: i32 = 0; i < 5; i = i + 1) {
+          total = total + arr[i];
+        }
+        return total;
+      }
+    `);
+    // 0 + 1 + 4 + 9 + 16 = 30
+    assert.equal(runExport(wat, "run"), 30);
+  });
+
+  maybeTest("find max of array", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let arr: i32[] = [3, 7, 1, 9, 4, 6];
+        let max: i32 = arr[0];
+        for (let i: i32 = 1; i < 6; i = i + 1) {
+          if (arr[i] > max) { max = arr[i]; }
+        }
+        return max;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 9);
+  });
+
+  maybeTest("swap two elements via temp", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let arr: i32[] = [10, 20, 30];
+        let t: i32 = arr[0];
+        arr[0] = arr[2];
+        arr[2] = t;
+        return arr[0] * 100 + arr[1] * 10 + arr[2];
+      }
+    `);
+    // [30, 20, 10] → 3020 + 200 + 10? 30*100=3000 + 20*10=200 + 10=3210
+    assert.equal(runExport(wat, "run"), 3210);
+  });
+
+  maybeTest("array index from function parameter", () => {
+    const wat = compile(`
+      export fn run(i: i32): i32 {
+        let arr: i32[] = [11, 22, 33, 44, 55];
+        return arr[i];
+      }
+    `);
+    assert.equal(runExport(wat, "run", [0]), 11);
+    assert.equal(runExport(wat, "run", [2]), 33);
+    assert.equal(runExport(wat, "run", [4]), 55);
+  });
+});
+
+// ─── multi-return + destructuring with non-trivial inputs ──────────────────
+
+describe("multi-return destructuring", () => {
+  maybeTest("divmod with various dividend/divisor", () => {
+    const wat = compile(`
+      fn divmod(n: i32, d: i32): (i32, i32) { return n / d, n % d; }
+      export fn quot(n: i32, d: i32): i32 {
+        let (q, r) = divmod(n, d);
+        return q;
+      }
+      export fn rem(n: i32, d: i32): i32 {
+        let (q, r) = divmod(n, d);
+        return r;
+      }
+    `);
+    assert.equal(runExport(wat, "quot", [17, 5]), 3);
+    assert.equal(runExport(wat, "rem", [17, 5]), 2);
+    assert.equal(runExport(wat, "quot", [100, 7]), 14);
+    assert.equal(runExport(wat, "rem", [100, 7]), 2);
+  });
+
+  maybeTest("swap returns both values", () => {
+    const wat = compile(`
+      fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+      export fn fst(a: i32, b: i32): i32 {
+        let (x, y) = swap(a, b);
+        return x;
+      }
+      export fn snd(a: i32, b: i32): i32 {
+        let (x, y) = swap(a, b);
+        return y;
+      }
+    `);
+    assert.equal(runExport(wat, "fst", [1, 2]), 2);
+    assert.equal(runExport(wat, "snd", [1, 2]), 1);
+  });
+
+  maybeTest("discard with _ in destructure", () => {
+    const wat = compile(`
+      fn divmod(n: i32, d: i32): (i32, i32) { return n / d, n % d; }
+      export fn run(): i32 {
+        let (q, _) = divmod(20, 6);
+        return q;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
+  });
+});
+
+// ─── global variables ──────────────────────────────────────────────────────
+
+describe("global variables", () => {
+  maybeTest("global int mutated from function", () => {
+    const wat = compile(`
+      let counter: i32 = 0;
+      fn tick(): void { counter = counter + 1; }
+      export fn run(): i32 {
+        tick();
+        tick();
+        tick();
+        return counter;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
+  });
+
+  maybeTest("global with non-zero initializer", () => {
+    const wat = compile(`
+      let base: i32 = 100;
+      export fn run(): i32 { return base + 5; }
+    `);
+    assert.equal(runExport(wat, "run"), 105);
+  });
+
+  maybeTest("const global cannot be re-assigned but reads work", () => {
+    const wat = compile(`
+      const FACTOR: i32 = 7;
+      export fn run(n: i32): i32 { return n * FACTOR; }
+    `);
+    assert.equal(runExport(wat, "run", [6]), 42);
+  });
+
+  maybeTest("two globals coexist", () => {
+    const wat = compile(`
+      let a: i32 = 10;
+      let b: i32 = 20;
+      export fn run(): i32 { return a * b; }
+    `);
+    assert.equal(runExport(wat, "run"), 200);
   });
 });

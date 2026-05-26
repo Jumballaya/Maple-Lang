@@ -215,33 +215,34 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     }
     const fromW = valueTypeToWasm(fromMt);
     const toWasm = valueTypeToWasm(expression.targetType);
-    const unsignedSrc = isUnsignedMapleInteger(fromMt);
+    const srcSign = isUnsignedMapleInteger(fromMt) ? "u" : "s";
+    const dstSign = isUnsignedMapleInteger(expression.targetType) ? "u" : "s";
     if (fromW === toWasm) {
       writer.line(inner);
     } else if (fromW === "i32" && toWasm === "i64") {
-      writer.line(unsignedSrc ? `(i64.extend_i32_u ${inner})` : `(i64.extend_i32_s ${inner})`);
+      writer.line(`(i64.extend_i32_${srcSign} ${inner})`);
     } else if (fromW === "i64" && toWasm === "i32") {
       writer.line(`(i32.wrap_i64 ${inner})`);
     } else if (fromW === "i32" && toWasm === "f32") {
-      writer.line(`(f32.convert_i32_s ${inner})`);
+      writer.line(`(f32.convert_i32_${srcSign} ${inner})`);
     } else if (fromW === "f32" && toWasm === "i32") {
-      writer.line(`(i32.trunc_f32_s ${inner})`);
+      writer.line(`(i32.trunc_f32_${dstSign} ${inner})`);
     } else if (fromW === "i32" && toWasm === "f64") {
-      writer.line(`(f64.convert_i32_s ${inner})`);
+      writer.line(`(f64.convert_i32_${srcSign} ${inner})`);
     } else if (fromW === "f64" && toWasm === "i32") {
-      writer.line(`(i32.trunc_f64_s ${inner})`);
+      writer.line(`(i32.trunc_f64_${dstSign} ${inner})`);
     } else if (fromW === "f32" && toWasm === "f64") {
       writer.line(`(f64.promote_f32 ${inner})`);
     } else if (fromW === "f64" && toWasm === "f32") {
       writer.line(`(f32.demote_f64 ${inner})`);
     } else if (fromW === "i64" && toWasm === "f64") {
-      writer.line(`(f64.convert_i64_s ${inner})`);
+      writer.line(`(f64.convert_i64_${srcSign} ${inner})`);
     } else if (fromW === "f64" && toWasm === "i64") {
-      writer.line(`(i64.trunc_f64_s ${inner})`);
+      writer.line(`(i64.trunc_f64_${dstSign} ${inner})`);
     } else if (fromW === "f32" && toWasm === "i64") {
-      writer.line(`(i64.trunc_f32_s ${inner})`);
+      writer.line(`(i64.trunc_f32_${dstSign} ${inner})`);
     } else if (fromW === "i64" && toWasm === "f32") {
-      writer.line(`(f32.convert_i64_s ${inner})`);
+      writer.line(`(f32.convert_i64_${srcSign} ${inner})`);
     } else {
       writer.line(inner);
     }
