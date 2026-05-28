@@ -1,5 +1,6 @@
 import type { SwitchStatement } from "../../../parser/ast/statements/SwitchStatement";
 import type { ModuleEmitter } from "../../ModuleEmitter";
+import { valueTypeToWasm } from "../emit.types";
 import { makeLabel } from "../emitter.utils";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
@@ -59,8 +60,15 @@ export function emitSwitchStatement(stmt: SwitchStatement, emitter: ModuleEmitte
     emitter.writer.open(`(block ${caseLabels[i]}`);
   }
 
-  // Dispatch
-  const cond = emitExpression(stmt.switchExpr, emitter);
+  // Dispatch. `br_table` requires an i32 discriminant; coerce wider lanes.
+  let cond = emitExpression(stmt.switchExpr, emitter);
+  const condMt = emitter.getExprType(stmt.switchExpr);
+  if (condMt !== null) {
+    const w = valueTypeToWasm(condMt);
+    if (w === "i64") cond = `(i32.wrap_i64 ${cond})`;
+    else if (w === "f32") cond = `(i32.trunc_f32_s ${cond})`;
+    else if (w === "f64") cond = `(i32.trunc_f64_s ${cond})`;
+  }
   emitter.writer.line(`(br_table ${table.join(" ")} ${cond})`);
 
   // Close each case block and emit its body, then implicit exit to switch end

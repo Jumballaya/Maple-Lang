@@ -478,9 +478,9 @@ describe("Integration: wat2wasm validation", () => {
   });
 });
 
-// ─── 8A: Memory-Backed Local Structs — Integration ─────────────────────────
+// ─── Memory-Backed Local Structs — Integration ─────────────────────────
 
-describe("Integration: 8A local struct wat2wasm validation", () => {
+describe("Integration: local struct wat2wasm validation", () => {
   maybeTest("local struct — create, read field, return passes wat2wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
@@ -1696,6 +1696,20 @@ describe("arithmetic edge cases", () => {
     assert.equal(runExport(wat, "ge", [1, 1]), 1);
     assert.equal(runExport(wat, "ge", [0, 1]), 0);
   });
+
+  // Compound op on a wider type with a narrower literal. The literal `5` is
+  // i32 by default; the emitter currently throws "incompatible binary operand
+  // lanes i64 vs i32".
+  maybeTest("i64 += integer literal compiles", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i64 = 1 as i64;
+        x += 5;
+        return x as i32;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 6);
+  });
 });
 
 // ─── bitwise and shift ops ─────────────────────────────────────────────────
@@ -1783,11 +1797,67 @@ describe("compound assignments", () => {
     `);
     assert.equal(runExport(wat, "run"), 11);
   });
+
+  // Compound assignment on a struct field — currently emit throws
+  // "compound assignment for members not implemented".
+  test("compound assignment on a struct field is supported", () => {
+    let threw = false;
+    try {
+      compile(`
+        struct P { x: i32 }
+        export fn run(): i32 {
+          let p: P = { x = 10 };
+          p.x += 5;
+          return p.x;
+        }
+      `);
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, false, "compile should not throw on `p.x += 5`");
+  });
+
+  // Postfix on a struct field — currently reports "Undefined identifier 'x'"
+  // because the postfix path goes through the identifier resolver.
+  test("postfix on a struct field is supported", () => {
+    let threw = false;
+    try {
+      compile(`
+        struct P { x: i32 }
+        export fn run(): i32 {
+          let p: P = { x = 10 };
+          p.x++;
+          return p.x;
+        }
+      `);
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, false, "compile should not throw on `p.x++`");
+  });
+
+  // Postfix on an array element — currently "postfix statement only supports
+  // identifiers".
+  test("postfix on an array element is supported", () => {
+    let threw = false;
+    try {
+      compile(`
+        export fn run(): i32 {
+          let arr: i32[] = [1, 2, 3];
+          arr[1]++;
+          return arr[1];
+        }
+      `);
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, false, "compile should not throw on `arr[1]++`");
+  });
 });
 
 // ─── struct field access on offsets > 0 ────────────────────────────────────
 
-describe("struct field access", () => {
+describe("structs", () => {
   maybeTest("read fields at every offset", () => {
     const wat = compile(`
       struct Quad { a: i32, b: i32, c: i32, d: i32 }
@@ -1835,11 +1905,143 @@ describe("struct field access", () => {
     `);
     assert.equal(runExport(wat, "run"), 25);
   });
+
+  // Field offsets should align each field to its natural boundary, and the
+  // struct's size should pad to a multiple of the largest field's alignment.
+  // `struct M { a: u8, b: i32 }` currently packs b at offset 1, size 5.
+  maybeTest("struct {u8, i32} aligns b to offset 4 and has size 8", () => {
+    const wat = compile(`
+      struct M { a: u8, b: i32 }
+      export fn run(): i32 {
+        let m: M = { a = 7, b = 100 };
+        return (m.a as i32) + m.b;
+      }
+    `);
+    const frame = wat.match(/i32\.sub \(global\.get \$__sp\) \(i32\.const (\d+)\)/);
+    assert(frame, "could not find shadow-stack frame allocation");
+    const structSize = Number.parseInt(frame[1]!, 10);
+    assert.equal(structSize, 8, `struct M sized ${structSize} bytes (expected 8 with alignment)`);
+    const storeB = wat.match(
+      /\(i32\.store \(i32\.add \(local\.get \$m\) \(i32\.const (\d+)\)\) \(i32\.const 100\)\)/,
+    );
+    assert(storeB, "could not find i32.store of value 100 to field b");
+    assert.equal(storeB[1], "4", `field b stored at offset ${storeB[1]} (expected 4)`);
+  });
+
+  // Struct equality silently does pointer comparison instead of field-wise
+  // compare. Either the typechecker should reject it, or it should do the
+  // expected structural comparison.
+  maybeTest("struct == struct compares fields (or is rejected)", () => {
+    const wat = compile(`
+      struct P { x: i32, y: i32 }
+      export fn run(): i32 {
+        let a: P = { x = 5, y = 7 };
+        let b: P = { x = 5, y = 7 };
+        if (a == b) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  test("an empty struct parses", () => {
+    const p = new Parser(`
+      struct Unit {}
+      fn f(): Unit { let u: Unit = {}; return u; }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // An empty (marker) struct can be declared, instantiated, and passed back.
+  maybeTest("empty struct can be instantiated and used as a marker type", () => {
+    const wat = compile(`
+      struct Marker {}
+      fn make(): Marker { let m: Marker = {}; return m; }
+      export fn run(): i32 {
+        let m: Marker = make();
+        return 7;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 7);
+  });
+
+  // Struct literal containing another struct literal as a field value.
+  test("nested struct literal as a field value parses", () => {
+    const p = new Parser(`
+      struct A { v: i32 }
+      struct B { a: A }
+      fn f(): i32 {
+        let b: B = { a = { v = 42 } };
+        return b.a.v;
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // Struct literal as an argument avoids an intermediate let.
+  test("struct literal as a function argument parses", () => {
+    const p = new Parser(`
+      struct P { x: i32 }
+      fn take(p: P): i32 { return p.x; }
+      fn run(): i32 { return take({ x = 42 }); }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // Returning a struct literal directly without a let-binding.
+  test("returning a struct literal directly parses", () => {
+    const p = new Parser(`
+      struct P { x: i32, y: i32 }
+      fn make(): P { return { x = 1, y = 2 }; }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // A struct field of fn-type should work — same as a let binding of fn-type
+  // does today.
+  maybeTest("struct field of fn-type can be called via .field()", () => {
+    const wat = compile(`
+      struct Handler { cb: fn(i32):i32 }
+      fn dbl(x: i32): i32 { return x * 2; }
+      export fn run(): i32 {
+        let h: Handler = { cb = dbl };
+        return h.cb(5);
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+
+  // A global struct literal containing a string field fails with
+  // "unsupported type: string" during emit.
+  maybeTest("global struct with a string field compiles", () => {
+    const wat = compile(`
+      struct M { tag: i32, msg: string }
+      let g: M = { tag = 1, msg = "hello" };
+      export fn run(): i32 { return g.msg.len; }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+
+  // Member access on a function call (`make().x`) avoids a throwaway let.
+  maybeTest("member access chained after a function call works", () => {
+    const wat = compile(`
+      struct P { x: i32 }
+      fn make(): P { let p: P = { x = 42 }; return p; }
+      export fn run(): i32 { return make().x; }
+    `);
+    assert.equal(runExport(wat, "run"), 42);
+  });
 });
 
 // ─── array operations driven by loops ──────────────────────────────────────
 
-describe("array operations with computed indices", () => {
+describe("array operations", () => {
   maybeTest("write all elements via loop, read back via loop", () => {
     const wat = compile(`
       export fn run(): i32 {
@@ -1896,6 +2098,120 @@ describe("array operations with computed indices", () => {
     assert.equal(runExport(wat, "run", [0]), 11);
     assert.equal(runExport(wat, "run", [2]), 33);
     assert.equal(runExport(wat, "run", [4]), 55);
+  });
+
+  // Arrays of bool / string / fn-ref are natural extensions of i32[]/f32[].
+  maybeTest("bool[] is a supported array type", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: bool[] = [true, false, true];
+        if (a[0]) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("string[] is a supported array type", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: string[] = ["foo", "bar"];
+        return a[0].len;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
+  });
+
+  // Two-dimensional arrays are a common shape.
+  test("i32[][] is an accepted type annotation", () => {
+    const p = new Parser(`
+      fn f(): i32 {
+        let a: i32[][] = [[1, 2], [3, 4]];
+        return a[1][0];
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // `.len` works for strings; arrays should expose the same thing.
+  maybeTest("arrays have a .len property", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: i32[] = [10, 20, 30, 40];
+        return a.len;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 4);
+  });
+
+  // The parser limits array-literal elements to bare numeric/bool literals,
+  // so cast-elements and struct-elements get rejected.
+  test("array literal of struct literals parses", () => {
+    const p = new Parser(`
+      struct P { x: i32 }
+      fn f(): i32 {
+        let arr: P[] = [P{x:1}, P{x:2}];
+        return arr[1].x;
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  test("array literal of i64 with `as i64` casts parses", () => {
+    const p = new Parser(`
+      fn f(): i32 {
+        let arr: i64[] = [1 as i64, 2 as i64];
+        return arr[1] as i32;
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // Inline array-literal expression with immediate index.
+  test("indexing an inline array literal parses", () => {
+    const p = new Parser(`
+      fn f(): i32 { return [10, 20, 30][1]; }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // Out-of-bounds and negative indices silently read adjacent memory today.
+  // A safe implementation should trap or surface the issue.
+  maybeTest("reading past the end of an array traps or returns a known value", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: i32[] = [1, 2, 3];
+        return a[10];
+      }
+    `);
+    let trapped = false;
+    let value: unknown = null;
+    try {
+      value = runExport(wat, "run");
+    } catch {
+      trapped = true;
+    }
+    assert(trapped || value !== 0, `OOB read returned ${value} silently`);
+  });
+
+  maybeTest("negative array index traps or is rejected", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: i32[] = [1, 2, 3];
+        return a[0 - 1];
+      }
+    `);
+    let trapped = false;
+    try {
+      runExport(wat, "run");
+    } catch {
+      trapped = true;
+    }
+    assert(trapped, "negative array index should trap (or be rejected at compile time)");
   });
 });
 
@@ -1988,5 +2304,403 @@ describe("global variables", () => {
       export fn run(): i32 { return a * b; }
     `);
     assert.equal(runExport(wat, "run"), 200);
+  });
+
+  // A global initializer that references another global compiles and reads
+  // the referenced value. Currently fails at wat2wasm.
+  maybeTest("a global initializer can reference another global", () => {
+    const wat = compile(`
+      let A: i32 = 10;
+      let B: i32 = A + 5;
+      export fn run(): i32 { return B; }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+});
+
+// ─── Comments ───────────────────────────────────────────────────────────────
+
+describe("comments", () => {
+  test("block comments /* ... */ are accepted", () => {
+    const p = new Parser(`
+      fn f(): i32 {
+        /* multi-line
+           comment */
+        return 42;
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // Comment content (including code-like text inside the comment) must not
+  // influence the compiled program.
+  maybeTest("block comment content is ignored at runtime", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        /* return 999; */
+        return 42;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 42);
+  });
+});
+
+// ─── Numeric literals ───────────────────────────────────────────────────────
+
+describe("numeric literals", () => {
+  // Underscores in numeric literals are common readability sugar in modern langs.
+  maybeTest("underscores in numeric literals are accepted", () => {
+    const wat = compile(`
+      export fn run(): i32 { return 1_000_000; }
+    `);
+    assert.equal(runExport(wat, "run"), 1_000_000);
+  });
+
+  // `0b` and `0x` are both supported; `0o` is the obvious gap.
+  maybeTest("octal literal 0o17 is accepted", () => {
+    const wat = compile(`
+      export fn run(): i32 { return 0o17; }
+    `);
+    assert.equal(runExport(wat, "run"), 15);
+  });
+
+  // Hex literals above 2^53 lose precision through `Number.parseInt`, then
+  // emit an `(i32.const ...)` whose value isn't a valid integer.
+  maybeTest("hex literal 0xFFFFFFFFFFFFFFFF compiles to a valid i64", () => {
+    const wat = compile(`
+      export fn run(): i64 {
+        return 0xFFFFFFFFFFFFFFFF as i64;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+});
+
+// ─── Unary operators ────────────────────────────────────────────────────────
+
+describe("unary operators", () => {
+  test("unary plus +x is accepted", () => {
+    const p = new Parser(`
+      fn f(): i32 { return +5; }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  maybeTest("unary plus is a no-op at runtime", () => {
+    const wat = compile(`
+      export fn run(): i32 { return +5; }
+      export fn negRun(): i32 { let x: i32 = 0 - 7; return +x; }
+    `);
+    assert.equal(runExport(wat, "run"), 5);
+    assert.equal(runExport(wat, "negRun"), -7);
+  });
+
+  maybeTest("logical-not on i64 produces valid wasm and correct semantics", () => {
+    const wat = compile(`
+      export fn notZero(): i32 { let x: i64 = 0 as i64; if (!x) { return 1; } return 0; }
+      export fn notOne(): i32  { let x: i64 = 1 as i64; if (!x) { return 1; } return 0; }
+    `);
+    assert.equal(runExport(wat, "notZero"), 1);
+    assert.equal(runExport(wat, "notOne"), 0);
+  });
+
+  maybeTest("logical-not on f32 produces valid wasm and correct semantics", () => {
+    const wat = compile(`
+      export fn notZero(): i32 { let x: f32 = 0.0; if (!x) { return 1; } return 0; }
+      export fn notOne(): i32  { let x: f32 = 1.0; if (!x) { return 1; } return 0; }
+    `);
+    assert.equal(runExport(wat, "notZero"), 1);
+    assert.equal(runExport(wat, "notOne"), 0);
+  });
+
+  maybeTest("logical-not on f64 produces valid wasm and correct semantics", () => {
+    const wat = compile(`
+      export fn notZero(): i32 { let x: f64 = 0.0 as f64; if (!x) { return 1; } return 0; }
+      export fn notOne(): i32  { let x: f64 = 1.0 as f64; if (!x) { return 1; } return 0; }
+    `);
+    assert.equal(runExport(wat, "notZero"), 1);
+    assert.equal(runExport(wat, "notOne"), 0);
+  });
+});
+
+// ─── Ternary operator ───────────────────────────────────────────────────────
+
+describe("ternary operator", () => {
+  test("cond ? a : b is accepted", () => {
+    const p = new Parser(`
+      fn f(c: i32): i32 { return c ? 1 : 0; }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+});
+
+// ─── Narrow integer casts ──────────────────────────────────────────────────
+// Casting through a narrower type is the standard way to mask high bits.
+// Currently `x as u8` is a no-op — the cast emits just `(local.get $x)`.
+
+describe("narrow integer casts", () => {
+  maybeTest("i32 -> u8 truncates to 8 bits", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 300;
+        let b: u8 = x as u8;
+        return b as i32;
+      }
+    `);
+    // 300 = 0x12C; low byte is 0x2C = 44.
+    assert.equal(runExport(wat, "run"), 44);
+  });
+
+  maybeTest("i32 -> u16 truncates to 16 bits", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 70000;
+        let h: u16 = x as u16;
+        return h as i32;
+      }
+    `);
+    // 70000 & 0xFFFF = 4464.
+    assert.equal(runExport(wat, "run"), 4464);
+  });
+
+  maybeTest("i32 -> i8 sign-extends from low byte", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 200;
+        let b: i8 = x as i8;
+        return b as i32;
+      }
+    `);
+    // 200 fits in u8; as i8 it's -56 (low byte interpreted signed).
+    assert.equal(runExport(wat, "run"), -56);
+  });
+});
+
+// ─── Switch statements ─────────────────────────────────────────────────────
+
+describe("switch statements", () => {
+  // The typechecker permits `switch (expr)` on f32; the emitter lowers to
+  // `br_table` which requires an i32 discriminant. wat2wasm rejects.
+  maybeTest("switch on f32 discriminant is either rejected or lowered correctly", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: f32 = 1.0;
+        switch (x) {
+          case 1: { return 10; }
+          default: { return 0; }
+        }
+        return -1;
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+
+  test("switch case can use a negative integer literal", () => {
+    const p = new Parser(`
+      fn f(x: i32): i32 {
+        switch (x) {
+          case -1: { return 100; }
+          default: { return 0; }
+        }
+      }
+    `);
+    p.parse("test");
+    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
+  });
+
+  // The parser now accepts negative case literals but the emitter's br_table
+  // only covers `[0..maxCase]`, so negative values fall through to default
+  // instead of firing their case body.
+  maybeTest("switch dispatches on a negative case value at runtime", () => {
+    const wat = compile(`
+      export fn run(x: i32): i32 {
+        switch (x) {
+          case -1: { return 100; }
+          case 0:  { return 200; }
+          default: { return 999; }
+        }
+        return -1;
+      }
+    `);
+    assert.equal(runExport(wat, "run", [-1]), 100);
+    assert.equal(runExport(wat, "run", [0]), 200);
+    assert.equal(runExport(wat, "run", [5]), 999);
+  });
+
+  // Switch on f32 is coerced to i32 via `i32.trunc_f32_s`, so the case
+  // bodies fire for values whose truncation matches.
+  maybeTest("switch on f32 dispatches on the truncated integer value", () => {
+    const wat = compile(`
+      export fn run(x: f32): i32 {
+        switch (x) {
+          case 1: { return 100; }
+          case 2: { return 200; }
+          default: { return 0; }
+        }
+        return -1;
+      }
+    `);
+    assert.equal(runExport(wat, "run", [1.0]), 100);
+    assert.equal(runExport(wat, "run", [1.9]), 100); // trunc(1.9) == 1
+    assert.equal(runExport(wat, "run", [2.5]), 200);
+    assert.equal(runExport(wat, "run", [9.0]), 0);
+  });
+
+  // Switch emits one br_table entry per index in [0..maxCase]. A high case
+  // value causes the emitted WAT to balloon (a 1M case produces ~18 MB of text).
+  test("switch with sparse high case value does not balloon br_table", () => {
+    const wat = compile(`
+      fn dispatch(x: i32): i32 {
+        switch (x) {
+          case 1: { return 1; }
+          case 1000000: { return 999; }
+          default: { return 0; }
+        }
+        return -1;
+      }
+    `);
+    assert(wat.length < 50_000, `WAT for a 2-case switch ballooned to ${wat.length} chars`);
+  });
+});
+
+// ─── String semantics ──────────────────────────────────────────────────────
+
+describe("string semantics", () => {
+  // String comparison compares pointer values, not content.
+  maybeTest("two identical string literals are equal under ==", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: string = "hello";
+        let b: string = "hello";
+        if (a == b) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  // stdlib.ts declares `string_copy` with the wrong arity. The actual WAT
+  // takes (i32, i32) and returns nothing.
+  maybeTest("string_copy import matches its real (src, dst) -> void signature", () => {
+    const wat = compile(`
+      import string_copy from "string"
+      export fn run(): void {
+        let src: string = "hello";
+        let dst: string = "world";
+        string_copy(src, dst);
+      }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+});
+
+// ─── Lexical scoping ───────────────────────────────────────────────────────
+// `let` declarations currently share a single per-function symbol table, so
+// shadowing in nested blocks silently clobbers the outer binding.
+
+describe("lexical scoping", () => {
+  // Inner-block `let` should shadow, not clobber.
+  maybeTest("inner-block let shadows outer let", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let x: i32 = 1;
+        if (1 == 1) {
+          let x: i32 = 99;
+        }
+        return x;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  // Two for-loops with the same counter name should iterate independently.
+  // Today the inner loop clobbers the outer counter, so the outer runs once.
+  maybeTest("nested for-loops with same counter name iterate independently", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let acc: i32 = 0;
+        for (let i: i32 = 1; i < 3; i = i + 1) {
+          for (let i: i32 = 10; i < 12; i = i + 1) {
+            acc = acc + i;
+          }
+        }
+        return acc;
+      }
+    `);
+    // outer runs 2x; inner contributes 10+11 = 21 each → 42
+    assert.equal(runExport(wat, "run"), 42);
+  });
+
+  // Parameter `x` and a body `let x` collide on the same WASM local name —
+  // wat2wasm rejects with "redefinition of parameter".
+  maybeTest("let inside fn body can shadow a parameter", () => {
+    const wat = compile(`
+      fn f(x: i32): i32 {
+        let x: i32 = 99;
+        return x;
+      }
+      export fn run(): i32 { return f(1); }
+    `);
+    const err = validateWithWat2Wasm(wat);
+    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+  });
+});
+
+// ─── Parser robustness ─────────────────────────────────────────────────────
+// Invariant: any input — valid or not — produces a finite error message.
+// The parser must never hang or exhaust memory.
+
+describe("parser robustness", () => {
+  // A labeled statement (e.g. `outer: for (...)`) makes the parser loop
+  // indefinitely. Run in a subprocess with a hard timeout so the test can't
+  // hang the suite itself.
+  test("labeled statement does not hang the parser", () => {
+    const parserPath = join(dirname(fileURLToPath(import.meta.url)), "../src/parser/Parser.ts");
+    // tsx wraps CJS source so the dynamic import returns the original module
+    // under either `default` or `"module.exports"`; pick whichever exposes
+    // the Parser constructor.
+    const script = `
+      import(${JSON.stringify(parserPath)}).then((m) => {
+        const Parser = m.Parser ?? m.default?.Parser ?? m["module.exports"]?.Parser;
+        if (typeof Parser !== "function") { process.exit(2); }
+        const p = new Parser(\`
+          fn f(): i32 {
+            outer: for (let i: i32 = 0; i < 5; i = i + 1) {
+              for (let j: i32 = 0; j < 5; j = j + 1) {
+                if (j == 2) { break outer; }
+              }
+            }
+            return 1;
+          }
+        \`);
+        p.parse("test");
+        process.exit(0);
+      });
+    `;
+    const result = spawnSync("npx", ["tsx", "-e", script], {
+      timeout: 3000,
+      encoding: "utf8",
+    });
+    // Through npx, a timeout shows up as `error.code === "ETIMEDOUT"` and an
+    // exit status of 143 (128 + SIGTERM) rather than a SIGTERM `signal`.
+    const timedOut =
+      (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" ||
+      result.signal === "SIGTERM" ||
+      result.status === 143;
+    if (result.status === 2) {
+      assert.fail("subprocess could not resolve Parser constructor — test scaffolding broken");
+    }
+    assert.equal(
+      timedOut,
+      false,
+      "parser ran past 3s wall-clock on a labeled-for input — likely infinite loop",
+    );
   });
 });

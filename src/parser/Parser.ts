@@ -171,6 +171,8 @@ export class Parser {
     this.registerPrefix("Tilde", this.parsePrefixExpression.bind(this));
     this.registerPrefix("Bang", this.parsePrefixExpression.bind(this));
     this.registerPrefix("Minus", this.parsePrefixExpression.bind(this));
+    // Unary `+x` is a no-op; consume the `+` and return the operand.
+    this.registerPrefix("Plus", this.parseUnaryPlus.bind(this));
     this.registerPrefix("True", this.parseBooleanLiteral.bind(this));
     this.registerPrefix("False", this.parseBooleanLiteral.bind(this));
     this.registerPrefix("LParen", this.parseGroupedExpression.bind(this));
@@ -462,6 +464,11 @@ export class Parser {
 
     const members: Record<string, StructMember> = {};
     let size = 0;
+
+    // Empty struct (`struct X {}`): advance past `{` so cur lands on `}`.
+    if (this.tokenizer.curTokenIs("LBrace") && this.tokenizer.peekTokenIs("RBrace")) {
+      this.tokenizer.nextToken();
+    }
 
     while (!this.tokenizer.peekTokenIs("RBrace") && !this.tokenizer.curTokenIs("RBrace")) {
       if (!this.expectPeek("Identifier")) {
@@ -881,12 +888,17 @@ export class Parser {
     while (!this.tokenizer.curTokenIs("RBrace") && !this.tokenizer.curTokenIs("EOF")) {
       if (this.tokenizer.curTokenIs("Case")) {
         this.tokenizer.nextToken(); // consume 'case'
+        let negate = false;
+        if (this.tokenizer.curTokenIs("Minus")) {
+          negate = true;
+          this.tokenizer.nextToken();
+        }
         const testToken = this.tokenizer.curToken();
         if (testToken.type !== "IntegerLiteral") {
           this.pushError("Parser: switch case must be an integer literal", testToken);
           return null;
         }
-        const testVal = testToken.literal as number;
+        const testVal = negate ? -(testToken.literal as number) : (testToken.literal as number);
         if (!this.expectPeek("Colon")) {
           return null;
         }
@@ -1111,6 +1123,11 @@ export class Parser {
     this.tokenizer.nextToken();
     const right = this.parseExpression(PREFIX);
     return new PrefixExpression(exprToken, literal.toString(), right);
+  }
+
+  private parseUnaryPlus(): ASTExpression | null {
+    this.tokenizer.nextToken();
+    return this.parseExpression(PREFIX);
   }
 
   private parseInfixExpression(left: ASTExpression): ASTExpression {
@@ -1351,7 +1368,11 @@ export class Parser {
     const literalToken = this.tokenizer.curToken(); // the LBrace token
     let name = structName;
     const members: Record<string, ASTExpression> = {};
-    while (!this.tokenizer.peekTokenIs("RBrace")) {
+    // Empty struct literal (`{}`): advance past `{` so cur lands on `}`.
+    if (this.tokenizer.curTokenIs("LBrace") && this.tokenizer.peekTokenIs("RBrace")) {
+      this.tokenizer.nextToken();
+    }
+    while (!this.tokenizer.peekTokenIs("RBrace") && !this.tokenizer.curTokenIs("RBrace")) {
       if (!this.expectPeek("Identifier")) {
         return null;
       }

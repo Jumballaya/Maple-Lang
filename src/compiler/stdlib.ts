@@ -127,7 +127,7 @@ const memory: ModuleMeta = {
     },
     string_copy: {
       kind: "func",
-      signature: "i_i",
+      signature: "ii_v",
     },
   },
   functions: {},
@@ -149,7 +149,7 @@ const string: ModuleMeta = {
   exports: {
     string_copy: {
       kind: "func",
-      signature: "i_v",
+      signature: "ii_v",
     },
     string: {
       kind: "struct",

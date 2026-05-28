@@ -763,7 +763,7 @@ function walkStatement(
     const st = resolveExprType(stmt.switchExpr, scope, meta, errors);
     if (st !== null) {
       const w = valueTypeToWasm(st);
-      if (w === "i64" || w === "f64") {
+      if (w === "i64" || w === "f32" || w === "f64") {
         const t = stmt.token;
         errors.push(
           new MapleError(

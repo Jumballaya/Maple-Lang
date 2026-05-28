@@ -541,6 +541,21 @@ export class Lexer {
         }
         continue;
       }
+
+      // block comments — no nesting; runs through the next `*/` (or EOF).
+      if (this.char === "/" && this.peekChar() === "*") {
+        this.readChar(); // consume '/'
+        this.readChar(); // consume '*'
+        while ((this.char as string) !== "\0") {
+          if ((this.char as string) === "*" && this.peekChar() === "/") {
+            this.readChar(); // consume '*'
+            this.readChar(); // consume '/'
+            break;
+          }
+          this.readChar();
+        }
+        continue;
+      }
       break;
     }
   }
@@ -800,28 +815,37 @@ export class Lexer {
 
     const begin = this.pos;
 
-    // Hex or binary prefixes (when starting with '0x' / '0b')
+    // Hex, octal, or binary prefixes (when starting with '0x' / '0o' / '0b').
+    // Underscores are accepted between digits for readability and stripped
+    // before parsing.
     if (this.char === "0") {
       const p = this.peekChar();
       if (p === "x" || p === "X") {
-        // consume '0x'
-        this.readChar(); // now on 'x'/'X'
-        this.readChar(); // move to first hex digit
+        this.readChar();
+        this.readChar();
         const digitsStart = this.pos;
-        while (this.isHex(this.char)) this.readChar();
-        const digits = this.text.slice(digitsStart, this.pos);
+        while (this.isHex(this.char) || (this.char as string) === "_") this.readChar();
+        const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
         if (digits.length === 0) throw new Error("Malformed hex literal: missing digits");
-        const _lexeme = this.text.slice(begin, this.pos);
         const value = Number.parseInt(digits, 16);
         return { ...mark, type: "IntegerLiteral", literal: value };
       }
-      if (p === "b" || p === "B") {
-        // consume '0b'
+      if (p === "o" || p === "O") {
         this.readChar();
         this.readChar();
         const digitsStart = this.pos;
-        while (this.isBin(this.char)) this.readChar();
-        const digits = this.text.slice(digitsStart, this.pos);
+        while (this.isOct(this.char) || (this.char as string) === "_") this.readChar();
+        const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
+        if (digits.length === 0) throw new Error("Malformed octal literal: missing digits");
+        const value = Number.parseInt(digits, 8);
+        return { ...mark, type: "IntegerLiteral", literal: value };
+      }
+      if (p === "b" || p === "B") {
+        this.readChar();
+        this.readChar();
+        const digitsStart = this.pos;
+        while (this.isBin(this.char) || (this.char as string) === "_") this.readChar();
+        const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
         if (digits.length === 0) throw new Error("Malformed binary literal: missing digits");
         const value = Number.parseInt(digits, 2);
         return { ...mark, type: "IntegerLiteral", literal: value };
@@ -832,41 +856,32 @@ export class Lexer {
     // Accept:
     //   [digits][.digits][exp]
     //   .digits[exp]
-    // where exp = (e|E)(+|-)?digits
+    // where exp = (e|E)(+|-)?digits. Underscores are allowed between digits.
     let sawDot = false;
     let sawExp = false;
 
-    // digits before dot (if starting with '.' we skip this)
     if (isDigit(this.char)) {
-      while (isDigit(this.char)) this.readChar();
+      while (isDigit(this.char) || (this.char as string) === "_") this.readChar();
     }
 
-    // fraction
     if (this.char === ".") {
       sawDot = true;
-      this.readChar(); // consume '.'
-      if (!isDigit(this.char)) {
-        // lone '.' after digits is not a number here (but you reached because first char was digit)
-        // We allow "123." as float form (C allows). If you don’t want it, check and error.
-      } else {
-        while (isDigit(this.char)) this.readChar();
+      this.readChar();
+      if (isDigit(this.char)) {
+        while (isDigit(this.char) || (this.char as string) === "_") this.readChar();
       }
-    } else if (!isDigit(this.text[begin] ?? "\0")) {
-      // started with '.' then digits: we already handled digits above
-      // (when entry was '.' followed by digit)
     }
 
-    // exponent
     if (this.char === "e" || this.char === "E") {
       sawExp = true;
-      this.readChar(); // consume 'e'
+      this.readChar();
       if ((this.char as string) === "+" || (this.char as string) === "-") this.readChar();
       if (!isDigit(this.char)) throw new Error("Malformed float exponent: missing digits");
-      while (isDigit(this.char)) this.readChar();
+      while (isDigit(this.char) || (this.char as string) === "_") this.readChar();
     }
 
     const end = this.pos;
-    const lexeme = this.text.slice(begin, end);
+    const lexeme = this.text.slice(begin, end).replace(/_/g, "");
 
     if (sawDot || sawExp || lexeme.startsWith(".")) {
       const num = Number.parseFloat(lexeme);
@@ -886,6 +901,9 @@ export class Lexer {
   }
   private isBin(c: string): boolean {
     return c === "0" || c === "1";
+  }
+  private isOct(c: string): boolean {
+    return c >= "0" && c <= "7";
   }
   private isIdentStart(c: string): boolean {
     return isLetter(c) || c === "_";

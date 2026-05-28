@@ -2386,7 +2386,7 @@ describe("Parser: Identifier", () => {
   });
 });
 
-describe("Parser: 9B multi-return and destructure", () => {
+describe("Parser: multi-return and destructure", () => {
   test("parses tuple function return type", () => {
     const p = new Parser("fn swap(a: i32, b: i32): (i32, i32) { return b, a; }");
     const ast = p.parse("test");
@@ -2653,7 +2653,7 @@ describe("Parser: 9B multi-return and destructure", () => {
   });
 });
 
-describe("Parser: 10A function types", () => {
+describe("Parser: function types", () => {
   test("lexer produces Func token for source 'fn'", () => {
     const tz = new Tokenizer("fn");
     const tok = tz.curToken();
@@ -3613,11 +3613,11 @@ describe("Parser: Struct methods", () => {
   });
 });
 
-// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+// ─── Control flow ───────────────────────────────────────────────
 
-describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
+describe("Parser: Error recovery", () => {
   test("for loop with syntax error in body recovers and produces for statement", () => {
-    // RED: manual body loop returns null on first bad statement, aborting entire for parse
+    // manual body loop returns null on first bad statement, aborting entire for parse
     const p = new Parser(`fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { let x: = 5; } }`);
     const prog = p.parse("test");
     assert(p.errors.length > 0, "Expected parse errors from syntax error in body");
@@ -3631,7 +3631,7 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
   });
 
   test("while loop with syntax error in body recovers and produces while statement", () => {
-    // RED: same bug in parseWhileStatement
+    // same bug in parseWhileStatement
     const p = new Parser(`fn f(): void { while (1) { let x: = 5; } }`);
     const prog = p.parse("test");
     assert(p.errors.length > 0, "Expected parse errors from syntax error in body");
@@ -3645,7 +3645,7 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
   });
 
   test("for loop with valid body still produces all statements", () => {
-    // GREEN: normal for loop body parsing must not regress
+    // normal for loop body parsing must not regress
     const p = new Parser(
       `fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { let x: i32 = 1; let y: i32 = 2; } }`,
     );
@@ -3663,7 +3663,7 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
   });
 
   test("while loop with valid body still produces all statements", () => {
-    // GREEN: normal while body parsing must not regress
+    // normal while body parsing must not regress
     const p = new Parser(`fn f(): void { while (1) { let x: i32 = 1; break; } }`);
     const prog = p.parse("test");
     assert.equal(
@@ -3679,16 +3679,16 @@ describe("Parser: Control Flow Hardening - Error recovery (Bug 6)", () => {
   });
 });
 
-describe("Parser: Control Flow Hardening - If condition (Fix 9)", () => {
+describe("Parser: If condition", () => {
   test("if with empty condition reports parse error", () => {
-    // GREEN: error is already reported, but condition null check ordering matters
+    // error is already reported, but condition null check ordering matters
     const p = new Parser(`fn f(): void { if () {} }`);
     p.parse("test");
     assert(p.errors.length > 0, "Expected parse error for if with empty condition");
   });
 
   test("if with valid condition parses correctly", () => {
-    // GREEN: must not regress
+    // must not regress
     const p = new Parser(`fn f(): void { if (1) {} }`);
     const prog = p.parse("test");
     assert.equal(
@@ -3702,7 +3702,7 @@ describe("Parser: Control Flow Hardening - If condition (Fix 9)", () => {
   });
 
   test("if missing closing paren reports parse error", () => {
-    // GREEN: missing ) is caught by expectPeek
+    // missing ) is caught by expectPeek
     const p = new Parser(`fn f(): void { if (1 {} }`);
     p.parse("test");
     assert(p.errors.length > 0, "Expected parse error for if missing )");

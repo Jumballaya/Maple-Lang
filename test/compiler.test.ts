@@ -471,7 +471,7 @@ describe("Emission: Cast", () => {
   });
 });
 
-describe("Emission: 64-bit widths and unsigned ops (9A)", () => {
+describe("Emission: 64-bit widths and unsigned ops", () => {
   test("i64 addition uses i64.add and result i64", () => {
     const { wat, meta } = compile(`fn add64(a: i64, b: i64): i64 { return a + b; }`);
     assert(wat.includes("(result i64)"), wat);
@@ -1053,11 +1053,11 @@ describe("Emission: Struct methods", () => {
   });
 });
 
-// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+// ─── Control flow ───────────────────────────────────────────────
 
-describe("Emission: Control Flow Hardening - For init (Bug 1)", () => {
+describe("Emission: For init", () => {
   test("for loop with non-zero init emits local.set before the loop block", () => {
-    // RED: init is never emitted by emitForStatement - WASM locals default to 0
+    // init is never emitted by emitForStatement - WASM locals default to 0
     const { wat } = compile("fn f(): void { for (let i: i32 = 5; i < 10; i = i + 1) { } }");
     const setIdx = wat.indexOf("(local.set $i (i32.const 5))");
     const blockIdx = wat.indexOf("(block $break_");
@@ -1066,7 +1066,7 @@ describe("Emission: Control Flow Hardening - For init (Bug 1)", () => {
   });
 
   test("for loop with negative init emits local.set before the loop block", () => {
-    // RED: same bug - negative non-zero init silently becomes 0
+    // same bug - negative non-zero init silently becomes 0
     const { wat } = compile("fn f(): void { for (let i: i32 = -3; i < 7; i = i + 1) { } }");
     const setIdx = wat.indexOf("(local.set $i");
     const blockIdx = wat.indexOf("(block $break_");
@@ -1075,7 +1075,7 @@ describe("Emission: Control Flow Hardening - For init (Bug 1)", () => {
   });
 
   test("for loop with zero init still emits local.set before the loop block", () => {
-    // GREEN: zero init "works by accident" today but should be explicit
+    // zero init "works by accident" today but should be explicit
     const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { } }");
     const blockIdx = wat.indexOf("(block $break_");
     assert(blockIdx !== -1, `Missing (block $break_) in:\n${wat}`);
@@ -1086,9 +1086,9 @@ describe("Emission: Control Flow Hardening - For init (Bug 1)", () => {
   });
 });
 
-describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
+describe("Emission: If result type", () => {
   test("if/else both returning f32 emits (result f32) not (result i32)", () => {
-    // RED: result type is hardcoded to i32 in if.ts
+    // result type is hardcoded to i32 in if.ts
     const { wat } = compile(
       `fn f(x: i32): f32 { if (x > 0) { return 1.0; } else { return 2.0; } }`,
     );
@@ -1129,7 +1129,7 @@ describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
   });
 
   test("if/else both returning i32 emits (result i32)", () => {
-    // GREEN: i32 case should still work correctly
+    // i32 case should still work correctly
     const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }`);
     assert(
       wat.includes("(result i32)"),
@@ -1138,7 +1138,7 @@ describe("Emission: Control Flow Hardening - If result type (Bug 3)", () => {
   });
 });
 
-describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
+describe("Emission: Loop conditions", () => {
   test("if with void function as condition throws MapleError", () => {
     assert.throws(
       () => compile(`fn noop(): void {} fn f(): void { if (noop()) { return; } }`),
@@ -1172,7 +1172,7 @@ describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
   });
 
   test("for loop with f32 condition emits f32.ne (explicit branch, not fallthrough)", () => {
-    // GREEN: f32 conditions should work correctly via the explicit f32.ne branch
+    // f32 conditions should work correctly via the explicit f32.ne branch
     const { wat } = compile(
       `fn f(): void { let x: f32 = 1.0; for (let i: i32 = 0; x; i = i + 1) { } }`,
     );
@@ -1180,21 +1180,21 @@ describe("Emission: Control Flow Hardening - Loop conditions (Bug 4)", () => {
   });
 
   test("while loop with bool condition passes through directly without ne wrapper", () => {
-    // GREEN: bool conditions should not be wrapped in i32.ne
+    // bool conditions should not be wrapped in i32.ne
     const { wat } = compile(`fn f(): void { let b: bool = true; while (b) { break; } }`);
     assert(wat.includes("(local.get $b)"), `Expected direct bool condition in:\n${wat}`);
   });
 
   test("while loop with i32 condition wraps in i32.ne", () => {
-    // GREEN: i32 conditions should use i32.ne ... 0
+    // i32 conditions should use i32.ne ... 0
     const { wat } = compile(`fn f(): void { let i: i32 = 0; while (i) { break; } }`);
     assert(wat.includes("i32.ne"), `Expected i32.ne for i32 condition in:\n${wat}`);
   });
 });
 
-describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)", () => {
+describe("Emission: Break/Continue outside loop", () => {
   test("break outside any loop or switch throws error", () => {
-    // RED: currently emits (br undefined) without error
+    // currently emits (br undefined) without error
     assert.throws(
       () => compile("fn f(): void { break; }"),
       (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
@@ -1202,7 +1202,7 @@ describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)
   });
 
   test("continue outside any loop throws error", () => {
-    // RED: currently emits (br undefined) without error
+    // currently emits (br undefined) without error
     assert.throws(
       () => compile("fn f(): void { continue; }"),
       (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
@@ -1210,13 +1210,13 @@ describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)
   });
 
   test("break in for loop emits valid br instruction", () => {
-    // GREEN: break in a loop must still work
+    // break in a loop must still work
     const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }");
     assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
   });
 
   test("continue in for loop emits valid br instruction to loop label", () => {
-    // GREEN: continue in a loop must still work
+    // continue in a loop must still work
     const { wat } = compile(
       "fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { continue; } }",
     );
@@ -1224,13 +1224,11 @@ describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)
   });
 
   test("break in while loop emits valid br instruction", () => {
-    // GREEN
     const { wat } = compile("fn f(): void { while (1) { break; } }");
     assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
   });
 
   test("continue in while loop emits valid br instruction", () => {
-    // GREEN
     const { wat } = compile(
       "fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }",
     );
@@ -1238,9 +1236,9 @@ describe("Emission: Control Flow Hardening - Break/Continue outside loop (Bug 2)
   });
 });
 
-describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
+describe("Emission: Switch break", () => {
   test("break in standalone switch does not emit (br undefined)", () => {
-    // RED: switch does not push a break label, so (br undefined) is emitted
+    // switch does not push a break label, so (br undefined) is emitted
     const { wat } = compile(`
       fn f(x: i32): void {
         switch (x) {
@@ -1253,7 +1251,7 @@ describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
   });
 
   test("break inside switch inside for loop targets the switch exit, not the for loop", () => {
-    // RED: break currently targets the for loop's break label (wrong)
+    // break currently targets the for loop's break label (wrong)
     const { wat } = compile(`
       fn f(x: i32): void {
         for (let i: i32 = 0; i < 5; i = i + 1) {
@@ -1270,7 +1268,7 @@ describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
   });
 
   test("continue inside switch inside for loop targets the for loop", () => {
-    // GREEN (after fix 7): continue in switch should target enclosing loop
+    // continue in switch should target enclosing loop
     const { wat } = compile(`
       fn f(x: i32): void {
         for (let i: i32 = 0; i < 5; i = i + 1) {
@@ -1286,7 +1284,7 @@ describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
   });
 
   test("switch case body still has implicit exit after case body", () => {
-    // GREEN: existing Go-style no-fall-through behavior must not regress
+    // existing Go-style no-fall-through behavior must not regress
     const { wat } = compile(`
       fn f(x: i32): i32 {
         switch (x) {
@@ -1299,9 +1297,9 @@ describe("Emission: Control Flow Hardening - Switch break (Fix 7)", () => {
   });
 });
 
-describe("Emission: Control Flow Hardening - Nested constructs", () => {
+describe("Emission: Nested constructs", () => {
   test("nested for loops - break in inner loop targets inner loop's break label", () => {
-    // GREEN: nested loops should each have independent break/loop labels
+    // nested loops should each have independent break/loop labels
     const { wat } = compile(`
       fn f(): void {
         for (let i: i32 = 0; i < 3; i = i + 1) {
@@ -1319,7 +1317,6 @@ describe("Emission: Control Flow Hardening - Nested constructs", () => {
   });
 
   test("if inside for loop with break targets the for loop", () => {
-    // GREEN
     const { wat } = compile(`
       fn f(): void {
         for (let i: i32 = 0; i < 5; i = i + 1) {
@@ -1332,7 +1329,6 @@ describe("Emission: Control Flow Hardening - Nested constructs", () => {
   });
 
   test("return inside for loop inside if emits return correctly", () => {
-    // GREEN
     const { wat } = compile(`
       fn f(x: i32): i32 {
         if (x > 0) {
@@ -1347,7 +1343,7 @@ describe("Emission: Control Flow Hardening - Nested constructs", () => {
   });
 });
 
-describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
+describe("Emission: Flow analysis", () => {
   test("switch without default in if then-branch does not cause spurious (result i32)", () => {
     const { wat } = compile(`
       fn f(x: i32, y: i32): i32 {
@@ -1370,7 +1366,7 @@ describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
   });
 
   test("for loop in if then-branch does not cause spurious (result i32) on if", () => {
-    // RED: stmtDefinitelyReturns(forStatement) incorrectly returns true,
+    // stmtDefinitelyReturns(forStatement) incorrectly returns true,
     // causing extractNeedsReturn to annotate the if with (result i32)
     // which makes the (then) block required to produce a value - invalid WAT
     const { wat } = compile(`
@@ -1395,7 +1391,7 @@ describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
   });
 
   test("while loop in if then-branch does not cause spurious (result i32) on if", () => {
-    // RED: same bug for while loops
+    // same bug for while loops
     const { wat } = compile(`
       fn f(x: i32): i32 {
         if (x > 0) {
@@ -1417,7 +1413,7 @@ describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
   });
 
   test("if/else where both branches have explicit returns emits (result i32)", () => {
-    // GREEN: genuine both-branches-return case should still get (result i32)
+    // genuine both-branches-return case should still get (result i32)
     const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return -1; } }`);
     assert(
       wat.includes("(result i32)"),
@@ -1426,9 +1422,9 @@ describe("Emission: Control Flow Hardening - Flow analysis (Bug 10)", () => {
   });
 });
 
-// ─── 8A: Memory-Backed Local Structs ──────────────────────────────────────────
+// ─── Memory-Backed Local Structs ──────────────────────────────────────────
 
-describe("Emission: 8A Shadow stack global", () => {
+describe("Emission: Shadow stack global", () => {
   test("any module emits $__sp global", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1457,7 +1453,7 @@ describe("Emission: 8A Shadow stack global", () => {
   });
 });
 
-describe("Emission: 8A Local declaration — flat locals gone", () => {
+describe("Emission: Local declaration — flat locals gone", () => {
   test("local struct does NOT produce flattened $p_x / $p_y locals", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1476,7 +1472,7 @@ describe("Emission: 8A Local declaration — flat locals gone", () => {
   });
 });
 
-describe("Emission: 8A Field init — stores to memory", () => {
+describe("Emission: Field init — stores to memory", () => {
   test("i32 field x at offset 0 emits i32.store", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1539,7 +1535,7 @@ describe("Emission: 8A Field init — stores to memory", () => {
   });
 });
 
-describe("Emission: 8A Member read — loads from memory", () => {
+describe("Emission: Member read — loads from memory", () => {
   test("p.x emits i32.load at offset 0", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1647,7 +1643,7 @@ describe("Emission: 8A Member read — loads from memory", () => {
   });
 });
 
-describe("Emission: 8A Member write — stores to memory", () => {
+describe("Emission: Member write — stores to memory", () => {
   test("p.x = 10 emits i32.store at offset 0", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1680,7 +1676,7 @@ describe("Emission: 8A Member write — stores to memory", () => {
   });
 });
 
-describe("Emission: 8A Prologue / epilogue", () => {
+describe("Emission: Prologue / epilogue", () => {
   test("function with one Point local emits SP prologue", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1757,7 +1753,7 @@ describe("Emission: 8A Prologue / epilogue", () => {
   });
 });
 
-describe("Emission: 8A Pointer initialization", () => {
+describe("Emission: Pointer initialization", () => {
   test("first struct at offset 0 uses direct global.get", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1796,7 +1792,7 @@ describe("Emission: 8A Pointer initialization", () => {
   });
 });
 
-describe("Emission: 8A Return with SP restore via $__ret_tmp", () => {
+describe("Emission: Return with SP restore via $__ret_tmp", () => {
   test("value-returning return with local struct uses $__ret_tmp", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1882,7 +1878,7 @@ describe("Emission: 8A Return with SP restore via $__ret_tmp", () => {
   });
 });
 
-describe("Emission: 8A Negative assertions — flat locals gone", () => {
+describe("Emission: Negative assertions — flat locals gone", () => {
   test("I41-43: no $p_x, $p_y, local.set $p_x, local.get $p_x in WAT", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1925,7 +1921,7 @@ describe("Emission: 8A Negative assertions — flat locals gone", () => {
   });
 });
 
-describe("Emission: 8A Global struct regression", () => {
+describe("Emission: Global struct regression", () => {
   test("global struct still emits data segment", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -1965,7 +1961,7 @@ describe("Emission: 8A Global struct regression", () => {
   });
 });
 
-describe("Emission: 8A Param struct regression", () => {
+describe("Emission: Param struct regression", () => {
   test("struct param still uses (param $p i32) and i32.load + offset", () => {
     const { wat } = compile(`
       struct Pair { a: i32, b: i32 }
@@ -1986,7 +1982,7 @@ describe("Emission: 8A Param struct regression", () => {
   });
 });
 
-describe("Emission: 8A Method calls on local structs", () => {
+describe("Emission: Method calls on local structs", () => {
   test("method call on local struct emits (call $Point_sum (local.get $p))", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -2023,7 +2019,7 @@ describe("Emission: 8A Method calls on local structs", () => {
   });
 });
 
-describe("Emission: 8A Struct member in various expressions", () => {
+describe("Emission: Struct member in various expressions", () => {
   test("struct member as switch expression emits i32.load", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -2076,7 +2072,7 @@ describe("Emission: 8A Struct member in various expressions", () => {
   });
 });
 
-describe("Emission: 8A Struct in control flow bodies", () => {
+describe("Emission: Struct in control flow bodies", () => {
   test("local struct inside if-then block gets frame slot", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
@@ -2127,7 +2123,7 @@ describe("Emission: 8A Struct in control flow bodies", () => {
   });
 });
 
-describe("Emission: 8A extractGlobalData — local struct skipped", () => {
+describe("Emission: extractGlobalData — local struct skipped", () => {
   test("function with local struct literal compiles without error", () => {
     assert.doesNotThrow(() => {
       compile(`
@@ -2329,7 +2325,7 @@ describe("Compiler: inferred function call types", () => {
   });
 });
 
-describe("Emission: 9B multi-return and destructure", () => {
+describe("Emission: multi-return and destructure", () => {
   test("multi-return function emits multi result clause", () => {
     const { wat } = compile("fn swap(a: i32, b: i32): (i32, i32) { return b, a; }");
     assert(wat.includes("(result i32 i32)"));
@@ -2455,7 +2451,7 @@ describe("Emission: 9B multi-return and destructure", () => {
   });
 });
 
-describe("Emission: 9C stdlib global import", () => {
+describe("Emission: stdlib global import", () => {
   test("imported f32 global emits import and global.get", () => {
     const { wat } = compile(`
       import PI from "math"
@@ -2466,7 +2462,7 @@ describe("Emission: 9C stdlib global import", () => {
   });
 });
 
-describe("Emission: 10B named function references", () => {
+describe("Emission: named function references", () => {
   test("WAT section order: imports before table before globals before signatures before functions", () => {
     const { wat } = compile(`
       fn add(a: i32, b: i32): i32 { return a + b; }
@@ -2622,7 +2618,7 @@ describe("Emission: 10B named function references", () => {
   });
 });
 
-describe("Emission: 9C math stdlib calls", () => {
+describe("Emission: math stdlib calls", () => {
   test("Tier 1 f32 imports emit call", () => {
     const { wat } = compile(`
       import sqrt, floor, abs_f32 from "math"

@@ -375,6 +375,14 @@ export class ModuleEmitter {
       const w: WasmValueType = wl === "f64" || wr === "f64" ? "f64" : "f32";
       return [w, w, true];
     }
+    // When one side is i64 and the other is i32 (typical for integer literals
+    // mixed with an i64 binding), widen to i64 so emitOperand can extend the
+    // i32 operand. The signedness follows the i64 side.
+    if (wl === "i64" || wr === "i64") {
+      const i64Side = wl === "i64" ? lt : rt;
+      const signed = !isUnsignedMapleInteger(i64Side);
+      return ["i64", "i64", signed];
+    }
     if (wl !== wr) {
       throw new Error(`Internal: incompatible binary operand lanes ${wl} vs ${wr}`);
     }

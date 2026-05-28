@@ -19,7 +19,7 @@ import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
-import { isUnsignedMapleInteger, valueTypeToWasm, wasmLoadOp } from "../emit.types";
+import { baseScalar, isUnsignedMapleInteger, valueTypeToWasm, wasmLoadOp } from "../emit.types";
 import { emitAssignmentExpression } from "./assignment";
 import { emitBinaryOp } from "./binary";
 import { emitGet, emitNumberGet } from "./core";
@@ -43,6 +43,10 @@ function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitt
   const w = valueTypeToWasm(mt);
   switch (expression.operator) {
     case "!": {
+      // wat2wasm rejects `i32.eqz` against i64/f32/f64; dispatch by lane.
+      if (w === "i64") return `(i64.eqz ${rhs})`;
+      if (w === "f32") return `(f32.eq ${rhs} (f32.const 0))`;
+      if (w === "f64") return `(f64.eq ${rhs} (f64.const 0))`;
       return `(i32.eqz ${rhs})`;
     }
     case "-": {
@@ -217,35 +221,48 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     const toWasm = valueTypeToWasm(expression.targetType);
     const srcSign = isUnsignedMapleInteger(fromMt) ? "u" : "s";
     const dstSign = isUnsignedMapleInteger(expression.targetType) ? "u" : "s";
+    let onLane: string;
     if (fromW === toWasm) {
-      writer.line(inner);
+      onLane = inner;
     } else if (fromW === "i32" && toWasm === "i64") {
-      writer.line(`(i64.extend_i32_${srcSign} ${inner})`);
+      onLane = `(i64.extend_i32_${srcSign} ${inner})`;
     } else if (fromW === "i64" && toWasm === "i32") {
-      writer.line(`(i32.wrap_i64 ${inner})`);
+      onLane = `(i32.wrap_i64 ${inner})`;
     } else if (fromW === "i32" && toWasm === "f32") {
-      writer.line(`(f32.convert_i32_${srcSign} ${inner})`);
+      onLane = `(f32.convert_i32_${srcSign} ${inner})`;
     } else if (fromW === "f32" && toWasm === "i32") {
-      writer.line(`(i32.trunc_f32_${dstSign} ${inner})`);
+      onLane = `(i32.trunc_f32_${dstSign} ${inner})`;
     } else if (fromW === "i32" && toWasm === "f64") {
-      writer.line(`(f64.convert_i32_${srcSign} ${inner})`);
+      onLane = `(f64.convert_i32_${srcSign} ${inner})`;
     } else if (fromW === "f64" && toWasm === "i32") {
-      writer.line(`(i32.trunc_f64_${dstSign} ${inner})`);
+      onLane = `(i32.trunc_f64_${dstSign} ${inner})`;
     } else if (fromW === "f32" && toWasm === "f64") {
-      writer.line(`(f64.promote_f32 ${inner})`);
+      onLane = `(f64.promote_f32 ${inner})`;
     } else if (fromW === "f64" && toWasm === "f32") {
-      writer.line(`(f32.demote_f64 ${inner})`);
+      onLane = `(f32.demote_f64 ${inner})`;
     } else if (fromW === "i64" && toWasm === "f64") {
-      writer.line(`(f64.convert_i64_${srcSign} ${inner})`);
+      onLane = `(f64.convert_i64_${srcSign} ${inner})`;
     } else if (fromW === "f64" && toWasm === "i64") {
-      writer.line(`(i64.trunc_f64_${dstSign} ${inner})`);
+      onLane = `(i64.trunc_f64_${dstSign} ${inner})`;
     } else if (fromW === "f32" && toWasm === "i64") {
-      writer.line(`(i64.trunc_f32_${dstSign} ${inner})`);
+      onLane = `(i64.trunc_f32_${dstSign} ${inner})`;
     } else if (fromW === "i64" && toWasm === "f32") {
-      writer.line(`(f32.convert_i64_${srcSign} ${inner})`);
+      onLane = `(f32.convert_i64_${srcSign} ${inner})`;
     } else {
-      writer.line(inner);
+      onLane = inner;
     }
+    // After the lane-conversion above, narrow integer target types still
+    // hold their value on the i32 lane and need an explicit mask (unsigned)
+    // or sign-extend (signed) so reading the value back as i32 doesn't see
+    // the higher bits.
+    if (toWasm === "i32") {
+      const base = baseScalar(expression.targetType);
+      if (base === "u8") onLane = `(i32.and ${onLane} (i32.const 0xFF))`;
+      else if (base === "u16") onLane = `(i32.and ${onLane} (i32.const 0xFFFF))`;
+      else if (base === "i8") onLane = `(i32.extend8_s ${onLane})`;
+      else if (base === "i16") onLane = `(i32.extend16_s ${onLane})`;
+    }
+    writer.line(onLane);
     //
   } else {
     const t = expression.token;

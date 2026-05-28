@@ -285,11 +285,11 @@ fn run(v: Vec2, other: Vec2): i32 {
   });
 });
 
-// ─── 8D: Control Flow Hardening ───────────────────────────────────────────────
+// ─── Control flow ───────────────────────────────────────────────
 
-describe("TypeChecker: Control Flow - Scope (Bug 5)", () => {
+describe("TypeChecker: Control Flow - Scope", () => {
   test("for loop variable is not visible after the loop", () => {
-    // RED: for-loop var is added to scope but never removed, so it leaks
+    // for-loop var is added to scope but never removed, so it leaks
     expectError(
       `fn f(): i32 {
         for (let i: i32 = 0; i < 5; i = i + 1) {}
@@ -300,7 +300,7 @@ describe("TypeChecker: Control Flow - Scope (Bug 5)", () => {
   });
 
   test("for loop variable is visible inside the loop body", () => {
-    // GREEN: the variable must be accessible within the loop
+    // the variable must be accessible within the loop
     expectNoErrors(`
       fn f(): void {
         for (let i: i32 = 0; i < 5; i = i + 1) {
@@ -311,7 +311,7 @@ describe("TypeChecker: Control Flow - Scope (Bug 5)", () => {
   });
 
   test("two sequential for loops with same variable name do not conflict", () => {
-    // GREEN (after fix): each loop's scope is independent
+    // each loop's scope is independent
     expectNoErrors(`
       fn f(): void {
         for (let i: i32 = 0; i < 3; i = i + 1) {}
@@ -321,19 +321,19 @@ describe("TypeChecker: Control Flow - Scope (Bug 5)", () => {
   });
 });
 
-describe("TypeChecker: Control Flow - Break/Continue Context (Fix 8)", () => {
+describe("TypeChecker: Control Flow - Break/Continue Context", () => {
   test("break outside any loop or switch is a type error", () => {
-    // RED: no context validation exists yet
+    // no context validation exists yet
     expectError("fn f(): void { break; }", "break");
   });
 
   test("continue outside any loop is a type error", () => {
-    // RED: no context validation exists yet
+    // no context validation exists yet
     expectError("fn f(): void { continue; }", "continue");
   });
 
   test("continue inside switch but not inside a loop is a type error", () => {
-    // RED: continue should only be valid in loops, not bare switches
+    // continue should only be valid in loops, not bare switches
     expectError(
       `fn f(x: i32): void { switch (x) { case 0: { continue; } default: { break; } } }`,
       "continue",
@@ -341,32 +341,28 @@ describe("TypeChecker: Control Flow - Break/Continue Context (Fix 8)", () => {
   });
 
   test("break inside for loop is valid", () => {
-    // GREEN
     expectNoErrors("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }");
   });
 
   test("continue inside for loop is valid", () => {
-    // GREEN
     expectNoErrors("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { continue; } }");
   });
 
   test("break inside while loop is valid", () => {
-    // GREEN
     expectNoErrors("fn f(): void { while (1) { break; } }");
   });
 
   test("continue inside while loop is valid", () => {
-    // GREEN
     expectNoErrors("fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }");
   });
 
   test("break inside switch is valid", () => {
-    // GREEN (after fix 7 adds switch break label)
+    //
     expectNoErrors(`fn f(x: i32): void { switch (x) { case 0: { break; } default: { break; } } }`);
   });
 
   test("continue inside switch inside for loop is valid (targets the loop)", () => {
-    // GREEN: continue in a switch that is inside a loop should be allowed
+    // continue in a switch that is inside a loop should be allowed
     expectNoErrors(`
       fn f(x: i32): void {
         for (let i: i32 = 0; i < 5; i = i + 1) {
@@ -380,7 +376,6 @@ describe("TypeChecker: Control Flow - Break/Continue Context (Fix 8)", () => {
   });
 
   test("break inside nested for loops is valid", () => {
-    // GREEN
     expectNoErrors(`
       fn f(): void {
         for (let i: i32 = 0; i < 3; i = i + 1) {
@@ -407,9 +402,9 @@ describe("TypeChecker: If conditions", () => {
   });
 });
 
-// ─── 8A: Memory-Backed Local Structs — Type Checker ──────────────────────────
+// ─── Memory-Backed Local Structs — Type Checker ──────────────────────────
 
-describe("TypeChecker: 8A Local struct member access", () => {
+describe("TypeChecker: Local struct member access", () => {
   test("accessing i32 member on local struct reports no error", () => {
     expectNoErrors(`
       struct Point { x: i32, y: i32 }
@@ -664,7 +659,7 @@ describe("TypeChecker: inferred call return types", () => {
   });
 });
 
-describe("TypeChecker: 9B multi-return and destructuring", () => {
+describe("TypeChecker: multi-return and destructuring", () => {
   test("multi-return happy path", () => {
     expectNoErrors("fn f(): (i32, i32) { return 1, 2; }");
   });
@@ -825,7 +820,7 @@ describe("TypeChecker: 9B multi-return and destructuring", () => {
   });
 });
 
-describe("TypeChecker: 10A function types", () => {
+describe("TypeChecker: function types", () => {
   test("same canonical fn-types are compatible", () => {
     expectNoErrors("fn run(cb: fn(i32):i32): void { let local: fn(i32):i32 = cb; }");
   });
@@ -916,7 +911,7 @@ describe("TypeChecker: 10A function types", () => {
   });
 });
 
-describe("TypeChecker: 10B named function references", () => {
+describe("TypeChecker: named function references", () => {
   test("function name in scope has canonical fn-type", () => {
     const p = new Parser(`
       fn add(a: i32, b: i32): i32 { return a + b; }
@@ -1016,7 +1011,7 @@ describe("TypeChecker: 10B named function references", () => {
   });
 });
 
-describe("TypeChecker: 9C imported stdlib globals", () => {
+describe("TypeChecker: imported stdlib globals", () => {
   test("imported f32 global used as return value type-checks", () => {
     expectNoErrors(`
       import PI from "math"
