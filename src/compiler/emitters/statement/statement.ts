@@ -1,5 +1,4 @@
 import { CallExpression } from "../../../parser/ast/expressions/CallExpression";
-import { Identifier } from "../../../parser/ast/expressions/Identifier";
 import { PostfixExpression } from "../../../parser/ast/expressions/PostfixExpression";
 import { BlockStatement } from "../../../parser/ast/statements/BlockStatement";
 import { BreakStatement } from "../../../parser/ast/statements/BreakStatement";
@@ -14,9 +13,9 @@ import { WhileStatement } from "../../../parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../../../parser/ast/types/ast.type";
 import { MapleError } from "../../errors";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { fnTypeResultCount, isFnType, valueTypeToWasm } from "../emit.types";
-import { emitGet } from "../expression/core";
+import { fnTypeResultCount, isFnType } from "../emit.types";
 import { emitExpression } from "../expression/expression";
+import { toLvalue } from "../expression/lvalue";
 import { emitBreakStatement } from "./break";
 import { emitContinueStatement } from "./continue";
 import { emitForStatement } from "./for";
@@ -26,38 +25,13 @@ import { emitSwitchStatement } from "./switch";
 import { emitWhileStatement } from "./while";
 
 function emitPostfixVoid(expr: PostfixExpression, emitter: ModuleEmitter): string {
-  if (!(expr.left instanceof Identifier)) {
+  if (!expr.left) {
     const t = expr.token;
-    throw new MapleError(
-      "[statement emitter] postfix statement only supports identifiers",
-      t.line,
-      t.col,
-    );
+    throw new MapleError("[statement emitter] postfix has no target", t.line, t.col);
   }
-  const name = expr.left.tokenLiteral();
-  const v = emitter.getVar(name);
-  if (!v) {
-    const t = expr.left.token;
-    throw new MapleError(`variable not found: "${name}"`, t.line, t.col);
-  }
-  const exprType = emitter.getExprType(expr.left);
-  if (exprType === null) {
-    const t = expr.token;
-    throw new MapleError("unable to resolve postfix statement type", t.line, t.col);
-  }
-  const w = valueTypeToWasm(exprType);
+  const lv = toLvalue(expr.left, emitter);
   const delta = expr.operator === "++" ? 1 : -1;
-  const deltaOp =
-    w === "f32"
-      ? `(f32.const ${delta})`
-      : w === "f64"
-        ? `(f64.const ${delta})`
-        : w === "i64"
-          ? `(i64.const ${delta})`
-          : `(i32.const ${delta})`;
-  const updated = `(${w}.add ${emitGet(name, emitter)} ${deltaOp})`;
-  const setOp = v.scope === "global" ? "global.set" : "local.set";
-  return `(${setOp} $${name} ${updated})`;
+  return lv.store(`(${lv.lane}.add ${lv.load} (${lv.lane}.const ${delta}))`);
 }
 
 export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void {

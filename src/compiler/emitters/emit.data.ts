@@ -206,7 +206,7 @@ function numToLittleEndian(ns: number[], type: string) {
   } else if (baseType === "f64") {
     const f64 = new Float64Array(buffer);
     f64.set(ns, 0);
-  } else if (baseType === "i8" || baseType === "u8") {
+  } else if (baseType === "i8" || baseType === "u8" || baseType === "bool") {
     const u8 = new Uint8Array(buffer);
     u8.set(
       ns.map((n) => Math.trunc(n) & 0xff),

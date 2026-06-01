@@ -362,8 +362,8 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
     walkStmt(stmt, topScope);
   }
 
-  if (mod.needsClosureRuntime && !mod.imports["alloc"]) {
-    mod.imports["alloc"] = {
+  if (mod.needsClosureRuntime && !mod.imports.alloc) {
+    mod.imports.alloc = {
       module: "memory",
       name: "malloc",
       resolved: true,

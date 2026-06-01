@@ -25,7 +25,7 @@ import { emitBinaryOp } from "./binary";
 import { emitGet, emitNumberGet } from "./core";
 import { emitFunctionCall } from "./function-call";
 import { emitIndexExpression } from "./index";
-import { getPointerMemberData } from "./member";
+import { resolveStructMember } from "./member";
 
 function emitPrefixExpression(expression: PrefixExpression, emitter: ModuleEmitter): string {
   const right = expression.right;
@@ -153,7 +153,8 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     writer.line(emitFunctionCall(expression, emitter));
     //
   } else if (expression instanceof IntegerLiteralExpression) {
-    writer.line(emitNumberGet(expression.value, expression.numericType === "i64" ? "i64" : "i32"));
+    const lane = expression.numericType === "i64" ? "i64" : "i32";
+    writer.line(`(${lane}.const ${expression.constText(lane)})`);
     //
   } else if (expression instanceof BooleanLiteralExpression) {
     writer.line(emitNumberGet(expression.value ? 1 : 0, "i32"));
@@ -190,20 +191,10 @@ export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter
     expression instanceof MemberExpression ||
     expression instanceof PointerMemberExpression
   ) {
-    const { memberData, identData } = getPointerMemberData(expression, emitter);
-    if (!memberData) {
-      const t = expression.token;
-      throw new MapleError(
-        "[expression emitter] struct member access requires a struct-typed base",
-        t.line,
-        t.col,
-      );
-    }
+    const { basePtr, memberData } = resolveStructMember(expression, emitter);
     const loadOp = wasmLoadOp(memberData.type);
-    const offset = memberData.offset;
-    const addr = emitGet(identData.name, emitter);
-    const val = emitNumberGet(offset, "i32");
-    writer.append(`(${loadOp} (i32.add ${addr} ${val}))`);
+    const off = emitNumberGet(memberData.offset, "i32");
+    writer.append(`(${loadOp} (i32.add ${basePtr} ${off}))`);
   } else if (expression instanceof PrefixExpression) {
     writer.append(emitPrefixExpression(expression, emitter));
     //

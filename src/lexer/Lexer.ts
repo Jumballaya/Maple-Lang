@@ -828,7 +828,7 @@ export class Lexer {
         const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
         if (digits.length === 0) throw new Error("Malformed hex literal: missing digits");
         const value = Number.parseInt(digits, 16);
-        return { ...mark, type: "IntegerLiteral", literal: value };
+        return { ...mark, type: "IntegerLiteral", literal: value, rawText: `0x${digits}` };
       }
       if (p === "o" || p === "O") {
         this.readChar();
@@ -838,7 +838,7 @@ export class Lexer {
         const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
         if (digits.length === 0) throw new Error("Malformed octal literal: missing digits");
         const value = Number.parseInt(digits, 8);
-        return { ...mark, type: "IntegerLiteral", literal: value };
+        return { ...mark, type: "IntegerLiteral", literal: value, rawText: `0o${digits}` };
       }
       if (p === "b" || p === "B") {
         this.readChar();
@@ -848,7 +848,7 @@ export class Lexer {
         const digits = this.text.slice(digitsStart, this.pos).replace(/_/g, "");
         if (digits.length === 0) throw new Error("Malformed binary literal: missing digits");
         const value = Number.parseInt(digits, 2);
-        return { ...mark, type: "IntegerLiteral", literal: value };
+        return { ...mark, type: "IntegerLiteral", literal: value, rawText: `0b${digits}` };
       }
     }
 

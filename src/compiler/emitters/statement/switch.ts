@@ -5,88 +5,79 @@ import { makeLabel } from "../emitter.utils";
 import { emitExpression } from "../expression/expression";
 import { emitStatement } from "./statement";
 
+/**
+ * Switch lowering uses an `i32.eq` chain inside a nest of blocks, one block
+ * per case. Each `br_if $caseLabel` jumps out of its block, landing right
+ * before the case body; falling off the chain hits `$default`. The chain is
+ * linear in the number of cases — independent of the magnitude or density
+ * of case values — so `case -1` and `case 1_000_000` cost the same as
+ * `case 0`.
+ *
+ *   (block $break
+ *     (block $default
+ *       (block $case_1
+ *         (block $case_0
+ *           (br_if $case_0 (i32.eq cond k0))
+ *           (br_if $case_1 (i32.eq cond k1))
+ *           (br $default))
+ *         ;; case 0 body
+ *         (br $break))
+ *       ;; case 1 body
+ *       (br $break))
+ *     ;; default body
+ *   )
+ */
 export function emitSwitchStatement(stmt: SwitchStatement, emitter: ModuleEmitter): void {
-  //
-  // WAT br_table pattern:
-  //
-  // (block $switch_break   ;; <-- break label pushed onto emitter break stack
-  //   (block $switch_default
-  //     (block $switch_case_1
-  //       (block $switch_case_0
-  //         (br_table $switch_case_0 $switch_case_1 $switch_default (local.get $x))
-  //       )
-  //       ;; case 0 body
-  //       (br $switch_break)   ;; implicit exit after each case
-  //     )
-  //     ;; case 1 body
-  //     (br $switch_break)
-  //   )
-  //   ;; default body
-  // )
-  //
-
-  const sorted = [...stmt.cases].sort((a, b) => a.test - b.test);
+  const cases = stmt.cases;
   const defaultLabel = makeLabel("switch_default");
-  const caseLabels = sorted.map(() => makeLabel("switch_case"));
+  const caseLabels = cases.map(() => makeLabel("switch_case"));
+  const breakLabel = emitter.makeLabel("break");
 
-  // Push a break label so that `break;` inside a case targets the switch exit
-  const switchBreakLabel = emitter.makeLabel("break");
-
-  // Build the jump table: index 0..maxVal -> label, out-of-range -> defaultLabel
-  const lastCase = sorted[sorted.length - 1];
-  const maxVal = lastCase !== undefined ? lastCase.test : -1;
-  const table: string[] = [];
-  let caseIdx = 0;
-  for (let i = 0; i <= maxVal; i = i + 1) {
-    const currentCase = sorted[caseIdx];
-    if (currentCase !== undefined && currentCase.test === i) {
-      const label = caseLabels[caseIdx];
-      table.push(label ?? defaultLabel);
-      caseIdx = caseIdx + 1;
-    } else {
-      table.push(defaultLabel);
-    }
-  }
-  table.push(defaultLabel); // out-of-range fallback
-
-  // Outermost block is the switch exit (and the break target).
-  // The inner default block is used as the br_table fallback so unmatched values
-  // land right before the default body (still inside break-label scope).
-  emitter.writer.open(`(block ${switchBreakLabel}`);
+  emitter.writer.open(`(block ${breakLabel}`);
   emitter.writer.open(`(block ${defaultLabel}`);
 
-  // Open one block per case in reverse order so innermost = lowest case
+  // Innermost block holds the dispatch chain; outer blocks each guard a
+  // case body so `br $caseLabel` lands at the right body via fall-through.
   for (let i = caseLabels.length - 1; i >= 0; i = i - 1) {
     emitter.writer.open(`(block ${caseLabels[i]}`);
   }
 
-  // Dispatch. `br_table` requires an i32 discriminant; coerce wider lanes.
-  let cond = emitExpression(stmt.switchExpr, emitter);
-  const condMt = emitter.getExprType(stmt.switchExpr);
-  if (condMt !== null) {
-    const w = valueTypeToWasm(condMt);
-    if (w === "i64") cond = `(i32.wrap_i64 ${cond})`;
-    else if (w === "f32") cond = `(i32.trunc_f32_s ${cond})`;
-    else if (w === "f64") cond = `(i32.trunc_f64_s ${cond})`;
+  const cond = coerceToI32(emitExpression(stmt.switchExpr, emitter), stmt.switchExpr, emitter);
+  for (let i = 0; i < cases.length; i = i + 1) {
+    const c = cases[i];
+    if (c === undefined) continue;
+    emitter.writer.line(`(br_if ${caseLabels[i]} (i32.eq ${cond} (i32.const ${c.test})))`);
   }
-  emitter.writer.line(`(br_table ${table.join(" ")} ${cond})`);
+  emitter.writer.line(`(br ${defaultLabel})`);
 
-  // Close each case block and emit its body, then implicit exit to switch end
-  for (let i = 0; i < sorted.length; i = i + 1) {
+  for (let i = 0; i < cases.length; i = i + 1) {
     emitter.writer.close(")");
-    const c = sorted[i];
+    const c = cases[i];
     if (c !== undefined) {
       emitStatement(c.body, emitter);
     }
-    emitter.writer.line(`(br ${switchBreakLabel})`);
+    emitter.writer.line(`(br ${breakLabel})`);
   }
 
-  // Close each case and the default-dispatch block, then emit default body.
-  emitter.writer.close(")");
+  emitter.writer.close(")"); // $switch_default
   if (stmt.default) {
     emitStatement(stmt.default, emitter);
   }
-  emitter.writer.close(")");
+  emitter.writer.close(")"); // $switch_break
 
-  emitter.destroyLabel("break", switchBreakLabel);
+  emitter.destroyLabel("break", breakLabel);
+}
+
+function coerceToI32(
+  cond: string,
+  expr: SwitchStatement["switchExpr"],
+  emitter: ModuleEmitter,
+): string {
+  const mt = emitter.getExprType(expr);
+  if (mt === null) return cond;
+  const w = valueTypeToWasm(mt);
+  if (w === "i64") return `(i32.wrap_i64 ${cond})`;
+  if (w === "f32") return `(i32.trunc_f32_s ${cond})`;
+  if (w === "f64") return `(i32.trunc_f64_s ${cond})`;
+  return cond;
 }

@@ -105,10 +105,10 @@ export function wasmLoadOp(t: string): string {
   if (b === "f32") return "f32.load";
   if (b === "i64" || b === "u64") return "i64.load";
   if (b === "i8") return "i32.load8_s";
-  if (b === "u8") return "i32.load8_u";
+  if (b === "u8" || b === "bool") return "i32.load8_u";
   if (b === "i16") return "i32.load16_s";
   if (b === "u16") return "i32.load16_u";
-  return "i32.load"; // i32/u32/ptr/bool
+  return "i32.load"; // i32/u32/ptr
 }
 
 export function wasmStoreOp(t: string): string {
@@ -116,9 +116,9 @@ export function wasmStoreOp(t: string): string {
   if (b === "f64") return "f64.store";
   if (b === "f32") return "f32.store";
   if (b === "i64" || b === "u64") return "i64.store";
-  if (b === "i8" || b === "u8") return "i32.store8";
+  if (b === "i8" || b === "u8" || b === "bool") return "i32.store8";
   if (b === "i16" || b === "u16") return "i32.store16";
-  return "i32.store"; // i32/u32/ptr/bool
+  return "i32.store"; // i32/u32/ptr
 }
 
 export function i32CompareOp(op: "<" | "<=" | ">" | ">=" | "==" | "!=", signed: boolean): string {

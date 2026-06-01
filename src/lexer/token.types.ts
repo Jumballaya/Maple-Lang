@@ -108,6 +108,10 @@ export type Token =
 export type IntegerToken = {
   type: "IntegerLiteral";
   literal: number;
+  // Source lexeme preserved when the literal's magnitude exceeds JS
+  // Number's safe range, so downstream `(<lane>.const N)` emission can
+  // reconstruct an exact value via BigInt.
+  rawText?: string;
 } & Pos;
 
 export type FloatToken = {

@@ -119,6 +119,10 @@ export class Parser {
 
     LBracket: INDEX,
     Period: INDEX,
+    // Postfix `++` / `--` bind at the same level as `.` and `[]`, so
+    // `p.x++` parses as `(p.x)++`, not `p.(x++)`.
+    Increment: INDEX,
+    Decrement: INDEX,
 
     As: CAST,
 
@@ -177,6 +181,13 @@ export class Parser {
     this.registerPrefix("False", this.parseBooleanLiteral.bind(this));
     this.registerPrefix("LParen", this.parseGroupedExpression.bind(this));
     this.registerPrefix("Func", this.parseFunctionLiteral.bind(this));
+    // Struct literal in expression position (`{x = 5, ...}`). The name is
+    // resolved later from context (let-annotation, fn-param type, fn return
+    // type, struct-field type). Parsing only — runtime support depends on
+    // the surrounding context.
+    this.registerPrefix("LBrace", this.parseAnonymousStructLiteral.bind(this));
+    // Array literal in expression position (`[1, 2, 3]`).
+    this.registerPrefix("LBracket", this.parseAnonymousArrayLiteral.bind(this));
 
     // Infix
     // @TODO: Move Assign logic to here
@@ -250,6 +261,9 @@ export class Parser {
         const stmt = new BreakStatement(token);
         if (!this.expectPeek("Semicolon")) {
           this.pushError("Parser: semicolon expected after break statement", token);
+          // Skip the offending token so the outer parse loop makes progress
+          // (otherwise `break <ident>;` would re-enter this branch forever).
+          this.tokenizer.nextToken();
           return null;
         }
         this.tokenizer.nextToken(); // consume the semicolon
@@ -259,6 +273,7 @@ export class Parser {
         const stmt = new ContinueStatement(token);
         if (!this.expectPeek("Semicolon")) {
           this.pushError("Parser: semicolon expected after continue statement", token);
+          this.tokenizer.nextToken();
           return null;
         }
         this.tokenizer.nextToken(); // consume the semicolon
@@ -1092,26 +1107,29 @@ export class Parser {
     }
     let leftExpr = prefix();
 
+    // Infix and postfix tokens both extend `leftExpr` left-to-right while
+    // the next token outranks the caller's precedence. Keeping them in one
+    // loop ensures `p.x++` parses as `(p.x)++` rather than `p.(x++)`.
     while (
       !(this.tokenizer.peekTokenIs("Semicolon") || this.tokenizer.peekTokenIs("Comma")) &&
       precendence < this.peekPrecedence()
     ) {
-      const infix = this.infixParseFns.get(this.tokenizer.peekToken().type);
-      if (!infix) {
-        return leftExpr;
+      const peekType = this.tokenizer.peekToken().type;
+      const infix = this.infixParseFns.get(peekType);
+      if (infix) {
+        this.tokenizer.nextToken();
+        if (leftExpr) {
+          leftExpr = infix(leftExpr);
+        }
+        continue;
       }
-      this.tokenizer.nextToken();
-      if (leftExpr) {
-        leftExpr = infix(leftExpr);
+      const postfix = this.postfixParseFns.get(peekType);
+      if (postfix && leftExpr) {
+        this.tokenizer.nextToken();
+        leftExpr = postfix(leftExpr);
+        continue;
       }
-    }
-
-    const postfix = this.postfixParseFns.get(this.tokenizer.peekToken().type);
-    if (postfix && !leftExpr) {
-      return null;
-    } else if (postfix && leftExpr) {
-      this.tokenizer.nextToken();
-      return postfix(leftExpr);
+      break;
     }
 
     return leftExpr;
@@ -1128,6 +1146,14 @@ export class Parser {
   private parseUnaryPlus(): ASTExpression | null {
     this.tokenizer.nextToken();
     return this.parseExpression(PREFIX);
+  }
+
+  private parseAnonymousStructLiteral(): ASTExpression | null {
+    return this.parseStructLiteral("");
+  }
+
+  private parseAnonymousArrayLiteral(): ASTExpression | null {
+    return this.parseArrayLiteral("");
   }
 
   private parseInfixExpression(left: ASTExpression): ASTExpression {
@@ -1286,7 +1312,7 @@ export class Parser {
       this.pushError(message, this.tokenizer.curToken());
       return null;
     }
-    return new IntegerLiteralExpression(literalToken, value);
+    return new IntegerLiteralExpression(literalToken, value, literalToken.rawText);
   }
 
   private parseBooleanLiteral(): ASTExpression {
@@ -1348,20 +1374,20 @@ export class Parser {
       this.pushError("Parser: missing expression in array literal", this.tokenizer.curToken());
       return { num: null, exprType: "" };
     }
+    this.tokenizer.nextToken();
+    // Bare numeric / bool literals get stored as their concrete value and
+    // drive the inferred element type. Non-literal expressions are accepted
+    // syntactically but stored as a placeholder zero; later emit work needs
+    // to handle the general case.
     const isFloat = p instanceof FloatLiteralExpression;
     const isInt = p instanceof IntegerLiteralExpression;
     const isBool = p instanceof BooleanLiteralExpression;
-    if (!(isFloat || isInt || isBool)) {
-      this.pushError(
-        "Parser: only float, integer and bool literals in an array literal are supported",
-        this.tokenizer.curToken(),
-      );
-      return { num: null, exprType: "" };
+    if (isFloat || isInt || isBool) {
+      const exprType = isFloat ? "f32" : "i32";
+      const num = typeof p.value === "number" ? p.value : p.value ? 1 : 0;
+      return { num, exprType };
     }
-    this.tokenizer.nextToken();
-    const exprType = isFloat ? "f32" : "i32";
-    const num = typeof p.value === "number" ? p.value : p.value ? 1 : 0;
-    return { num, exprType };
+    return { num: 0, exprType: "" };
   }
 
   private parseStructLiteral(structName: string): ASTExpression | null {
@@ -1743,7 +1769,7 @@ export class Parser {
       return null;
     }
 
-    if (this.tokenizer.peekTokenIs("LBracket")) {
+    while (this.tokenizer.peekTokenIs("LBracket")) {
       this.tokenizer.nextToken();
       if (!this.expectPeek("RBracket")) {
         this.pushError(
@@ -1775,7 +1801,7 @@ export class Parser {
       return null;
     }
 
-    if (this.tokenizer.peekTokenIs("LBracket")) {
+    while (this.tokenizer.peekTokenIs("LBracket")) {
       this.tokenizer.nextToken();
       if (!this.expectPeek("RBracket")) {
         this.pushError(

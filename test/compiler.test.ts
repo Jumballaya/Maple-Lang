@@ -6,7 +6,7 @@ import { describe, test } from "node:test";
 import { compiler, linkStdlibImports } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { emitExpression } from "../src/compiler/emitters/expression/expression";
-import { getPointerMemberData } from "../src/compiler/emitters/expression/member";
+import { resolveStructMember } from "../src/compiler/emitters/expression/member";
 import {
   collectFnReferences,
   emitModule,
@@ -623,7 +623,17 @@ describe("Emission: Member Access", () => {
     assert(wat.includes("(i32.load (i32.add (global.get $s) (i32.const 0)))"));
   });
 
-  test("member access rejects non-identifier parent", () => {
+  test("member access on a function-call base compiles", () => {
+    const { wat } = compile(`
+      struct P { x: i32 }
+      fn make(): P { let p: P = { x = 42 }; return p; }
+      fn test(): i32 { return make().x; }
+    `);
+    assert(wat.includes("(call $make"));
+    assert(wat.includes("(i32.load"));
+  });
+
+  test("member access on an unsupported base shape errors", () => {
     const token = {
       type: "Identifier" as const,
       literal: "x",
@@ -632,18 +642,22 @@ describe("Emission: Member Access", () => {
       end: 0,
       start: 0,
     };
-    const nonIdent = new InfixExpression(
+    const nonSupported = new InfixExpression(
       token,
       "dummy" as unknown as ASTExpression,
       "+",
       "dummy" as unknown as ASTExpression,
     );
-    const memberExpr = new MemberExpression(token, nonIdent as unknown as ASTExpression, "field");
+    const memberExpr = new MemberExpression(
+      token,
+      nonSupported as unknown as ASTExpression,
+      "field",
+    );
     const meta = extractModuleMeta(new Parser("").parse("test"));
     const emitter = new ModuleEmitter(meta);
 
-    assert.throws(() => getPointerMemberData(memberExpr, emitter), {
-      message: /only identifier expressions/,
+    assert.throws(() => resolveStructMember(memberExpr, emitter), {
+      message: /unsupported base/,
     });
   });
 
@@ -889,7 +903,7 @@ describe("Emission: array index write", () => {
 });
 
 describe("Emission: switch", () => {
-  test("switch emits br_table", () => {
+  test("switch emits br_if dispatch with each case body", () => {
     const { wat } = compile(`
       fn classify(x: i32): i32 {
         switch (x) {
@@ -899,13 +913,14 @@ describe("Emission: switch", () => {
         }
       }
     `);
-    assert(wat.includes("br_table"));
+    assert.match(wat, /\(br_if \$switch_case_\d+ \(i32\.eq[^)]*\) \(i32\.const 0\)\)\)/);
+    assert.match(wat, /\(br_if \$switch_case_\d+ \(i32\.eq[^)]*\) \(i32\.const 1\)\)\)/);
     assert(wat.includes("(i32.const 10)"));
     assert(wat.includes("(i32.const 20)"));
     assert(wat.includes("(i32.const 99)"));
   });
 
-  test("switch without default emits br_table with fallthrough", () => {
+  test("switch without default still emits the dispatch chain", () => {
     const { wat } = compile(`
       fn test(x: i32): void {
         switch (x) {
@@ -914,7 +929,8 @@ describe("Emission: switch", () => {
         }
       }
     `);
-    assert(wat.includes("br_table"));
+    assert.match(wat, /\(br_if \$switch_case/);
+    assert.match(wat, /\(br \$switch_default/);
   });
 });
 
@@ -1283,7 +1299,7 @@ describe("Emission: Switch break", () => {
     assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
   });
 
-  test("switch case body still has implicit exit after case body", () => {
+  test("switch case body has implicit exit after case body", () => {
     // existing Go-style no-fall-through behavior must not regress
     const { wat } = compile(`
       fn f(x: i32): i32 {
@@ -1293,7 +1309,9 @@ describe("Emission: Switch break", () => {
         }
       }
     `);
-    assert(wat.includes("br_table"), `Expected br_table in switch:\n${wat}`);
+    // Each case body is followed by `(br $switch_break_*)` so cases don't
+    // fall through to one another.
+    assert.match(wat, /\(br \$break_\d+\)/);
   });
 });
 

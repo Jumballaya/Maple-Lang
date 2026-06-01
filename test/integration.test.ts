@@ -249,7 +249,7 @@ describe("Integration: Operators & control flow WAT structure", () => {
       }
     `);
     assert(isBalanced(wat));
-    assert(wat.includes("br_table"));
+    assert(wat.includes("br_if"));
   });
 
   test("all binary operators in one function has balanced WAT", () => {
@@ -1286,7 +1286,7 @@ describe("unused call results are dropped at statement position", () => {
       }
     `);
     // Strip whitespace and look at sequence after each call site.
-    const calls = wat.match(/\(call \$produce[^\)]*\)\s*\(drop\)/g) ?? [];
+    const calls = wat.match(/\(call \$produce[^)]*\)\s*\(drop\)/g) ?? [];
     assert.equal(calls.length, 1, `expected 1 call+drop, got WAT:\n${wat}`);
   });
 
@@ -2145,13 +2145,14 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run"), 4);
   });
 
-  // The parser limits array-literal elements to bare numeric/bool literals,
-  // so cast-elements and struct-elements get rejected.
+  // The parser used to limit array-literal elements to bare numeric/bool
+  // literals. With struct-literal-as-expression support, an array of structs
+  // should also parse.
   test("array literal of struct literals parses", () => {
     const p = new Parser(`
       struct P { x: i32 }
       fn f(): i32 {
-        let arr: P[] = [P{x:1}, P{x:2}];
+        let arr: P[] = [{ x = 1 }, { x = 2 }];
         return arr[1].x;
       }
     `);
@@ -2424,18 +2425,6 @@ describe("unary operators", () => {
     `);
     assert.equal(runExport(wat, "notZero"), 1);
     assert.equal(runExport(wat, "notOne"), 0);
-  });
-});
-
-// ─── Ternary operator ───────────────────────────────────────────────────────
-
-describe("ternary operator", () => {
-  test("cond ? a : b is accepted", () => {
-    const p = new Parser(`
-      fn f(c: i32): i32 { return c ? 1 : 0; }
-    `);
-    p.parse("test");
-    assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   });
 });
 

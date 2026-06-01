@@ -10,7 +10,7 @@ import { Writer } from "../../writer/Writer";
 import { baseScalar, sizeofType, wasmStoreOp } from "../emit.types";
 import { emitGet, emitSet } from "./core";
 import { emitExpression } from "./expression";
-import { getPointerMemberData } from "./member";
+import { resolveStructMember } from "./member";
 
 const compoundOps: Record<string, string> = {
   "+=": "+",
@@ -81,19 +81,15 @@ export function emitAssignmentExpression(
     expression.left instanceof MemberExpression ||
     expression.left instanceof PointerMemberExpression
   ) {
-    if (expression.operator !== "=") {
-      throw new Error("[expression emitter] compound assignment for members not implemented");
-    }
-    const { identData, memberData } = getPointerMemberData(expression.left, emitter);
-    if (!memberData) {
-      throw new Error("[expression emitter] struct member assignment requires a struct-typed base");
-    }
-    const t = memberData.type;
-    const off = memberData.offset;
-    const storeOp = wasmStoreOp(t);
-    const base = emitGet(identData.name, emitter);
-    const val = emitExpression(expression.value, emitter);
-    writer.line(`(${storeOp} (i32.add ${base} (i32.const ${off})) ${val})`);
+    const { basePtr, memberData } = resolveStructMember(expression.left, emitter);
+    const addr = `(i32.add ${basePtr} (i32.const ${memberData.offset}))`;
+    const storeOp = wasmStoreOp(memberData.type);
+    const op = compoundOps[expression.operator];
+    const rhs = op
+      ? new InfixExpression(expression.token, expression.left, op, expression.value)
+      : expression.value;
+    const val = emitExpression(rhs, emitter);
+    writer.line(`(${storeOp} ${addr} ${val})`);
   } else {
     throw new Error(
       `[expression emitter] Assignment expression type: "${expression.left.toString()}" not supported`,

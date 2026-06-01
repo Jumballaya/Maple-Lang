@@ -42,8 +42,12 @@ describe("shared/types: sizeofType", () => {
     assert.equal(sizeofType("i32[]"), 4);
   });
 
+  test("bool is 1 byte", () => {
+    assert.equal(sizeofType("bool"), 1);
+  });
+
   test("unknown type defaults to 4 bytes", () => {
-    assert.equal(sizeofType("bool"), 4);
+    assert.equal(sizeofType("Mystery"), 4);
   });
 
   test("i64 is 8 bytes", () => {

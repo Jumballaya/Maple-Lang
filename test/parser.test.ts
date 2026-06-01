@@ -272,7 +272,7 @@ describe("Parser: Control Flow", () => {
     assertStructStatement(ast.statements[0], "T", {
       apple: { name: "apple", offset: 0, size: 4, type: "i32" },
       banana: { name: "banana", offset: 4, size: 4, type: "f32" },
-      _flag: { name: "_flag", offset: 8, size: 4, type: "bool" },
+      _flag: { name: "_flag", offset: 8, size: 1, type: "bool" },
     });
 
     const letStmt = ast.statements[1];
