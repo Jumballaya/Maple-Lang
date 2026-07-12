@@ -5,11 +5,11 @@ import type { ASTExpression } from "../types/ast.type";
 export class ArrayLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
-  public elements: number[]; // @TODO: implement arrays of other things, or make everything work as an array of numbers
+  public elements: ASTExpression[];
   public location = 0;
   public memberType: string;
 
-  constructor(token: Token, memberType: string, elements: number[] = []) {
+  constructor(token: Token, memberType: string, elements: ASTExpression[] = []) {
     this.token = token;
     this.elements = elements;
     this.memberType = memberType;

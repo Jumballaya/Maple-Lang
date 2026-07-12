@@ -1,8 +1,16 @@
+import { CallExpression } from "../../../parser/ast/expressions/CallExpression";
+import { CastExpression } from "../../../parser/ast/expressions/CastExpression";
+import { Identifier } from "../../../parser/ast/expressions/Identifier";
+import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
 import type { InfixExpression } from "../../../parser/ast/expressions/InfixExpression";
+import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
+import { StringLiteralExpression } from "../../../parser/ast/expressions/StringLiteral";
 import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import type { WasmValueType } from "../emit.types";
 import {
+  baseScalar,
   f64CompareOp,
   i32CompareOp,
   i64CompareOp,
@@ -80,7 +88,59 @@ function truthyToI32(e: ASTExpression, w: WasmValueType, emitter: ModuleEmitter)
   return `(i32.ne ${v} (i32.const 0))`;
 }
 
+// Maple-level type when it can name a struct or string, which the
+// lane-oriented getExprType flattens to i32.
+function aggregateTypeOf(e: ASTExpression, emitter: ModuleEmitter): string | null {
+  if (e instanceof StringLiteralExpression) return "string";
+  if (e instanceof Identifier) return emitter.getVar(e.tokenLiteral())?.type ?? null;
+  if (e instanceof CastExpression) return e.targetType;
+  if (e instanceof CallExpression) {
+    return emitter.ctx.mod.functions[e.func]?.mapleResults[0] ?? null;
+  }
+  if (e instanceof IndexExpression) {
+    const v = emitter.getVar(e.left.tokenLiteral());
+    return v ? baseScalar(v.type) : null;
+  }
+  if (e instanceof MemberExpression || e instanceof PointerMemberExpression) {
+    if (!(e.parent instanceof Identifier)) return null;
+    const v = emitter.getVar(e.parent.tokenLiteral());
+    if (!v) return null;
+    const structName = v.type.startsWith("*") ? v.type.slice(1) : v.type;
+    return emitter.ctx.mod.structs[structName]?.members[e.member]?.type ?? null;
+  }
+  return null;
+}
+
+// `==`/`!=` on strings compares content, on structs field-wise; null falls
+// through to plain numeric comparison.
+function emitAggregateEquality(expr: InfixExpression, emitter: ModuleEmitter): string | null {
+  const lt = aggregateTypeOf(expr.left, emitter);
+  const rt = aggregateTypeOf(expr.right, emitter);
+  if (lt === null || lt !== rt) return null;
+
+  let eqFn: string;
+  if (lt === "string") {
+    emitter.needsStringEq = true;
+    eqFn = "$__string_eq";
+  } else if (emitter.getStruct(lt)) {
+    emitter.structEqNames.add(lt);
+    eqFn = `$__struct_eq_${lt}`;
+  } else {
+    return null;
+  }
+
+  const l = emitExpression(expr.left, emitter);
+  const r = emitExpression(expr.right, emitter);
+  const eq = `(call ${eqFn} ${l} ${r})`;
+  return expr.operator === "==" ? eq : `(i32.eqz ${eq})`;
+}
+
 export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): string {
+  if (expr.operator === "==" || expr.operator === "!=") {
+    const aggregate = emitAggregateEquality(expr, emitter);
+    if (aggregate) return aggregate;
+  }
+
   const [numType, , signedInt] = emitter.resolveBinaryOpTypes(expr.left, expr.right);
   const l = emitOperand(expr.left, numType, emitter);
   const r = emitOperand(expr.right, numType, emitter);

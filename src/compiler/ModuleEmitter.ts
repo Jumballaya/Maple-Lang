@@ -54,6 +54,11 @@ export class ModuleEmitter {
   };
   private needsShadowStack = false;
 
+  // Runtime helpers emitted once per module, only when something uses them.
+  public needsArrayRuntime = false;
+  public needsStringEq = false;
+  public readonly structEqNames = new Set<string>();
+
   constructor(data: ModuleMeta) {
     this.mod = data;
   }
@@ -158,6 +163,41 @@ export class ModuleEmitter {
     this.currentFn.locals[meta.name] = meta;
   }
 
+  // `@` is valid in WAT identifiers but not Maple ones, so suffixed names
+  // (`x@1`) can never collide with user code.
+  public uniqueLocalName(src: string): string {
+    const fn = this.currentFn;
+    if (!fn) {
+      throw new Error("[unique local] no active function");
+    }
+    if (!fn.params[src] && !fn.locals[src]) return src;
+    for (let i = 1; ; i++) {
+      const candidate = `${src}@${i}`;
+      if (!fn.params[candidate] && !fn.locals[candidate]) return candidate;
+    }
+  }
+
+  public pushScope(): void {
+    this.currentFn?.scopes.push(new Map());
+  }
+  public popScope(): void {
+    this.currentFn?.scopes.pop();
+  }
+  public bindLocal(srcName: string, uniqueName: string): void {
+    const scopes = this.currentFn?.scopes;
+    if (!scopes || scopes.length === 0) return;
+    scopes[scopes.length - 1]!.set(srcName, uniqueName);
+  }
+  private resolveLocalName(srcName: string): string | undefined {
+    const scopes = this.currentFn?.scopes;
+    if (!scopes) return undefined;
+    for (let i = scopes.length - 1; i >= 0; i--) {
+      const hit = scopes[i]!.get(srcName);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+
   public configureLocalStructFrame(totalSize: number, offsets: Record<string, number>): void {
     if (!this.currentFn) {
       throw new Error("[local struct frame] no active function");
@@ -184,6 +224,8 @@ export class ModuleEmitter {
   public getVar(name: string): VariableMeta | undefined {
     const fn = this.currentFn;
     if (fn) {
+      const scoped = this.resolveLocalName(name);
+      if (scoped && fn.locals[scoped]) return fn.locals[scoped];
       if (fn.locals[name]) return fn.locals[name];
       if (fn.params[name]) return fn.params[name];
     }
@@ -405,6 +447,7 @@ export class ModuleEmitter {
         labels: [],
         frameSize: 0,
         structFrameOffsets: {},
+        scopes: [new Map()],
       };
       const out = emit(writer);
       writer.end();

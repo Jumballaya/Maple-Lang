@@ -173,6 +173,10 @@ function resolveExprType(
   if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
     const parentType = resolveExprType(expr.parent, scope, meta, errors);
     if (!parentType) return null;
+    // Arrays expose the same {len, data} header members as strings.
+    if (parentType.endsWith("[]")) {
+      return expr.member === "len" || expr.member === "data" ? "i32" : null;
+    }
     const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
     const memberData = meta.structs[structName]?.members[expr.member];
     return memberData?.type ?? null;
@@ -356,17 +360,24 @@ function walkExpression(
     return;
   }
 
-  // Check 5 — struct member existence
+  // Check 5 — struct member existence (arrays only expose len/data)
   if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
     const parentType = resolveExprType(expr.parent, scope, meta, errors);
     if (parentType) {
-      const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
-      const structDef = meta.structs[structName];
-      if (structDef && !(expr.member in structDef.members)) {
-        const t = expr.token;
-        errors.push(
-          new MapleError(`Struct '${structName}' has no member '${expr.member}'`, t.line, t.col),
-        );
+      if (parentType.endsWith("[]")) {
+        if (expr.member !== "len" && expr.member !== "data") {
+          const t = expr.token;
+          errors.push(new MapleError(`Array type has no member '${expr.member}'`, t.line, t.col));
+        }
+      } else {
+        const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
+        const structDef = meta.structs[structName];
+        if (structDef && !(expr.member in structDef.members)) {
+          const t = expr.token;
+          errors.push(
+            new MapleError(`Struct '${structName}' has no member '${expr.member}'`, t.line, t.col),
+          );
+        }
       }
     }
     walkExpression(expr.parent, scope, meta, errors);
@@ -506,8 +517,11 @@ function walkBlock(
   errors: MapleError[],
   ctx: FlowContext = { loopDepth: 0, switchDepth: 0 },
 ): void {
+  // Child scope: `let` inside the block shadows rather than clobbers, and
+  // bindings don't leak past the closing brace.
+  const blockScope = new Map(scope);
   for (const stmt of block.statements) {
-    walkStatement(stmt, scope, meta, fnReturnTypes, errors, ctx);
+    walkStatement(stmt, blockScope, meta, fnReturnTypes, errors, ctx);
   }
 }
 

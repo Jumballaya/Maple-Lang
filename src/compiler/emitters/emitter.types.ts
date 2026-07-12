@@ -73,12 +73,23 @@ export type ImportMeta = {
   synthesized?: boolean;
 };
 export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
-export type DeferredGlobalInit = {
-  baseAddr: number;
-  offset: number;
-  fieldType: string;
-  expr: ASTExpression;
-};
+
+// Initializer that runs once at startup (guarded by $__globals_inited):
+// "memory" writes a struct-literal field, "global" assigns a non-const global.
+export type DeferredGlobalInit =
+  | {
+      kind: "memory";
+      baseAddr: number;
+      offset: number;
+      fieldType: string;
+      expr: ASTExpression;
+    }
+  | {
+      kind: "global";
+      name: string;
+      type: string;
+      expr: ASTExpression;
+    };
 
 export type FunctionContext = {
   name: string;
@@ -89,6 +100,9 @@ export type FunctionContext = {
   frameSize: number;
   /** Byte offset of each local struct variable from `global.get $__sp` right after prologue. */
   structFrameOffsets: Record<string, number>;
+  // Lexical scope stack (innermost last) mapping source names to unique
+  // WASM local names; a `let` binds as it is emitted.
+  scopes: Array<Map<string, string>>;
 };
 
 export type ModuleMeta = {

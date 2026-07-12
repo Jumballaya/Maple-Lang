@@ -2,14 +2,14 @@ import type { AssignmentExpression } from "../../../parser/ast/expressions/Assig
 import { Identifier } from "../../../parser/ast/expressions/Identifier";
 import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
 import { InfixExpression } from "../../../parser/ast/expressions/InfixExpression";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
-import { baseScalar, sizeofType, wasmStoreOp } from "../emit.types";
-import { emitGet, emitSet } from "./core";
+import { baseScalar, wasmStoreOp } from "../emit.types";
+import { emitSet } from "./core";
 import { emitExpression } from "./expression";
+import { arrayElementAddr } from "./index";
 import { resolveStructMember } from "./member";
 
 const compoundOps: Record<string, string> = {
@@ -54,29 +54,15 @@ export function emitAssignmentExpression(
         "[expression emitter] compound assignment for index expressions not implemented",
       );
     }
-    const varData = emitter.getVar(expression.left.left.tokenLiteral());
+    const name = expression.left.left.tokenLiteral();
+    const varData = emitter.getVar(name);
     if (!varData) {
-      throw new Error(
-        `[expression emitter] unknown array variable: "${expression.left.left.tokenLiteral()}"`,
-      );
+      throw new Error(`[expression emitter] unknown array variable: "${name}"`);
     }
-    const memberType = baseScalar(varData.type);
-    const memberSize = sizeofType(memberType);
-    const storeOp = wasmStoreOp(memberType);
-    const base = emitGet(varData.name, emitter);
+    const elemType = baseScalar(varData.type);
+    const addr = arrayElementAddr(name, elemType, expression.left.index, emitter);
     const val = emitExpression(expression.value, emitter);
-
-    if (
-      expression.left.index instanceof IntegerLiteralExpression &&
-      expression.left.index.value === 0
-    ) {
-      writer.line(`(${storeOp} ${base} ${val})`);
-    } else {
-      const index = emitExpression(expression.left.index, emitter);
-      writer.line(
-        `(${storeOp} (i32.add ${base} (i32.mul ${index} (i32.const ${memberSize}))) ${val})`,
-      );
-    }
+    writer.line(`(${wasmStoreOp(elemType)} ${addr} ${val})`);
   } else if (
     expression.left instanceof MemberExpression ||
     expression.left instanceof PointerMemberExpression

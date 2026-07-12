@@ -2,8 +2,10 @@ import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLitera
 import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../../parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../../parser/ast/expressions/CallExpression";
+import { CharLiteralExpression } from "../../parser/ast/expressions/CharLiteralExpression";
 import { FloatLiteralExpression } from "../../parser/ast/expressions/FloatLiteralExpression";
 import { IntegerLiteralExpression } from "../../parser/ast/expressions/IntegerLiteral";
+import { PrefixExpression } from "../../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../../parser/ast/statements/BlockStatement";
@@ -15,7 +17,7 @@ import { LetStatement } from "../../parser/ast/statements/LetStatement";
 import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
-import type { ASTStatement } from "../../parser/ast/types/ast.type";
+import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
 import type { ModuleBuilder } from "../ModuleBuilder";
 import type { ModuleEmitter } from "../ModuleEmitter";
 import { baseScalar, sizeofType } from "./emit.types";
@@ -107,17 +109,83 @@ export function extractGlobalData(
     if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
       extractStructLiteral(stmt.expression, builder);
     }
+    // Non-const scalar initializers start at zero and get assigned at startup.
+    if (
+      !insideFunction &&
+      !(stmt.pattern instanceof TuplePattern) &&
+      stmt.expression &&
+      !isConstInitializer(stmt.expression)
+    ) {
+      builder.deferredGlobalInits.push({
+        kind: "global",
+        name: stmt.identifier.tokenLiteral(),
+        type: stmt.typeAnnotation,
+        expr: stmt.expression,
+      });
+    }
     return;
   }
 }
 
+// String/array/struct literals count as const: the global holds their
+// static-data address.
+export function isConstInitializer(expr: ASTExpression): boolean {
+  if (
+    expr instanceof IntegerLiteralExpression ||
+    expr instanceof FloatLiteralExpression ||
+    expr instanceof BooleanLiteralExpression ||
+    expr instanceof CharLiteralExpression ||
+    expr instanceof StringLiteralExpression ||
+    expr instanceof ArrayLiteralExpression ||
+    expr instanceof StructLiteralExpression
+  ) {
+    return true;
+  }
+  return (
+    expr instanceof PrefixExpression &&
+    expr.operator === "-" &&
+    (expr.right instanceof IntegerLiteralExpression || expr.right instanceof FloatLiteralExpression)
+  );
+}
+
+// Arrays share the string layout: an element block followed by an 8-byte
+// {len, data} header; the array variable holds the header address.
 function extractArrayLiteral(expr: ArrayLiteralExpression, builder: ModuleBuilder) {
-  const memberType = baseScalar(expr.memberType);
-  const memberSize = sizeofType(memberType);
-  const total = expr.elements.length * memberSize;
-  const addr = builder.dataAlloc(total);
-  builder.addBytes(numToLittleEndian(expr.elements, expr.memberType), addr);
-  expr.location = addr;
+  const elemType = expr.memberType === "string" ? "i32" : baseScalar(expr.memberType);
+  const values = expr.elements.map((el) => {
+    if (el instanceof IntegerLiteralExpression || el instanceof FloatLiteralExpression) {
+      return el.value;
+    }
+    if (el instanceof BooleanLiteralExpression) {
+      return el.value ? 1 : 0;
+    }
+    if (el instanceof CharLiteralExpression) {
+      return el.value;
+    }
+    if (el instanceof StringLiteralExpression) {
+      extractStringLiteral(el, builder);
+      return el.location;
+    }
+    return 0; // non-literal elements are not supported yet
+  });
+  const dataAddr = builder.addBytes(
+    padBytesTo(numToLittleEndian(values, elemType), 4),
+    undefined,
+    4,
+  );
+  const header = numToLittleEndian([expr.elements.length, dataAddr], "i32");
+  expr.location = builder.addBytes(header, undefined, 4);
+}
+
+// Pad an encoded "\xx" byte string with explicit zeros to a multiple of
+// `alignment` bytes, so data segments stay dense (see extractStringLiteral).
+function padBytesTo(bytes: string, alignment: number): string {
+  const size = Math.floor(bytes.length / 3);
+  let padded = bytes;
+  for (let i = size; i < alignup(size, alignment); i++) {
+    padded += "\\00";
+  }
+  return padded;
 }
 
 function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuilder) {
@@ -159,20 +227,29 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
 
   const addr = builder.dataAlloc(sd.size, 8);
   let encoded = "";
+  let coveredBytes = 0;
   const members = Object.values(sd.members).sort((a, b) => a.offset - b.offset);
   for (const member of members) {
+    for (; coveredBytes < member.offset; coveredBytes++) {
+      encoded += "\\00";
+    }
     const value = expr.members[member.name];
+    const encodedType = member.type === "string" ? "i32" : member.type;
     if (
       value instanceof IntegerLiteralExpression ||
       value instanceof FloatLiteralExpression ||
       value instanceof BooleanLiteralExpression
     ) {
       const num = typeof value.value === "boolean" ? (value.value ? 1 : 0) : value.value;
-      encoded += numToLittleEndian([num], member.type);
+      encoded += numToLittleEndian([num], encodedType);
+    } else if (value instanceof StringLiteralExpression) {
+      extractStringLiteral(value, builder);
+      encoded += numToLittleEndian([value.location], "i32");
     } else {
-      encoded += numToLittleEndian([0], member.type);
+      encoded += numToLittleEndian([0], encodedType);
       if (value) {
         builder.deferredGlobalInits.push({
+          kind: "memory",
           baseAddr: addr,
           offset: member.offset,
           fieldType: member.type,
@@ -180,9 +257,14 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
         });
       }
     }
+    coveredBytes = member.offset + member.size;
+  }
+  for (; coveredBytes < sd.size; coveredBytes++) {
+    encoded += "\\00";
   }
 
-  builder.addBytes(encoded, addr);
+  // cover dataAlloc's full 8-byte stride so data segments stay dense
+  builder.addBytes(padBytesTo(encoded, 8), addr);
   expr.location = addr;
 }
 
@@ -260,7 +342,10 @@ export function buildLocalStructFrame(
         return;
       }
       if (stmt.expression instanceof StructLiteralExpression) {
-        recordStructLocal(stmt.identifier.tokenLiteral(), stmt.expression.name);
+        recordStructLocal(
+          stmt.resolvedName ?? stmt.identifier.tokenLiteral(),
+          stmt.expression.name,
+        );
       }
       return;
     }
@@ -282,10 +367,7 @@ export function buildLocalStructFrame(
       return;
     }
     if (stmt instanceof ForStatement) {
-      const init = stmt.initBlock;
-      if (init.expression instanceof StructLiteralExpression) {
-        recordStructLocal(init.identifier.tokenLiteral(), init.expression.name);
-      }
+      walk(stmt.initBlock);
       walk(stmt.loopBody);
       return;
     }
@@ -303,6 +385,8 @@ export function buildLocalStructFrame(
   return { totalSize: total, offsets };
 }
 
+// Every declaration site gets its own WASM local; colliding names are
+// suffixed and stamped onto the AST (resolvedName) for body emission.
 export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
   if (s instanceof FunctionStatement) {
     extractLocals(s.fnExpr.body, builder);
@@ -312,31 +396,24 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
     if (s.pattern instanceof TuplePattern) {
       if (s.expression instanceof CallExpression) {
         const returnTypes = builder.getCallReturnTypes(s.expression.func) ?? [];
-        for (let i = 0; i < s.pattern.names.length; i++) {
-          const name = s.pattern.names[i]!;
-          if (name.kind !== "name") continue;
+        s.resolvedNames = s.pattern.names.map((name, i) => {
+          if (name.kind !== "name") return null;
+          const unique = builder.uniqueLocalName(name.value);
           builder.defLocal({
-            name: name.value,
+            name: unique,
             type: returnTypes[i] ?? "i32",
             scope: "local",
           });
-        }
+          return unique;
+        });
       }
       return;
     }
-    if (s.expression instanceof StructLiteralExpression) {
-      builder.defLocal({
-        name: s.identifier.tokenLiteral(),
-        type: s.expression.name,
-        scope: "local",
-      });
-      return;
-    }
-    builder.defLocal({
-      name: s.identifier.tokenLiteral(),
-      type: s.typeAnnotation,
-      scope: "local",
-    });
+    const type =
+      s.expression instanceof StructLiteralExpression ? s.expression.name : s.typeAnnotation;
+    const unique = builder.uniqueLocalName(s.identifier.tokenLiteral());
+    s.resolvedName = unique;
+    builder.defLocal({ name: unique, type, scope: "local" });
     return;
   }
   if (s instanceof BlockStatement) {
@@ -357,36 +434,7 @@ export function extractLocals(s: ASTStatement, builder: ModuleEmitter) {
     return;
   }
   if (s instanceof ForStatement) {
-    const init = s.initBlock;
-    if (init.pattern instanceof TuplePattern) {
-      if (init.expression instanceof CallExpression) {
-        const returnTypes = builder.getCallReturnTypes(init.expression.func) ?? [];
-        for (let i = 0; i < init.pattern.names.length; i++) {
-          const name = init.pattern.names[i]!;
-          if (name.kind !== "name") continue;
-          builder.defLocal({
-            name: name.value,
-            type: returnTypes[i] ?? "i32",
-            scope: "local",
-          });
-        }
-      }
-      extractLocals(s.loopBody, builder);
-      return;
-    }
-    if (init.expression instanceof StructLiteralExpression) {
-      builder.defLocal({
-        name: init.identifier.tokenLiteral(),
-        type: init.expression.name,
-        scope: "local",
-      });
-    } else {
-      builder.defLocal({
-        name: s.initBlock.identifier.tokenLiteral(),
-        type: s.initBlock.typeAnnotation,
-        scope: "local",
-      });
-    }
+    extractLocals(s.initBlock, builder);
     extractLocals(s.loopBody, builder);
     return;
   }

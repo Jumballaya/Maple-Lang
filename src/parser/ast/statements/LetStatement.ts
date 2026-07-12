@@ -12,6 +12,10 @@ export class LetStatement implements ASTStatement {
   public typeAnnotation: string;
   public exported;
   public mutable: boolean;
+  // Unique WASM local name stamped by the emitter's locals pass; differs
+  // from the source name when this declaration shadows (`x@1`).
+  public resolvedName?: string;
+  public resolvedNames?: (string | null)[]; // tuple patterns; null = discard
 
   constructor(
     token: Token,

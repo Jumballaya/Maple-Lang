@@ -1,37 +1,30 @@
 import type { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
+import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
-import { Writer } from "../../writer/Writer";
 import { baseScalar, sizeofType, wasmLoadOp } from "../emit.types";
 import { emitGet } from "./core";
 import { emitExpression } from "./expression";
 
+// Bounds-checked address of `array[index]`; $__elem_addr traps on
+// out-of-range (negative indices wrap to huge unsigned values).
+export function arrayElementAddr(
+  arrayName: string,
+  elemType: string,
+  index: ASTExpression,
+  emitter: ModuleEmitter,
+): string {
+  emitter.needsArrayRuntime = true;
+  const base = emitGet(arrayName, emitter);
+  const idx = emitExpression(index, emitter);
+  return `(call $__elem_addr ${base} ${idx} (i32.const ${sizeofType(elemType)}))`;
+}
+
 export function emitIndexExpression(expression: IndexExpression, emitter: ModuleEmitter): string {
-  const writer = new Writer();
-
-  //
-  // Extract the type we are pulling out of the array
-  const varData = emitter.getVar(expression.left.tokenLiteral());
+  const name = expression.left.tokenLiteral();
+  const varData = emitter.getVar(name);
   if (!varData) {
-    throw new Error(`unknown variable : ${expression.left.tokenLiteral()}`);
+    throw new Error(`unknown variable : ${name}`);
   }
-  const arrayType = varData.type;
-  const memberType = baseScalar(arrayType);
-  const memberSize = sizeofType(memberType);
-  const loadOp = wasmLoadOp(memberType);
-
-  // if it is index 0 as a number literal, just use
-  // the base pointer of the array, no math
-  if (expression.index instanceof IntegerLiteralExpression && expression.index.value === 0) {
-    writer.append(`(${loadOp} ${emitGet(varData.name, emitter)})`);
-
-    // otherwise, we need to evaluate the expression
-    // as the index
-  } else {
-    const base = emitGet(varData.name, emitter);
-    const index = emitExpression(expression.index, emitter);
-    writer.append(`(${loadOp} (i32.add ${base} (i32.mul ${index} (i32.const ${memberSize}))))`);
-  }
-
-  return writer.toString();
+  const elemType = baseScalar(varData.type);
+  return `(${wasmLoadOp(elemType)} ${arrayElementAddr(name, elemType, expression.index, emitter)})`;
 }

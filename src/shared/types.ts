@@ -17,3 +17,14 @@ export function sizeofType(t: string): number {
   if (b === "i64" || b === "u64" || b === "f64") return 8;
   return 4;
 }
+
+// Scalars align to their size; anything address-backed aligns to 4.
+export function alignofType(t: string): number {
+  if (t.endsWith("[]") || t.startsWith("*")) return 4;
+  return sizeofType(t);
+}
+
+export function alignTo(value: number, alignment: number): number {
+  const rem = value % alignment;
+  return rem === 0 ? value : value + alignment - rem;
+}

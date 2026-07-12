@@ -8,7 +8,7 @@ import {
 import { MapleError } from "../compiler/errors";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
-import type { StructMember } from "../shared/types";
+import { alignofType, alignTo, type StructMember } from "../shared/types";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
@@ -479,6 +479,7 @@ export class Parser {
 
     const members: Record<string, StructMember> = {};
     let size = 0;
+    let maxAlign = 1;
 
     // Empty struct (`struct X {}`): advance past `{` so cur lands on `}`.
     if (this.tokenizer.curTokenIs("LBrace") && this.tokenizer.peekTokenIs("RBrace")) {
@@ -502,6 +503,9 @@ export class Parser {
         return null;
       }
       const sz = sizeofType(firstType);
+      const align = alignofType(firstType);
+      size = alignTo(size, align);
+      maxAlign = Math.max(maxAlign, align);
       members[firstName] = {
         name: firstName,
         offset: size,
@@ -535,6 +539,9 @@ export class Parser {
       return null;
     }
     this.tokenizer.nextToken(); // consume RBRACE
+
+    // Pad the struct so arrays/frames of it keep every field naturally aligned.
+    size = alignTo(size, maxAlign);
 
     return new StructStatement(statementToken, name, members, size, exported);
   }
@@ -1336,13 +1343,13 @@ export class Parser {
       return null;
     }
     this.tokenizer.nextToken(); // consume LBracket
-    const value = [];
+    const value: ASTExpression[] = [];
 
     // initial values
     if (!this.tokenizer.curTokenIs("RBracket")) {
-      const { num, exprType } = this.parseArrayLiteralMemberTyped();
-      if (num !== null) {
-        value.push(num);
+      const { expr, exprType } = this.parseArrayLiteralMemberTyped();
+      if (expr !== null) {
+        value.push(expr);
         if (!memberType) memberType = exprType;
       }
     }
@@ -1350,9 +1357,9 @@ export class Parser {
     // more values
     while (this.tokenizer.curTokenIs("Comma")) {
       this.tokenizer.nextToken(); // consume Comma
-      const { num } = this.parseArrayLiteralMemberTyped();
-      if (num !== null) {
-        value.push(num);
+      const { expr } = this.parseArrayLiteralMemberTyped();
+      if (expr !== null) {
+        value.push(expr);
       }
     }
 
@@ -1368,26 +1375,20 @@ export class Parser {
     return new ArrayLiteralExpression(literalToken, memberType, value);
   }
 
-  private parseArrayLiteralMemberTyped(): { num: number | null; exprType: string } {
+  private parseArrayLiteralMemberTyped(): { expr: ASTExpression | null; exprType: string } {
     const p = this.parseExpression(LOWEST);
     if (!p) {
       this.pushError("Parser: missing expression in array literal", this.tokenizer.curToken());
-      return { num: null, exprType: "" };
+      return { expr: null, exprType: "" };
     }
     this.tokenizer.nextToken();
-    // Bare numeric / bool literals get stored as their concrete value and
-    // drive the inferred element type. Non-literal expressions are accepted
-    // syntactically but stored as a placeholder zero; later emit work needs
-    // to handle the general case.
-    const isFloat = p instanceof FloatLiteralExpression;
-    const isInt = p instanceof IntegerLiteralExpression;
-    const isBool = p instanceof BooleanLiteralExpression;
-    if (isFloat || isInt || isBool) {
-      const exprType = isFloat ? "f32" : "i32";
-      const num = typeof p.value === "number" ? p.value : p.value ? 1 : 0;
-      return { num, exprType };
-    }
-    return { num: 0, exprType: "" };
+    // Literal elements drive the inferred element type; non-literal
+    // expressions are accepted syntactically but cannot infer a type.
+    if (p instanceof FloatLiteralExpression) return { expr: p, exprType: "f32" };
+    if (p instanceof IntegerLiteralExpression) return { expr: p, exprType: "i32" };
+    if (p instanceof BooleanLiteralExpression) return { expr: p, exprType: "i32" };
+    if (p instanceof StringLiteralExpression) return { expr: p, exprType: "string" };
+    return { expr: p, exprType: "" };
   }
 
   private parseStructLiteral(structName: string): ASTExpression | null {

@@ -30,16 +30,8 @@ export function emitFunctionCall(expr: CallExpression, emitter: ModuleEmitter): 
   return writer.toString();
 }
 
-function varPtrWat(name: string, v: VariableMeta): string {
-  switch (v.scope) {
-    case "local":
-    case "param":
-      return `(local.get $${name})`;
-    case "global":
-      return `(global.get $${name})`;
-    default:
-      return `(local.get $${name})`;
-  }
+function varPtrWat(v: VariableMeta): string {
+  return v.scope === "global" ? `(global.get $${v.name})` : `(local.get $${v.name})`;
 }
 
 function emitIndirectCallViaLocal(
@@ -48,7 +40,7 @@ function emitIndirectCallViaLocal(
   emitter: ModuleEmitter,
 ): string {
   const sigName = fnTypeToSigName(fnVar.type);
-  const ptr = varPtrWat(expr.func, fnVar);
+  const ptr = varPtrWat(fnVar);
 
   let out = `(call_indirect (type ${sigName})`;
   out += ` (i32.load offset=4 ${ptr})`; // env
@@ -93,7 +85,7 @@ function emitIndirectCallViaField(
   const sigName = fnTypeToSigName(field.fieldType);
   // Load the fn-ref pointer stored at receiver+offset. The pointer addresses
   // a {idx, env} pair just like a fn-typed local does.
-  const recvPtr = varPtrWat(field.receiver.name, field.receiver);
+  const recvPtr = varPtrWat(field.receiver);
   const ptr = `(i32.load (i32.add ${recvPtr} (i32.const ${field.fieldOffset})))`;
 
   let out = `(call_indirect (type ${sigName})`;

@@ -10,11 +10,11 @@ export function emitGet(ident: string, emitter: ModuleEmitter): string {
     switch (v.scope) {
       case "local":
       case "param": {
-        return `(local.get $${ident})`;
+        return `(local.get $${v.name})`;
       }
 
       case "global": {
-        return `(global.get $${ident})`;
+        return `(global.get $${v.name})`;
       }
 
       case "memory": {
@@ -44,11 +44,11 @@ export function emitSet(ident: string, expr: ASTExpression, emitter: ModuleEmitt
   switch (v.scope) {
     case "local":
     case "param": {
-      return `(local.set $${ident} ${rhs})`;
+      return `(local.set $${v.name} ${rhs})`;
     }
 
     case "global": {
-      return `(global.set $${ident} ${rhs})`;
+      return `(global.set $${v.name} ${rhs})`;
     }
 
     case "memory": {

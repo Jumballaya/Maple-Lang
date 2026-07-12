@@ -135,9 +135,9 @@ function emitPostfixExpression(expression: PostfixExpression, emitter: ModuleEmi
   const setOp = v.scope === "global" ? "global.set" : "local.set";
 
   if (expression.operator === "++") {
-    return `(block (result ${w}) (${setOp} $${name} ${updated}) (${w}.sub ${emitGet(name, emitter)} ${oneOp}))`;
+    return `(block (result ${w}) (${setOp} $${v.name} ${updated}) (${w}.sub ${emitGet(name, emitter)} ${oneOp}))`;
   }
-  return `(block (result ${w}) (${setOp} $${name} ${updated}) (${w}.add ${emitGet(name, emitter)} ${oneOp}))`;
+  return `(block (result ${w}) (${setOp} $${v.name} ${updated}) (${w}.add ${emitGet(name, emitter)} ${oneOp}))`;
 }
 
 export function emitExpression(expression: ASTExpression, emitter: ModuleEmitter): string {

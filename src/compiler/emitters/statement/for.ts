@@ -7,6 +7,9 @@ import { emitLetStatement } from "./let";
 import { emitStatement } from "./statement";
 
 export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
+  // The init variable's scope is the for statement itself (header + body).
+  emitter.pushScope();
+
   // Emit the initializer before entering the loop so non-zero inits are applied
   emitLetStatement(stmt.initBlock, emitter);
 
@@ -82,4 +85,5 @@ export function emitForStatement(stmt: ForStatement, emitter: ModuleEmitter) {
 
   emitter.destroyLabel("break", br);
   emitter.destroyLabel("loop", lp);
+  emitter.popScope();
 }

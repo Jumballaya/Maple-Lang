@@ -1,21 +1,17 @@
 import { CallExpression } from "../../../parser/ast/expressions/CallExpression";
 import { Identifier } from "../../../parser/ast/expressions/Identifier";
-import type { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
-import type { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
+import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
+import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
 import type { StructMember } from "../../../shared/types";
 import type { ModuleEmitter } from "../../ModuleEmitter";
+import { baseScalar, wasmLoadOp } from "../emit.types";
 import { emitGet } from "./core";
 import { emitFunctionCall } from "./function-call";
+import { emitIndexExpression } from "./index";
 
-/**
- * Resolves a struct-member access (`a.x`, `make().x`, `getP()->x`) into a
- * WAT expression that evaluates the struct's address plus the layout info
- * for the requested field. Hides whether the base came from a local, a
- * global, or a function call.
- *
- * `basePtr` is a WAT expression that pushes the struct's i32 address on the
- * stack exactly once; callers add the member offset and load/store.
- */
+// `basePtr` is a WAT expression pushing the struct's address exactly once;
+// callers add memberData.offset and load/store.
 export function resolveStructMember(
   expr: PointerMemberExpression | MemberExpression,
   emitter: ModuleEmitter,
@@ -53,12 +49,32 @@ function resolveBase(
     }
     return { basePtr: emitFunctionCall(base, emitter), structName };
   }
+  if (base instanceof MemberExpression || base instanceof PointerMemberExpression) {
+    const { basePtr, memberData } = resolveStructMember(base, emitter);
+    const structName = structNameOf(memberData.type, emitter);
+    if (!structName) {
+      throw new Error(`[expression member] member "${base.member}" is not a struct-typed value`);
+    }
+    const addr = `(${wasmLoadOp("i32")} (i32.add ${basePtr} (i32.const ${memberData.offset})))`;
+    return { basePtr: addr, structName };
+  }
+  if (base instanceof IndexExpression) {
+    const arrayVar = emitter.getVar(base.left.tokenLiteral());
+    const elemType = baseScalar(arrayVar?.type ?? "");
+    const structName = structNameOf(elemType, emitter);
+    if (!structName) {
+      throw new Error(`[expression member] array element type "${elemType}" is not a struct`);
+    }
+    return { basePtr: emitIndexExpression(base, emitter), structName };
+  }
   throw new Error(
-    "[expression member] unsupported base; expected an identifier or a function call",
+    "[expression member] unsupported base; expected an identifier, member, index, or call",
   );
 }
 
 function structNameOf(type: string, emitter: ModuleEmitter): string | undefined {
+  // Arrays share the string header layout: {len: i32, data: *elem}.
+  if (type.endsWith("[]")) return "string";
   const candidate = type.startsWith("*") ? type.slice(1) : type;
   return emitter.ctx.mod.structs[candidate] ? candidate : undefined;
 }

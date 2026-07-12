@@ -93,9 +93,13 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
         w.line(`(if (i32.eqz (global.get $__globals_inited)) (then`);
         w.line(`(global.set $__globals_inited (i32.const 1))`);
         for (const init of deferredInits) {
-          const storeOp = wasmStoreOp(init.fieldType);
           const val = emitExpression(init.expr, emitter);
-          w.line(`(${storeOp} (i32.const ${init.baseAddr + init.offset}) ${val})`);
+          if (init.kind === "global") {
+            w.line(`(global.set $${init.name} ${val})`);
+          } else {
+            const storeOp = wasmStoreOp(init.fieldType);
+            w.line(`(${storeOp} (i32.const ${init.baseAddr + init.offset}) ${val})`);
+          }
         }
         w.line(`))`);
       }

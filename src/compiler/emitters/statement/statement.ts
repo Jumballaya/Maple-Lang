@@ -36,9 +36,11 @@ function emitPostfixVoid(expr: PostfixExpression, emitter: ModuleEmitter): strin
 
 export function emitStatement(stmt: ASTStatement, emitter: ModuleEmitter): void {
   if (stmt instanceof BlockStatement) {
+    emitter.pushScope();
     for (const s of stmt.statements) {
       emitStatement(s, emitter);
     }
+    emitter.popScope();
     return;
   }
 

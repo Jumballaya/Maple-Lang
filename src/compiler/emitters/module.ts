@@ -27,7 +27,7 @@ import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.typ
 import type { MapleModule } from "../MapleModule";
 import { ModuleBuilder } from "../ModuleBuilder";
 import { ModuleEmitter } from "../ModuleEmitter";
-import { extractGlobalData } from "./emit.data";
+import { extractGlobalData, isConstInitializer } from "./emit.data";
 import {
   canonicalFnType,
   fnTypeToSigName,
@@ -39,6 +39,7 @@ import type { ModuleMeta } from "./emitter.types";
 import { resetLabels } from "./emitter.utils";
 import { emitNumberGet } from "./expression/core";
 import { emitExpression } from "./expression/expression";
+import { emitRuntimeHelpers } from "./runtime";
 import {
   emitFunction,
   emitFunctionSignature,
@@ -55,14 +56,14 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
   const expr = stmt.expression;
 
   const wasmType = valueTypeToWasm(type);
-  const typeDecl = stmt.mutable ? `(mut ${wasmType})` : wasmType;
 
-  // string/array/struct literal
+  // string/array/struct literal: the global holds the static-data address
   if (
     expr instanceof StringLiteralExpression ||
     expr instanceof ArrayLiteralExpression ||
     expr instanceof StructLiteralExpression
   ) {
+    const typeDecl = stmt.mutable ? `(mut ${wasmType})` : wasmType;
     const num = emitNumberGet(expr.location, "i32");
     emitter.addGlobalWat(`(global $${name} ${typeDecl} ${num})`);
     if (stmt.exported) {
@@ -71,9 +72,35 @@ function emitGlobal(stmt: LetStatement, emitter: ModuleEmitter): void {
     return;
   }
 
-  // everything else
-  const value = emitExpression(expr!, emitter);
+  // Non-const initializers start at zero and are assigned by the deferred
+  // startup init; forced `mut` so that write validates even for `const`.
+  if (expr && !isConstInitializer(expr)) {
+    emitter.addGlobalWat(`(global $${name} (mut ${wasmType}) (${wasmType}.const 0))`);
+    if (stmt.exported) {
+      emitter.addGlobalWat(`(export "${name}" (global $${name}))`);
+    }
+    return;
+  }
+
+  const typeDecl = stmt.mutable ? `(mut ${wasmType})` : wasmType;
+  const value = constGlobalValue(expr!, emitter);
   emitter.addGlobalWat(`(global $${name} ${typeDecl} ${value})`);
+  if (stmt.exported) {
+    emitter.addGlobalWat(`(export "${name}" (global $${name}))`);
+  }
+}
+
+// Global initializers accept only `<lane>.const`, so fold negated literals
+// (`-5` parses as prefix minus) instead of emitting an i32.sub expression.
+function constGlobalValue(
+  expr: NonNullable<LetStatement["expression"]>,
+  emitter: ModuleEmitter,
+): string {
+  if (expr instanceof PrefixExpression && expr.operator === "-" && expr.right) {
+    const inner = emitExpression(expr.right, emitter);
+    return inner.replace(/\.const (\S+)/, ".const -$1").trim();
+  }
+  return emitExpression(expr, emitter);
 }
 
 //
@@ -532,6 +559,7 @@ export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
     emitTrampolines(data, emitter);
     emitMakeFnRefHelper(data, emitter);
   }
+  emitRuntimeHelpers(emitter);
 
   return emitter.build();
 }

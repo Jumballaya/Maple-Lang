@@ -1,14 +1,13 @@
 import { Identifier } from "../../../parser/ast/expressions/Identifier";
 import { IndexExpression } from "../../../parser/ast/expressions/IndexExpression";
-import { IntegerLiteralExpression } from "../../../parser/ast/expressions/IntegerLiteral";
 import { MemberExpression } from "../../../parser/ast/expressions/MemberExpression";
 import { PointerMemberExpression } from "../../../parser/ast/expressions/PointerMemberExpression";
 import type { ASTExpression } from "../../../parser/ast/types/ast.type";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import type { WasmValueType } from "../emit.types";
-import { baseScalar, sizeofType, valueTypeToWasm, wasmLoadOp, wasmStoreOp } from "../emit.types";
+import { baseScalar, valueTypeToWasm, wasmLoadOp, wasmStoreOp } from "../emit.types";
 import { emitGet } from "./core";
-import { emitExpression } from "./expression";
+import { arrayElementAddr } from "./index";
 import { resolveStructMember } from "./member";
 
 /**
@@ -53,7 +52,7 @@ function identLvalue(ident: Identifier, emitter: ModuleEmitter): Lvalue {
   const setOp = v.scope === "global" ? "global.set" : "local.set";
   return {
     load: emitGet(name, emitter),
-    store: (rhs) => `(${setOp} $${name} ${rhs})`,
+    store: (rhs) => `(${setOp} $${v.name} ${rhs})`,
     lane,
   };
 }
@@ -74,22 +73,16 @@ function memberLvalue(
 }
 
 function indexLvalue(target: IndexExpression, emitter: ModuleEmitter): Lvalue {
-  const varData = emitter.getVar(target.left.tokenLiteral());
+  const name = target.left.tokenLiteral();
+  const varData = emitter.getVar(name);
   if (!varData) {
-    throw new Error(`[lvalue] unknown array: "${target.left.tokenLiteral()}"`);
+    throw new Error(`[lvalue] unknown array: "${name}"`);
   }
   const elemType = baseScalar(varData.type);
-  const elemSize = sizeofType(elemType);
-  const loadOp = wasmLoadOp(elemType);
-  const storeOp = wasmStoreOp(elemType);
-  const base = emitGet(varData.name, emitter);
-  const addr =
-    target.index instanceof IntegerLiteralExpression && target.index.value === 0
-      ? base
-      : `(i32.add ${base} (i32.mul ${emitExpression(target.index, emitter)} (i32.const ${elemSize})))`;
+  const addr = arrayElementAddr(name, elemType, target.index, emitter);
   return {
-    load: `(${loadOp} ${addr})`,
-    store: (rhs) => `(${storeOp} ${addr} ${rhs})`,
+    load: `(${wasmLoadOp(elemType)} ${addr})`,
+    store: (rhs) => `(${wasmStoreOp(elemType)} ${addr} ${rhs})`,
     lane: valueTypeToWasm(elemType),
   };
 }
