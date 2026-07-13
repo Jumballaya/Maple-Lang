@@ -531,8 +531,10 @@ describe("Emission: 64-bit widths and unsigned ops", () => {
     const ast = p.parse("test");
     assert.equal(p.errors.length, 0);
     const meta = extractModuleMeta(ast);
-    meta.imports.callee.resolved = true;
-    meta.imports.callee.info = {
+    const callee = meta.imports.callee;
+    assert(callee);
+    callee.resolved = true;
+    callee.info = {
       kind: "func",
       signature: "I_I",
     } as ExportMeta;
@@ -751,8 +753,10 @@ describe("Module Metadata", () => {
     const ast = p.parse("test");
     assert.equal(p.errors.length, 0);
     const meta = extractModuleMeta(ast);
-    meta.imports.foo.resolved = true;
-    meta.imports.foo.info = {
+    const foo = meta.imports.foo;
+    assert(foo);
+    foo.resolved = true;
+    foo.info = {
       kind: "func",
       signature: "i_i",
     } as ExportMeta;
@@ -2307,6 +2311,10 @@ describe("Emission: struct literal expression defense", () => {
       stringPool: {},
       dataPtr: 65536,
       deferredGlobalInits: [],
+      fnTable: new Map(),
+      fnSignatures: new Map(),
+      liftedLambdas: [],
+      needsClosureRuntime: false,
     });
     assert.throws(
       () => emitExpression(expr, emitter),

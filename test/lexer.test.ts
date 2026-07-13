@@ -14,7 +14,7 @@ describe("Lexer", () => {
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, "IntegerLiteral");
+      assert.equal(tokens[0]!.type, "IntegerLiteral");
     }
   });
   test("can lex floats", () => {
@@ -22,7 +22,7 @@ describe("Lexer", () => {
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, "FloatLiteral");
+      assert.equal(tokens[0]!.type, "FloatLiteral");
     }
   });
   test("can lex strings", () => {
@@ -37,7 +37,7 @@ describe("Lexer", () => {
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, "StringLiteral");
+      assert.equal(tokens[0]!.type, "StringLiteral");
     }
   });
   test("can lex chars", () => {
@@ -55,7 +55,7 @@ describe("Lexer", () => {
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, "CharLiteral");
+      assert.equal(tokens[0]!.type, "CharLiteral");
     }
   });
   test("can lex identifiers", () => {
@@ -63,14 +63,14 @@ describe("Lexer", () => {
     for (const source of sources) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, "Identifier");
+      assert.equal(tokens[0]!.type, "Identifier");
     }
   });
   test("identifiers cannot start with digit", () => {
     const lexer = new Lexer("1abc");
     const tokens = lexer.getTokens();
-    assert.equal(tokens[0].type, "IntegerLiteral");
-    assert.equal(tokens[1].type, "Identifier");
+    assert.equal(tokens[0]!.type, "IntegerLiteral");
+    assert.equal(tokens[1]!.type, "Identifier");
   });
 });
 
@@ -108,7 +108,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Keywords", () => {
@@ -145,7 +145,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected, `Type: ${tokens[0].type}, Expected: ${expected}`);
+      assert.equal(tokens[0]!.type, expected, `Type: ${tokens[0]!.type}, Expected: ${expected}`);
     }
   });
   test("Operators", () => {
@@ -165,7 +165,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Logical Operators", () => {
@@ -181,7 +181,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Bitwise", () => {
@@ -192,7 +192,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Assignment", () => {
@@ -212,7 +212,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Struct Member Access", () => {
@@ -223,7 +223,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Punctuation", () => {
@@ -242,7 +242,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Inc/Dec", () => {
@@ -253,7 +253,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
   test("Other", () => {
@@ -264,7 +264,7 @@ describe("Lexer Tokens", () => {
     for (const [source, expected] of tests) {
       const lexer = new Lexer(source);
       const tokens = lexer.getTokens();
-      assert.equal(tokens[0].type, expected);
+      assert.equal(tokens[0]!.type, expected);
     }
   });
 });

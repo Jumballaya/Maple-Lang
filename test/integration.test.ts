@@ -7,31 +7,13 @@
  * Level 2 – shells out to `wat2wasm`. Tests are skipped if the binary is absent.
  */
 import assert from "node:assert/strict";
-import { execSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { linkStdlibImports } from "../src/compiler/compiler";
-import {
-  collectFnReferences,
-  emitModule,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
 import { Parser } from "../src/parser/Parser";
-
-// ─── helpers ───────────────────────────────────────────────────────────────
-
-function compile(src: string): string {
-  const p = new Parser(src);
-  const ast = p.parse("integration");
-  assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
-  const meta = extractModuleMeta(ast);
-  collectFnReferences(ast, meta);
-  linkStdlibImports(meta);
-  return emitModule(ast, meta).buildWat();
-}
+import { compile, hasWat2Wasm, maybeTest, runExport, validateWithWat2Wasm } from "./helpers";
 
 function countChar(s: string, ch: string): number {
   let n = 0;
@@ -45,74 +27,42 @@ function isBalanced(wat: string): boolean {
   return countChar(wat, "(") === countChar(wat, ")");
 }
 
-/** Returns true if wat2wasm is available on PATH */
-function hasWat2Wasm(): boolean {
-  try {
-    execSync("wat2wasm --version", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Validate WAT with wat2wasm; returns null on success or an error string */
-function validateWithWat2Wasm(wat: string): string | null {
-  const dir = join(tmpdir(), `maple-test-${Date.now()}`);
-  mkdirSync(dir, { recursive: true });
-  const watFile = join(dir, "out.wat");
-  const wasmFile = join(dir, "out.wasm");
-  writeFileSync(watFile, wat);
-  try {
-    const result = spawnSync("wat2wasm", [watFile, "-o", wasmFile], {
-      encoding: "utf8",
-    });
-    if (result.status !== 0) {
-      return result.stderr ?? "wat2wasm failed";
-    }
-    return null;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/**
- * Assemble WAT with wat2wasm, instantiate, invoke an export, return its value.
- * Assumes the module only imports "runtime" "memory" (true for Maple modules
- * without stdlib calls). Caller must gate with wat2wasmAvailable.
- */
-function runExport(wat: string, fnName: string, args: number[] = []): unknown {
-  const dir = join(tmpdir(), `maple-run-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(dir, { recursive: true });
-  const watFile = join(dir, "out.wat");
-  const wasmFile = join(dir, "out.wasm");
-  writeFileSync(watFile, wat);
-  try {
-    const asm = spawnSync("wat2wasm", [watFile, "-o", wasmFile], { encoding: "utf8" });
-    if (asm.status !== 0) {
-      throw new Error(`wat2wasm failed: ${asm.stderr}`);
-    }
-    const bytes = readFileSync(wasmFile);
-    const mod = new WebAssembly.Module(bytes);
-    const memory = new WebAssembly.Memory({ initial: 2 });
-    const inst = new WebAssembly.Instance(mod, { runtime: { memory } });
-    const fn = inst.exports[fnName];
-    if (typeof fn !== "function") {
-      throw new Error(`export ${fnName} is not a function`);
-    }
-    return (fn as (...a: number[]) => unknown)(...args);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 const wat2wasmAvailable = hasWat2Wasm();
-function maybeTest(name: string, fn: () => void) {
-  if (wat2wasmAvailable) {
-    test(name, fn);
-  } else {
-    test.skip(`[needs wat2wasm] ${name}`, fn);
-  }
-}
+
+describe("wat2wasm test gating", () => {
+  maybeTest("runExport accepts and returns BigInt for i64 exports", () => {
+    const wat = compile("export fn echo(value: i64): i64 { return value; }");
+    assert.equal(runExport(wat, "echo", [123n]), 123n);
+  });
+
+  test("math tests skip when wat2wasm execution is disabled", () => {
+    const result = spawnSync("npx", ["tsx", "--test", "test/math.test.ts"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MAPLE_REQUIRE_WAT2WASM: undefined,
+        MAPLE_SKIP_WAT2WASM: "1",
+        NODE_TEST_CONTEXT: undefined,
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.equal(result.status, 0, output);
+    assert.match(output, /skip/i);
+  });
+
+  test("required wat2wasm overrides disabled execution", () => {
+    const result = spawnSync("npx", ["tsx", "--test", "test/math.test.ts"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MAPLE_REQUIRE_WAT2WASM: "1",
+        MAPLE_SKIP_WAT2WASM: "1",
+        NODE_TEST_CONTEXT: undefined,
+      },
+    });
+    assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  });
+});
 
 // ─── Level 1: WAT structure ─────────────────────────────────────────────────
 
