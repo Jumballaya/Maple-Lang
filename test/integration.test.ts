@@ -3151,3 +3151,131 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 });
+
+describe("stress", () => {
+  test("compiles and runs arithmetic nested 200 parentheses deep", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    let expression = "1";
+    for (let depth = 0; depth < 200; depth++) {
+      expression = `(${expression} + 1)`;
+    }
+    const wat = compile(`export fn run(): i32 { return ${expression}; }`);
+    assert.equal(runExport(wat, "run"), 201);
+  });
+
+  test("compiles and runs a flat chain of 200 binary operators", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    const expression = Array.from({ length: 201 }, () => "1").join(" + ");
+    const wat = compile(`export fn run(): i32 { return ${expression}; }`);
+    assert.equal(runExport(wat, "run"), 201);
+  });
+
+  test("compiles a function with 100 used locals", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    const declarations = Array.from(
+      { length: 100 },
+      (_, index) => `let value${index}: i32 = ${index};`,
+    ).join("\n");
+    const sum = Array.from({ length: 100 }, (_, index) => `value${index}`).join(" + ");
+    const wat = compile(`
+        export fn run(): i32 {
+          ${declarations}
+          return ${sum};
+        }
+      `);
+    assert.equal(runExport(wat, "run"), 4950);
+  });
+
+  test("executes the innermost branch of 20 nested if blocks", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    let body = "result = 42;";
+    for (let depth = 0; depth < 20; depth++) {
+      body = `if (1 == 1) { ${body} }`;
+    }
+    const wat = compile(`
+        export fn run(): i32 {
+          let result: i32 = 0;
+          ${body}
+          return result;
+        }
+      `);
+    assert.equal(runExport(wat, "run"), 42);
+  });
+
+  test("ten nested for and while loops execute exactly 1024 times", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    const nestedLoop = (depth: number): string => {
+      if (depth === 10) return "count = count + 1;";
+      const counter = `index${depth}`;
+      const inner = nestedLoop(depth + 1);
+      if (depth % 2 === 0) {
+        return `for (let ${counter}: i32 = 0; ${counter} < 2; ${counter} = ${counter} + 1) { ${inner} }`;
+      }
+      return `let ${counter}: i32 = 0; while (${counter} < 2) { ${inner} ${counter} = ${counter} + 1; }`;
+    };
+    const wat = compile(`
+        export fn run(): i32 {
+          let count: i32 = 0;
+          ${nestedLoop(0)}
+          return count;
+        }
+      `);
+    assert.equal(runExport(wat, "run"), 1024);
+  });
+
+  test("break exits only the innermost of two nested loops", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    const wat = compile(`
+        export fn run(): i32 {
+          let count: i32 = 0;
+          for (let outer: i32 = 0; outer < 2; outer = outer + 1) {
+            for (let inner: i32 = 0; inner < 2; inner = inner + 1) {
+              count = count + 1;
+              break;
+            }
+          }
+          return count;
+        }
+      `);
+    assert.equal(runExport(wat, "run"), 2);
+  });
+
+  test("empty source compiles to a valid module", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    assert.equal(validateWithWat2Wasm(compile("")), null);
+  });
+
+  test("declaration-only modules are valid", { timeout: 10_000, skip: !wat2wasmAvailable }, () => {
+    const structWat = compile("struct Point { x: i32, y: i32 }");
+    const globalWat = compile("let answer: i32 = 42;");
+    assert.equal(validateWithWat2Wasm(structWat), null);
+    assert.equal(validateWithWat2Wasm(globalWat), null);
+  });
+
+  test("fifty functions call through the complete chain", {
+    timeout: 10_000,
+    skip: !wat2wasmAvailable,
+  }, () => {
+    const functions = Array.from({ length: 50 }, (_, index) => {
+      const exported = index === 0 ? "export " : "";
+      const body = index === 49 ? "return 1;" : `return chain${index + 1}() + 1;`;
+      return `${exported}fn chain${index}(): i32 { ${body} }`;
+    }).join("\n");
+    const wat = compile(functions);
+    assert.equal(runExport(wat, "chain0"), 50);
+  });
+});
