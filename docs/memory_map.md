@@ -46,7 +46,7 @@ Each local struct variable gets a single `i32` pointer local that is set to `$__
 
 Compile-time-only. The compiler's `dataPtr` cursor starts at `65536` and allocates space upward for:
 
-- **Array literals** — element bytes packed contiguously
+- **Array literals** — element bytes packed contiguously, followed by an 8-byte `{ len: i32, data: *element }` header; the array value points to the header
 - **Global struct literals** — field bytes packed contiguously; the global variable holds the address as an `i32`
 - **String literals** — a padded UTF-8 byte run followed immediately by an 8-byte `{ len: i32, data: *u8 }` header; the `string` variable holds the header address
 

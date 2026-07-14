@@ -8,10 +8,13 @@ Maple is a statically-typed, compiled language that targets WebAssembly. Source 
 
 ## Comments
 
-Single-line only. No block comment syntax.
+Maple supports both single-line and block comments.
 
 ```maple
 // this is a comment
+
+/* this is a
+   block comment */
 ```
 
 ---
@@ -34,7 +37,7 @@ Single-line only. No block comment syntax.
 | `f64`  | 64-bit float             |
 | `bool` | Boolean (`true`/`false`) — backed by `i32` |
 
-All integer variants smaller than `i32` are represented as `i32` in WebAssembly.
+All integer variants smaller than `i32` are represented in the WebAssembly `i32` lane. An explicit cast to a sub-word type masks or sign-extends the value to that type's width.
 
 `i64` and `u64` use the WebAssembly `i64` lane; `f64` uses the `f64` lane. Struct layout and loads/stores use the full width for these members.
 
@@ -47,12 +50,17 @@ All integer variants smaller than `i32` are represented as `i32` in WebAssembly.
 
 ### Arrays
 
-A type followed by `[]` denotes an array. Array literals are allocated in the data section.
+A type followed by `[]` denotes an array. An array value points to an 8-byte `{ len: i32, data: *element }` header in linear memory. Array literals and their element data are allocated in the static data section.
 
 ```maple
 let nums: i32[] = [1, 2, 3];
 let floats: f32[] = [1.0, 2.0, 3.0];
+let count: i32 = nums.len;
 ```
+
+Array reads are bounds-checked. An index greater than or equal to `.len` traps; the unsigned comparison used by the check also makes negative indices trap.
+
+Array literal elements must currently be literals. Integer and float literals adopt the declared element type and are range-checked against it, so `let values: i64[] = [1, 2];` is valid. Expression elements such as `[x, f(2)]` are rejected until runtime element initialization is implemented.
 
 ### Struct types
 
@@ -93,6 +101,21 @@ The type is inferred from the right-hand side expression:
 
 When the called function is declared earlier in the same file, the return type is inferred automatically. Imported functions and forward references still require an explicit type annotation.
 
+### Scope and shadowing
+
+Local `let` bindings are block-scoped. A binding may shadow one from an outer block or a function parameter without changing the outer value. Reusing a loop-counter name in a nested loop creates an independent binding.
+
+### Global initialization
+
+Global initializers may reference an earlier global and may contain expressions:
+
+```maple
+let base: i32 = 10;
+let offset: i32 = base + 5;
+```
+
+WebAssembly constant initializers are emitted directly. Initializers that require runtime work are placed in a guarded prologue. The prologue runs once, immediately before the body of the first exported function that is called; it does not run merely because the module was instantiated. Global struct fields with literal values remain compile-time data, while expression-valued fields are written by this prologue.
+
 ---
 
 ## Functions
@@ -108,6 +131,23 @@ fn greet(): void {
   // no return value
 }
 ```
+
+### Function types and function values
+
+The type `fn(T1, T2, ...): R` describes a callable value. A named function can be assigned to a local binding with a compatible function type and invoked through that binding:
+
+```maple
+fn add(a: i32, b: i32): i32 { return a + b; }
+
+fn apply(): i32 {
+  let operation: fn(i32, i32): i32 = add;
+  return operation(2, 3);
+}
+```
+
+Indirect calls use a WebAssembly function table and `call_indirect`. Function-typed bindings are currently local only; module-scope `let` and `const` declarations of function type are rejected. Function types may also use `void`, array types, nested function types, or a multi-return tuple as their return type.
+
+Lambda syntax, `fn(params): ReturnType { ... }`, is accepted by the parser.
 
 ### Multiple return values
 
@@ -157,13 +197,17 @@ export fn _start(): i32 {
 
 `+`, `-`, `*`, `/`, `%`
 
-Both operands must have the same WASM-level type. Mixing `i32` and `f32` without a cast is a type error.
+Integer addition, subtraction, and multiplication wrap at the width of their WebAssembly lane using two's-complement representation. `i32` and `i64` division or remainder by zero traps. Signed division of the minimum lane value by `-1` also traps, while the corresponding signed remainder is defined as `0`.
+
+Arithmetic operands must have compatible types. Integer and float operands, different-width integer operands, and same-width signed/unsigned operands require an explicit cast.
 
 ### Comparison
 
 `==`, `!=`, `<`, `<=`, `>`, `>=`
 
 Result type is `bool` (backed by `i32`).
+
+Ordering comparisons follow the arithmetic compatibility rules. `==` and `!=` permit same-lane signed/unsigned integer operands because their bit comparison is sign-independent. Integer/float comparisons require an explicit cast.
 
 ### Logical
 
@@ -173,9 +217,13 @@ Result type is `bool` (backed by `i32`).
 
 `&`, `|`, `^`, `~` (bitwise NOT — prefix), `<<`, `>>`
 
+Same-width signed/unsigned mixing is rejected for `&`, `|`, and `^`. A shift count is exempt from signedness matching; the result follows the left operand's type.
+
 ### Prefix
 
 `-` (numeric negation), `!` (logical NOT), `~` (bitwise NOT)
+
+Unary `-` is legal for unsigned integers and wraps in the value's WebAssembly lane.
 
 ### Postfix
 
@@ -185,6 +233,18 @@ Result type is `bool` (backed by `i32`).
 
 `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 
+Compound assignments use the same type and signedness rules as their corresponding binary operators.
+
+### Integer literals
+
+Integer literals are stored losslessly, including values above JavaScript's exact-number range. They are range-checked against their contextual type in declarations, assignments, arguments, returns, struct fields, globals, array elements, compound assignments, and binary expressions. A bare integer literal without a typed context defaults to `i32`.
+
+In an expression with a typed integer operand, a bare literal adopts that operand's type, including signedness. Adoption is recursive, so grouping does not change whether a later signed/unsigned combination is legal. A negative literal cannot adopt an unsigned type.
+
+Prefix minus folds into an integer or float literal, including through parentheses. It does not perform constant propagation: `-(5)` folds, while `-x` remains a runtime negation.
+
+A literal directly beneath `as T` is exempt from range validation because the cast is an explicit wrapping operation. For example, `-1 as u32` produces the `u32` maximum bit pattern.
+
 ### Cast
 
 `expr as Type` — explicit type conversion.
@@ -192,14 +252,17 @@ Result type is `bool` (backed by `i32`).
 ```maple
 let f: f32 = 5 as f32;
 let i: i32 = 3.7 as i32;   // truncates toward zero
-let b: u8  = n as u8;       // same WASM representation, no-op at runtime
+let b: u8  = n as u8;       // keeps the low 8 bits
 ```
 
 Supported conversions:
-- `i32` → `f32`: emits `f32.convert_i32_s`
-- `f32` → `i32`: emits `i32.trunc_f32_s` (truncates toward zero)
-- Any numeric type to another numeric type sharing the same WASM backing type (e.g. `i32` → `u8`): no-op at runtime
-- Struct pointer → struct pointer: no-op at runtime
+
+- Integer-to-float conversion follows the source integer's signedness.
+- Float-to-integer conversion truncates toward zero and follows the target integer's signedness. NaN, positive or negative infinity, and values outside the target lane's range trap.
+- `i32`/`i64` widening follows the source signedness; narrowing from `i64` to the `i32` lane wraps.
+- Casts to `u8`/`u16` mask to the low 8/16 bits. Casts to `i8`/`i16` keep the low bits and sign-extend them in the `i32` lane.
+- `f32`/`f64` conversions demote or promote using WebAssembly's floating-point semantics.
+- Numeric casts that only change the Maple type while retaining the same full-width WebAssembly lane do not change the bits.
 
 ---
 
@@ -261,12 +324,23 @@ switch (x) {
 
 ## Structs
 
-Named record types. Members are typed and separated by commas (trailing comma required).
+Named record types. Members are typed and separated by commas; a trailing comma is optional.
 
 ```maple
 struct Point {
   x: i32,
   y: i32,
+}
+```
+
+### Layout
+
+Struct fields are aligned rather than packed. For example, this struct places `a` at offset 0, pads three bytes, places `b` at offset 4, and has total size 8:
+
+```maple
+struct Mixed {
+  a: u8,
+  b: i32,
 }
 ```
 
@@ -298,6 +372,10 @@ p.x = 10;
 
 All struct variables — local `let` declarations, function parameters, and globals — are memory-backed and accessed via pointer loads and stores. Local structs are allocated on the compiler-managed shadow stack; parameters and globals live in their respective linear-memory regions. See `docs/memory_map.md` for the full layout.
 
+### Equality
+
+`==` compares structs field by field rather than comparing their addresses.
+
 ### Struct methods
 
 Methods are declared as dotted functions. The receiver name is in a separate set of parentheses immediately after the dotted name; the receiver type is inferred from the struct name.
@@ -325,12 +403,31 @@ The receiver can be any struct-typed binding — a local `let`, a function param
 
 ## Strings
 
-`string` is a built-in first-class type backed by a `{ len: i32, data: *u8 }` header in linear memory. String literals are allocated in the data section at compile time.
+`string` is a built-in first-class type backed by a `{ len: i32, data: *u8 }` header in linear memory. `.len` is the number of UTF-8 bytes, not the number of Unicode code points. String literals are allocated in the static data section at compile time.
 
 ```maple
 let s: string = "hello";       // explicit annotation
 let t = "world";               // inferred string
 ```
+
+String `==` and `!=` compare the complete byte content and length, not header or data-pointer identity.
+
+### Escapes and UTF-8
+
+String and character literals support exactly these eight escapes:
+
+| Escape | Meaning |
+|--------|---------|
+| `\n` | newline |
+| `\r` | carriage return |
+| `\t` | tab |
+| `\0` | NUL |
+| `\"` | double quote |
+| `\'` | single quote |
+| `\\` | backslash |
+| `\xNN` | code point U+00NN, with exactly two hexadecimal digits |
+
+Hex digits in `\xNN` may use either case. The escape names a Unicode code point, so `\xE9` encodes as the two UTF-8 bytes for `é`, rather than as one raw byte. Astral characters encode as four UTF-8 bytes. Unknown or malformed escapes are lexer errors that name the offending sequence.
 
 ### String member access
 
@@ -345,6 +442,8 @@ fn greet(name: string): i32 {
   return name.len;
 }
 ```
+
+String mutability is not settled. The current representation uses writable bytes, and the provisional `string_copy(source, destination)` operation overwrites `min(source.len, destination.len)` bytes without changing either length. Code should not treat this as a permanent string API guarantee.
 
 ---
 
@@ -407,11 +506,14 @@ Maple performs a static type-checking pass after parsing. Errors are reported wi
 
 1. **Assignment compatibility** — the type of the initializer or RHS must be compatible with the declared type of the variable.
 2. **Function return type** — every `return` statement is checked against the declared return type; a value-returning function must return a value; a void function must not.
-3. **Mixed arithmetic** — both operands of `+`, `-`, `*`, `/`, `%` must have the same WASM-level type.
+3. **Numeric compatibility** — incompatible lane widths, integer/float mixing, and signed/unsigned combinations that are not explicitly exempt require a cast.
 4. **Call argument count and types** — the number and types of arguments at a call site must match the declaration.
 5. **Struct member existence** — member access on a known struct type errors if the member does not exist.
 6. **Const mutation** — assigning to a `const` binding, or writing through a member/index expression rooted in a `const` binding, is an error.
 7. **Struct literal field validation** — unknown fields, missing required fields, and field type mismatches are compile-time errors.
+8. **Integer literal ranges** — literals are checked against the type required by their surrounding expression.
+9. **Array literal elements** — unsupported expressions, mixed literal kinds, and element-type mismatches are rejected.
+10. **Function values** — function signatures, indirect-call arity, and function-type assignments are checked.
 
 ---
 
@@ -434,13 +536,18 @@ FnName        := Ident                                    -- plain function
 
 Params        := Param (',' Param)*
 Param         := Ident ':' Type
-RetType       := Type
+RetType       := Type | MultiRetType
+MultiRetType  := '(' Type ',' Type (',' Type)* ','? ')'
 
-StructDecl    := 'struct' Ident '{' StructField* '}'
-StructField   := Ident ':' Type ','
+StructDecl    := 'struct' Ident '{' StructFields? '}'
+StructFields  := StructField (',' StructField)* ','?
+StructField   := Ident ':' Type
 
-LetDecl       := 'let' Ident (':' Type)? ('=' Expr)? ';'
-ConstDecl     := 'const' Ident ':' Type '=' Expr ';'
+LetDecl       := 'let' Ident (':' Type)? '=' Expr ';'
+               | 'let' Destructure '=' CallExpr ';'      -- local scope only
+ConstDecl     := 'const' Ident (':' Type)? '=' Expr ';'
+Destructure   := '(' PatternName ',' PatternName (',' PatternName)* ','? ')'
+PatternName   := Ident | '_'
 
 Block         := '{' Stmt* '}'
 Stmt          := LetDecl
@@ -454,7 +561,7 @@ Stmt          := LetDecl
                | SwitchStmt
                | Expr ';'
 
-ReturnStmt    := 'return' Expr? ';'
+ReturnStmt    := 'return' (Expr (',' Expr)* ','?)? ';'
 BreakStmt     := 'break' ';'
 ContinueStmt  := 'continue' ';'
 
@@ -491,23 +598,32 @@ PrefixOp      := '-' | '!' | '~'
 
 PostfixExpr   := CallExpr ('++'  | '--')?
 
-CallExpr      := PrimaryExpr ('(' Args? ')' | '[' Expr ']' | '.' Ident)*
+CallExpr      := PrimaryExpr ('(' Args? ')' | '[' Expr ']' | '.' MemberName)*
+MemberName    := Ident
 
 Args          := Expr (',' Expr)*
 
 PrimaryExpr   := IntLit | FloatLit | BoolLit | StringLit
                | ArrayLit | StructLit
+               | LambdaExpr
                | Ident
                | '(' Expr ')'
 
 ArrayLit      := '[' (Expr (',' Expr)*)? ']'
 StructLit     := '{' StructInit (',' StructInit)* ','? '}'
 StructInit    := Ident '=' Expr
+LambdaExpr    := 'fn' '(' Params? ')' ':' RetType Block
 
-Type          := 'void' | 'bool' | 'string'
+Type          := ScalarType
+               | Ident          -- user-defined struct
+               | FnType
+               | Type '[]'      -- array of Type
+
+ScalarType    := 'void' | 'bool' | 'string'
                | 'i8' | 'u8' | 'i16' | 'u16'
                | 'i32' | 'u32' | 'i64' | 'u64'
                | 'f32' | 'f64'
-               | Ident          -- user-defined struct
-               | Type '[]'      -- array of Type
+
+FnType        := 'fn' '(' TypeList? ')' ':' RetType
+TypeList      := Type (',' Type)* ','?
 ```
