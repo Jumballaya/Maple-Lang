@@ -13,7 +13,14 @@ import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Parser } from "../src/parser/Parser";
-import { compile, hasWat2Wasm, maybeTest, runExport, validateWithWat2Wasm } from "./helpers";
+import {
+  compile,
+  hasWat2Wasm,
+  maybeTest,
+  runExport,
+  runStdlibExport,
+  validateWithWat2Wasm,
+} from "./helpers";
 
 function countChar(s: string, ch: string): number {
   let n = 0;
@@ -3277,5 +3284,139 @@ describe("stress", () => {
     }).join("\n");
     const wat = compile(functions);
     assert.equal(runExport(wat, "chain0"), 50);
+  });
+});
+
+describe("stdlib execution", () => {
+  // Until heap_init is wired, malloc tests cannot mix heap allocations with
+  // shadow-stack structs or static string/array data in the same user module.
+  maybeTest("malloc-backed vec2 addition preserves both fields", () => {
+    const wat = compile(`
+      import malloc from "memory"
+      struct Vec2 { x: i32, y: i32 }
+
+      fn addVec2(a: Vec2, b: Vec2): Vec2 {
+        let result: Vec2 = malloc(8);
+        result.x = a.x + b.x;
+        result.y = a.y + b.y;
+        return result;
+      }
+
+      export fn run(): i32 {
+        let a: Vec2 = malloc(8);
+        let b: Vec2 = malloc(8);
+        a.x = 1;
+        a.y = 2;
+        b.x = 3;
+        b.y = 4;
+        let sum: Vec2 = addVec2(a, b);
+        return sum.x * 100 + sum.y;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 406);
+  });
+
+  maybeTest("free allows malloc to reuse the same block", () => {
+    const wat = compile(`
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let first: i32 = malloc(16);
+        free(first);
+        let second: i32 = malloc(16);
+        return first == second;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("realloc preserves the existing payload", () => {
+    const wat = compile(`
+      import malloc, realloc from "memory"
+      struct Triple { a: i32, b: i32, c: i32 }
+      export fn run(): i32 {
+        let values: Triple = malloc(12);
+        values.a = 1;
+        values.b = 2;
+        values.c = 3;
+        let grown: Triple = realloc(values, 12, 40);
+        return grown.a * 10000 + grown.b * 100 + grown.c;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 10203);
+  });
+
+  maybeTest("math sqrt executes through the stdlib instance", () => {
+    const wat = compile(`
+      import sqrt from "math"
+      export fn run(): f32 { return sqrt(16.0); }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 4);
+  });
+
+  maybeTest("math sin executes through the stdlib instance", () => {
+    const wat = compile(`
+      import sin from "math"
+      export fn run(): f32 { return sin(0.0); }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 0);
+  });
+
+  maybeTest("math abs_i32 executes through the stdlib instance", () => {
+    const wat = compile(`
+      import abs_i32 from "math"
+      export fn run(): i32 { return abs_i32(-5); }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 5);
+  });
+
+  maybeTest("math PI is available as an imported global", () => {
+    const wat = compile(`
+      import PI from "math"
+      export fn run(): f32 { return PI; }
+    `);
+    const result = runStdlibExport(wat, "run") as number;
+    assert(Math.abs(result - Math.PI) < 1e-6);
+  });
+
+  maybeTest("string_copy keeps the longer destination length and tail", () => {
+    const wat = compile(`
+      import string_copy from "string"
+      export fn run(): i32 {
+        let source: string = "cat";
+        let destination: string = "abcdef";
+        let expected: string = "catdef";
+        string_copy(source, destination);
+        if (destination.len != 6) { return 0; }
+        return destination == expected;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("string_copy truncates to a shorter destination", () => {
+    const wat = compile(`
+      import string_copy from "string"
+      export fn run(): i32 {
+        let source: string = "abcdef";
+        let destination: string = "xyz";
+        let expected: string = "abc";
+        string_copy(source, destination);
+        if (destination.len != 3) { return 0; }
+        return destination == expected;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("one program can import memory and math together", () => {
+    const wat = compile(`
+      import malloc from "memory"
+      import sqrt from "math"
+      export fn run(): i32 {
+        let block: i32 = malloc(16);
+        return (sqrt(16.0) as i32) + (block - block);
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 4);
   });
 });

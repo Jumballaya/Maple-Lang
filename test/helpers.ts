@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { linkStdlibImports } from "../src/compiler/compiler";
 import {
   collectFnReferences,
@@ -105,4 +106,97 @@ export function runExport(wat: string, fnName: string, args: (number | bigint)[]
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+type StdlibModules = {
+  memory: WebAssembly.Module;
+  string: WebAssembly.Module;
+  math: WebAssembly.Module;
+};
+
+const stdlibDir = fileURLToPath(new URL("../src/compiler/stdlib/", import.meta.url));
+let stdlibModules: StdlibModules | undefined;
+
+function assembleModule(moduleName: string, watFile: string): WebAssembly.Module {
+  const dir = mkdtempSync(join(tmpdir(), "maple-stdlib-"));
+  const wasmFile = join(dir, `${moduleName}.wasm`);
+  try {
+    const assembly = spawnSync("wat2wasm", [watFile, "-o", wasmFile], {
+      encoding: "utf8",
+    });
+    if (assembly.error || assembly.status !== 0) {
+      const detail = assembly.stderr || assembly.error?.message || "wat2wasm failed";
+      throw new Error(`failed to assemble ${moduleName}: ${detail}`);
+    }
+    return new WebAssembly.Module(readFileSync(wasmFile));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("failed to assemble")) {
+      throw error;
+    }
+    throw new Error(`failed to assemble ${moduleName}: ${String(error)}`, { cause: error });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function assembleSource(moduleName: string, wat: string): WebAssembly.Module {
+  const dir = mkdtempSync(join(tmpdir(), "maple-stdlib-user-"));
+  const watFile = join(dir, `${moduleName}.wat`);
+  writeFileSync(watFile, wat);
+  try {
+    return assembleModule(moduleName, watFile);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function getStdlibModules(): StdlibModules {
+  stdlibModules ??= {
+    memory: assembleModule("memory", join(stdlibDir, "memory.wat")),
+    string: assembleModule("string", join(stdlibDir, "string.wat")),
+    math: assembleModule("math", join(stdlibDir, "math.wat")),
+  };
+  return stdlibModules;
+}
+
+function instantiateModule(
+  moduleName: string,
+  module: WebAssembly.Module,
+  imports: WebAssembly.Imports,
+): WebAssembly.Instance {
+  try {
+    return new WebAssembly.Instance(module, imports);
+  } catch (error) {
+    throw new Error(`failed to instantiate ${moduleName}: ${String(error)}`, { cause: error });
+  }
+}
+
+export function runStdlibExport(
+  wat: string,
+  fnName: string,
+  args: (number | bigint)[] = [],
+): unknown {
+  const modules = getStdlibModules();
+  const memory = new WebAssembly.Memory({ initial: 4 });
+  const memoryInstance = instantiateModule("memory", modules.memory, {
+    runtime: { memory },
+    console: { print_string: () => {} },
+  });
+  const stringInstance = instantiateModule("string", modules.string, {
+    runtime: { memory },
+    memory: memoryInstance.exports,
+  });
+  const mathInstance = instantiateModule("math", modules.math, {});
+  const userModule = assembleSource("user", wat);
+  const userInstance = instantiateModule("user", userModule, {
+    runtime: { memory },
+    memory: memoryInstance.exports,
+    string: stringInstance.exports,
+    math: mathInstance.exports,
+  });
+  const fn = userInstance.exports[fnName];
+  if (typeof fn !== "function") {
+    throw new Error(`export ${fnName} is not a function`);
+  }
+  return (fn as (...fnArgs: (number | bigint)[]) => unknown)(...args);
 }
