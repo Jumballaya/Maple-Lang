@@ -2328,6 +2328,79 @@ describe("numeric literals", () => {
     const err = validateWithWat2Wasm(wat);
     assert.equal(err, null, `wat2wasm rejected: ${err}`);
   });
+
+  maybeTest("signed i32 boundary literals execute exactly", () => {
+    const wat = compile(`
+      export fn max(): i32 { return 2147483647; }
+      export fn min(): i32 { return -2147483648; }
+    `);
+    assert.equal(runExport(wat, "max"), 2147483647);
+    assert.equal(runExport(wat, "min"), -2147483648);
+  });
+
+  maybeTest("decimal signed i64 boundary literals remain lossless", () => {
+    const wat = compile(`
+      export fn max(): i64 { let x: i64 = 9223372036854775807; return x; }
+      export fn min(): i64 { let x: i64 = -9223372036854775808; return x; }
+    `);
+    assert.equal(runExport(wat, "max"), 9223372036854775807n);
+    assert.equal(runExport(wat, "min"), -9223372036854775808n);
+  });
+
+  maybeTest("decimal u64 max round-trips as -1 on the signed Wasm lane", () => {
+    const wat = compile(`
+      export fn run(): u64 {
+        let x: u64 = 18446744073709551615;
+        return x;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), -1n);
+  });
+
+  maybeTest("u32 max uses unsigned comparison and division", () => {
+    const wat = compile(`
+      export fn positive(): i32 { let x: u32 = 4294967295; return x > 0; }
+      export fn half(): u32 { let x: u32 = 4294967295; return x / 2; }
+    `);
+    assert.equal(runExport(wat, "positive"), 1);
+    assert.equal(runExport(wat, "half"), 2147483647);
+  });
+
+  maybeTest("integer arithmetic wraps at its Wasm lane width", () => {
+    const wat = compile(`
+      export fn addWrap(): i32 { return 2147483647 + 1; }
+      export fn subWrap(): i32 { return -2147483648 - 1; }
+      export fn mulWrap(): i32 { return 65536 * 65536; }
+      export fn addWrap64(x: i64): i64 { return x + 1; }
+    `);
+    assert.equal(runExport(wat, "addWrap"), -2147483648);
+    assert.equal(runExport(wat, "subWrap"), 2147483647);
+    assert.equal(runExport(wat, "mulWrap"), 0);
+    assert.equal(runExport(wat, "addWrap64", [9223372036854775807n]), -9223372036854775808n);
+  });
+
+  maybeTest("direct literal casts remain an explicit wrapping escape hatch", () => {
+    const wat = compile("export fn run(): u32 { return -1 as u32; }");
+    assert.equal(runExport(wat, "run"), -1);
+  });
+
+  maybeTest("parenthesized and repeated literal negation fold correctly", () => {
+    const wat = compile(`
+      export fn parenthesized(): i32 { return -(5); }
+      export fn repeated(): i32 { return - -5; }
+    `);
+    assert.equal(runExport(wat, "parenthesized"), -5);
+    assert.equal(runExport(wat, "repeated"), 5);
+  });
+
+  maybeTest("folded float negative zero preserves IEEE-754 behavior", () => {
+    const wat = compile(`
+      export fn belowZero(): i32 { return -0.0 < 0.0 == false; }
+      export fn inverse(): f32 { return 1.0 / -0.0; }
+    `);
+    assert.equal(runExport(wat, "belowZero"), 1);
+    assert.equal(runExport(wat, "inverse"), Number.NEGATIVE_INFINITY);
+  });
 });
 
 // ─── Unary operators ────────────────────────────────────────────────────────

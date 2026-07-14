@@ -707,6 +707,17 @@ describe("Emission: Literals", () => {
     assert(wat.includes("(i32.const 42)"));
   });
 
+  test("negative integer literals fold to a constant", () => {
+    const { wat } = compile("fn test(): i32 { return -5; }");
+    assert(wat.includes("(i32.const -5)"), wat);
+    assert(!wat.includes("i32.sub (i32.const 0)"), wat);
+  });
+
+  test("folded negative zero retains its sign", () => {
+    const { wat } = compile("fn test(): f32 { return -0.0; }");
+    assert(wat.includes("(f32.const -0)"), wat);
+  });
+
   test("float literal emits f32.const", () => {
     const { wat } = compile("fn test(): f32 { return 3.14; }");
     assert(wat.includes("(f32.const 3.14)"));

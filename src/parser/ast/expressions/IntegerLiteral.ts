@@ -6,18 +6,14 @@ export class IntegerLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public value: number;
+  public bigValue: bigint;
   /** Set by parser when a typed context uses a 64-bit integer lane (e.g. `let x: i64 = 1`). */
   public numericType: "i32" | "i64" = "i32";
 
-  // Original source lexeme (e.g. "0xFFFFFFFFFFFFFFFF", "42", "0b1010"),
-  // retained so `constText` can reconstruct an exact decimal repr for
-  // literals beyond JS Number's safe range.
-  private readonly rawText: string | undefined;
-
   constructor(token: Token, value: number, rawText?: string) {
     this.token = token;
-    this.value = value;
-    this.rawText = rawText;
+    this.bigValue = rawText === undefined ? BigInt(value) : BigInt(rawText);
+    this.value = Number(this.bigValue);
   }
 
   public tokenLiteral(): string {
@@ -25,7 +21,12 @@ export class IntegerLiteralExpression implements ASTExpression {
   }
 
   public toString(): string {
-    return this.value.toString();
+    return this.bigValue.toString();
+  }
+
+  public negate(): void {
+    this.bigValue = -this.bigValue;
+    this.value = Number(this.bigValue);
   }
 
   /**
@@ -35,15 +36,8 @@ export class IntegerLiteralExpression implements ASTExpression {
    * 0xFFFFFFFFFFFFFFFF becomes `-1` for the i64 lane.
    */
   public constText(lane: "i32" | "i64"): string {
-    if (this.rawText !== undefined) {
-      try {
-        const big = BigInt(this.rawText);
-        const sized = lane === "i64" ? BigInt.asIntN(64, big) : BigInt.asIntN(32, big);
-        return sized.toString();
-      } catch {
-        // Fall through to the JS-number representation below.
-      }
-    }
-    return this.value.toString();
+    const sized =
+      lane === "i64" ? BigInt.asIntN(64, this.bigValue) : BigInt.asIntN(32, this.bigValue);
+    return sized.toString();
   }
 }

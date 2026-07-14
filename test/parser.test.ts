@@ -888,10 +888,9 @@ describe("Parser: Control Flow", () => {
     assert(!initBlock.exported);
     assert(initBlock.identifier.tokenLiteral() === "i");
     assert(initBlock.identifier.typeAnnotation === "i32");
-    assert(initBlock.expression instanceof PrefixExpression);
-    assert(initBlock.expression.operator === "-");
-    assert(initBlock.expression.right instanceof IntegerLiteralExpression);
-    assert(initBlock.expression.right.value === 3);
+    assert(initBlock.expression instanceof IntegerLiteralExpression);
+    assert(initBlock.expression.value === -3);
+    assert(initBlock.expression.bigValue === -3n);
 
     const condExpr = forStmt.conditionExpr.expression;
     assert(condExpr instanceof InfixExpression);
@@ -1984,11 +1983,9 @@ describe("Parser: Operators", () => {
       const prefixStmt = funcStmt.fnExpr.body.statements[0]!;
       assert(prefixStmt instanceof ReturnStatement);
       const prefixExpr = prefixStmt.returnValue;
-      assert(prefixExpr instanceof PrefixExpression);
-      const { right, operator } = prefixExpr;
-      assert(right instanceof IntegerLiteralExpression);
-      assert(operator === "-");
-      assert(right.value === 10);
+      assert(prefixExpr instanceof IntegerLiteralExpression);
+      assert.equal(prefixExpr.value, -10);
+      assert.equal(prefixExpr.bigValue, -10n);
     });
 
     test("prefix negative - identifier", () => {

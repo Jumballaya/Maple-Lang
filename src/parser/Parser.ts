@@ -1147,6 +1147,14 @@ export class Parser {
     const literal: string | number = exprToken.literal.toString();
     this.tokenizer.nextToken();
     const right = this.parseExpression(PREFIX);
+    if (literal === "-" && right instanceof IntegerLiteralExpression) {
+      right.negate();
+      return right;
+    }
+    if (literal === "-" && right instanceof FloatLiteralExpression) {
+      right.value = -right.value;
+      return right;
+    }
     return new PrefixExpression(exprToken, literal.toString(), right);
   }
 

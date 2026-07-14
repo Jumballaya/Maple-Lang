@@ -37,6 +37,14 @@ function expectNoErrors(src: string) {
   );
 }
 
+function expectExactError(src: string, message: string) {
+  const errors = check(src);
+  assert(
+    errors.some((error) => error.message === message),
+    `Expected exact error "${message}", got: ${errors.map((error) => error.message).join("; ")}`,
+  );
+}
+
 // ─── Check 1: Assignment type compatibility ──────────────────────────────────
 
 describe("TypeChecker: Assignment compatibility", () => {
@@ -86,6 +94,77 @@ describe("TypeChecker: Return type", () => {
 
   test("void function with bare return is ok", () => {
     expectNoErrors("fn f(): void { return; }");
+  });
+});
+
+describe("TypeChecker: integer literal ranges", () => {
+  const rangeError = (type: string) => `integer literal out of range for type '${type}'`;
+
+  for (const [name, source, type] of [
+    ["i32 above maximum", "fn f(): i32 { return 2147483648; }", "i32"],
+    ["i32 below minimum", "fn f(): i32 { return -2147483649; }", "i32"],
+    ["u32 below minimum", "fn f(): u32 { return -1; }", "u32"],
+    ["u32 above maximum", "fn f(): u32 { return 4294967296; }", "u32"],
+    ["u8 above maximum", "fn f(): void { let x: u8 = 256; }", "u8"],
+    ["i8 below minimum", "fn f(): void { let x: i8 = -129; }", "i8"],
+    ["i64 above maximum", "fn f(): i64 { return 9223372036854775808; }", "i64"],
+    ["i64 below minimum", "fn f(): i64 { return -9223372036854775809; }", "i64"],
+    ["u64 below minimum", "fn f(): u64 { return -1; }", "u64"],
+    ["u64 above maximum", "fn f(): u64 { return 18446744073709551616; }", "u64"],
+  ] as const) {
+    test(`${name} is rejected`, () => expectExactError(source, rangeError(type)));
+  }
+
+  test("all integer type boundaries are accepted", () => {
+    expectNoErrors(`
+      fn bounds(): void {
+        let i8min: i8 = -128; let i8max: i8 = 127;
+        let u8min: u8 = 0; let u8max: u8 = 255;
+        let i16min: i16 = -32768; let i16max: i16 = 32767;
+        let u16min: u16 = 0; let u16max: u16 = 65535;
+        let i32min: i32 = -2147483648; let i32max: i32 = 2147483647;
+        let u32min: u32 = 0; let u32max: u32 = 4294967295;
+        let i64min: i64 = -9223372036854775808; let i64max: i64 = 9223372036854775807;
+        let u64min: u64 = 0; let u64max: u64 = 18446744073709551615;
+      }
+    `);
+  });
+
+  test("call arguments use the parameter type", () => {
+    expectError("fn take(x: u8): void {} fn f(): void { take(256); }", rangeError("u8"));
+  });
+
+  test("struct fields use the declared field type", () => {
+    expectError("struct S { x: i8 } fn f(): void { let s: S = { x = 128 }; }", rangeError("i8"));
+  });
+
+  test("plain assignments use the target type", () => {
+    expectExactError("fn f(): void { let x: i32 = 0; x = 2147483648; }", rangeError("i32"));
+  });
+
+  test("compound assignments use the target type", () => {
+    expectExactError("fn f(): void { let x: i32 = 0; x += 2147483648; }", rangeError("i32"));
+  });
+
+  test("global initializers use the declared type", () => {
+    expectError("let x: u8 = 256;", rangeError("u8"));
+  });
+
+  test("array elements use the array member type", () => {
+    expectError("fn f(): void { let a: i32[] = [1, 2147483648999]; }", rangeError("i32"));
+  });
+
+  test("integer literals adopt an unsigned sibling's range", () => {
+    expectNoErrors("fn f(x: u32): u32 { return x + 4000000000; }");
+    expectError("fn f(x: u32): u32 { return x + (-1); }", rangeError("u32"));
+  });
+
+  test("context-free integer literals default to i32", () => {
+    expectError("fn f(): void { 2147483648; }", rangeError("i32"));
+  });
+
+  test("direct literal casts are exempt from range validation", () => {
+    expectNoErrors("fn a(): u32 { return -1 as u32; } fn b(): i32 { return 99999999999 as i32; }");
   });
 });
 
@@ -693,7 +772,10 @@ describe("TypeChecker: multi-return and destructuring", () => {
   });
 
   test("multi-return per-position mismatch", () => {
-    expectError("fn f(): (i32, i64) { return 1, 2; }", "Return type mismatch at position 1");
+    expectError(
+      "fn f(): (i32, i64) { let x: i32 = 2; return 1, x; }",
+      "Return type mismatch at position 1",
+    );
   });
 
   test("pass-through return happy path", () => {

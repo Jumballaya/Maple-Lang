@@ -890,7 +890,7 @@ export class Lexer {
     } else {
       const num = Number.parseInt(lexeme, 10);
       if (Number.isNaN(num)) throw new Error(`Malformed integer: ${lexeme}`);
-      return { ...mark, type: "IntegerLiteral", literal: num };
+      return { ...mark, type: "IntegerLiteral", literal: num, rawText: lexeme };
     }
   }
 

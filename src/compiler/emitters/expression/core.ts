@@ -63,5 +63,6 @@ export function emitSet(ident: string, expr: ASTExpression, emitter: ModuleEmitt
 
 export function emitNumberGet(num: number, type: string): string {
   const wt = valueTypeToWasm(type);
-  return `(${wt}.const ${num})`;
+  const text = Object.is(num, -0) ? "-0" : num.toString();
+  return `(${wt}.const ${text})`;
 }

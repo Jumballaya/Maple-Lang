@@ -1,4 +1,5 @@
 import type { ASTProgram } from "../parser/ast/ASTProgram";
+import { ArrayLiteralExpression } from "../parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../parser/ast/expressions/BooleanLiteralExpression";
 import { CallExpression } from "../parser/ast/expressions/CallExpression";
@@ -219,6 +220,34 @@ function typesCompatible(declared: string, actual: string, meta: ModuleMeta): bo
   return valueTypeToWasm(declared) === valueTypeToWasm(actual);
 }
 
+function integerRange(type: string | undefined): { min: bigint; max: bigint } | null {
+  const match = type?.match(/^([iu])(8|16|32|64)$/);
+  if (!match) return null;
+  const bits = BigInt(match[2]!);
+  if (match[1] === "u") return { min: 0n, max: (1n << bits) - 1n };
+  const limit = 1n << (bits - 1n);
+  return { min: -limit, max: limit - 1n };
+}
+
+function checkIntegerLiteralRange(
+  expr: IntegerLiteralExpression,
+  expectedType: string,
+  errors: MapleError[],
+): void {
+  const range = integerRange(expectedType);
+  if (!range) return;
+  expr.numericType = expectedType.endsWith("64") ? "i64" : "i32";
+  if (expr.bigValue < range.min || expr.bigValue > range.max) {
+    errors.push(
+      new MapleError(
+        `integer literal out of range for type '${expectedType}'`,
+        expr.token.line,
+        expr.token.col,
+      ),
+    );
+  }
+}
+
 // ─── AST walkers ──────────────────────────────────────────────────────────────
 
 function walkExpression(
@@ -226,8 +255,16 @@ function walkExpression(
   scope: Scope,
   meta: ModuleMeta,
   errors: MapleError[],
+  expectedType?: string,
 ): void {
   if (!expr) return;
+
+  if (expr instanceof IntegerLiteralExpression) {
+    const literalType =
+      expectedType !== undefined && integerRange(expectedType) ? expectedType : "i32";
+    checkIntegerLiteralRange(expr, literalType, errors);
+    return;
+  }
 
   // Identifier checks
   if (expr instanceof Identifier) {
@@ -252,6 +289,24 @@ function walkExpression(
 
   // Check 3 — mixed arithmetic / bitwise on float
   if (expr instanceof InfixExpression) {
+    const contextualType = integerRange(expectedType) ? expectedType : undefined;
+    const leftSiblingType =
+      expr.right instanceof IntegerLiteralExpression
+        ? contextualType
+        : resolveExprType(expr.right, scope, meta, errors);
+    const rightSiblingType =
+      expr.left instanceof IntegerLiteralExpression
+        ? contextualType
+        : resolveExprType(expr.left, scope, meta, errors);
+    const leftExpected = integerRange(leftSiblingType ?? undefined)
+      ? (leftSiblingType ?? undefined)
+      : contextualType;
+    const rightExpected = integerRange(rightSiblingType ?? undefined)
+      ? (rightSiblingType ?? undefined)
+      : contextualType;
+    walkExpression(expr.left, scope, meta, errors, leftExpected);
+    walkExpression(expr.right, scope, meta, errors, rightExpected);
+
     if (ARITHMETIC_OPS.has(expr.operator)) {
       const lt = resolveExprType(expr.left, scope, meta, errors);
       const rt = resolveExprType(expr.right, scope, meta, errors);
@@ -284,14 +339,31 @@ function walkExpression(
         );
       }
     }
-    walkExpression(expr.left, scope, meta, errors);
-    walkExpression(expr.right, scope, meta, errors);
     return;
   }
 
   // Check 4 — call argument count and types
   if (expr instanceof CallExpression) {
     const fn = meta.functions[expr.func];
+    const localFnType = scope.get(expr.func)?.type;
+    const localParams =
+      localFnType && isFnType(localFnType) ? parseFnType(localFnType)?.params : null;
+    const importSignature = meta.imports[expr.func]?.info;
+    const importedParamChars =
+      importSignature?.kind === "func" ? (importSignature.signature.split("_")[0] ?? "") : null;
+    const importedParams =
+      importedParamChars !== null
+        ? Array.from(importedParamChars === "v" ? "" : importedParamChars).map((char) => {
+            if (char === "I") return "i64";
+            if (char === "f") return "f32";
+            if (char === "F") return "f64";
+            return "i32";
+          })
+        : null;
+    const parameterTypes = fn?.params.map((param) => param.type) ?? localParams ?? importedParams;
+    for (let i = 0; i < expr.args.length; i++) {
+      walkExpression(expr.args[i]!, scope, meta, errors, parameterTypes?.[i]);
+    }
     if (fn) {
       if (expr.args.length !== fn.params.length) {
         const t = expr.token;
@@ -356,7 +428,6 @@ function walkExpression(
         }
       }
     }
-    for (const arg of expr.args) walkExpression(arg, scope, meta, errors);
     return;
   }
 
@@ -400,8 +471,9 @@ function walkExpression(
         }
       }
     }
+    const targetType = resolveExprType(expr.left, scope, meta, errors);
     walkExpression(expr.left, scope, meta, errors);
-    walkExpression(expr.value, scope, meta, errors);
+    walkExpression(expr.value, scope, meta, errors, targetType ?? undefined);
     return;
   }
 
@@ -434,6 +506,7 @@ function walkExpression(
     for (const [fieldName, fieldExpr] of Object.entries(expr.members)) {
       const memberMeta = sd.members[fieldName];
       if (!memberMeta) continue;
+      walkExpression(fieldExpr, scope, meta, errors, memberMeta.type);
       const fieldType = resolveExprType(fieldExpr, scope, meta, errors);
       if (fieldType !== null && !typesCompatible(memberMeta.type, fieldType, meta)) {
         const t = fieldExpr.token;
@@ -445,21 +518,33 @@ function walkExpression(
           ),
         );
       }
-      walkExpression(fieldExpr, scope, meta, errors);
+    }
+    return;
+  }
+
+  if (expr instanceof ArrayLiteralExpression) {
+    for (const element of expr.elements) {
+      walkExpression(element, scope, meta, errors, expr.memberType);
     }
     return;
   }
 
   // Recurse into sub-expressions
   if (expr instanceof PrefixExpression) {
-    walkExpression(expr.right, scope, meta, errors);
+    walkExpression(expr.right, scope, meta, errors, expectedType);
   } else if (expr instanceof PostfixExpression) {
     walkExpression(expr.left, scope, meta, errors);
   } else if (expr instanceof CastExpression) {
-    walkExpression(expr.expr, scope, meta, errors);
+    if (expr.expr instanceof IntegerLiteralExpression) {
+      if (integerRange(expr.targetType)) {
+        expr.expr.numericType = expr.targetType.endsWith("64") ? "i64" : "i32";
+      }
+    } else {
+      walkExpression(expr.expr, scope, meta, errors);
+    }
   } else if (expr instanceof IndexExpression) {
     walkExpression(expr.left, scope, meta, errors);
-    walkExpression(expr.index, scope, meta, errors);
+    walkExpression(expr.index, scope, meta, errors, "i32");
   }
 }
 
@@ -481,6 +566,7 @@ function checkLetInitializer(
   errors: MapleError[],
 ): void {
   if (stmt.expression === null) return;
+  walkExpression(stmt.expression, scope, meta, errors, stmt.typeAnnotation);
   const actualType = resolveExprType(stmt.expression, scope, meta, errors);
   if (actualType !== null && !typesCompatible(stmt.typeAnnotation, actualType, meta)) {
     const t = stmt.token;
@@ -492,7 +578,6 @@ function checkLetInitializer(
       ),
     );
   }
-  walkExpression(stmt.expression, scope, meta, errors);
 }
 
 type FlowContext = {
@@ -644,9 +729,9 @@ function walkStatement(
     }
 
     for (let i = 0; i < returnValues.length; i++) {
+      walkExpression(returnValues[i]!, scope, meta, errors, fnReturnTypes[i]);
       const actualType = resolveExprType(returnValues[i]!, scope, meta, errors);
       if (actualType === null) {
-        walkExpression(returnValues[i]!, scope, meta, errors);
         return;
       }
       if (!typesCompatible(fnReturnTypes[i]!, actualType, meta)) {
@@ -663,7 +748,6 @@ function walkStatement(
           errors.push(new MapleError(`Return type mismatch at position ${i}`, t.line, t.col));
         }
       }
-      walkExpression(returnValues[i]!, scope, meta, errors);
     }
     return;
   }
