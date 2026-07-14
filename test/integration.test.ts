@@ -2860,3 +2860,92 @@ describe("parser robustness", () => {
     );
   });
 });
+
+describe("trap semantics", () => {
+  maybeTest("i32 signed and unsigned division by zero trap", () => {
+    const wat = compile(`
+      export fn signed(a: i32, b: i32): i32 { return a / b; }
+      export fn unsigned(a: i32, b: i32): u32 { return (a as u32) / (b as u32); }
+    `);
+    assert.throws(() => runExport(wat, "signed", [1, 0]), WebAssembly.RuntimeError);
+    assert.throws(() => runExport(wat, "unsigned", [1, 0]), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("i32 signed and unsigned remainder by zero trap", () => {
+    const wat = compile(`
+      export fn signed(a: i32, b: i32): i32 { return a % b; }
+      export fn unsigned(a: i32, b: i32): u32 { return (a as u32) % (b as u32); }
+    `);
+    assert.throws(() => runExport(wat, "signed", [1, 0]), WebAssembly.RuntimeError);
+    assert.throws(() => runExport(wat, "unsigned", [1, 0]), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("i64 division and remainder by zero trap", () => {
+    const wat = compile(`
+      export fn divide(a: i64, b: i64): i64 { return a / b; }
+      export fn remainder(a: i64, b: i64): i64 { return a % b; }
+    `);
+    assert.throws(() => runExport(wat, "divide", [1n, 0n]), WebAssembly.RuntimeError);
+    assert.throws(() => runExport(wat, "remainder", [1n, 0n]), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("i32 signed division overflow traps", () => {
+    const wat = compile(`
+      export fn run(a: i32, b: i32): i32 { return a / b; }
+    `);
+    assert.throws(() => runExport(wat, "run", [-2147483648, -1]), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("i64 signed division overflow traps", () => {
+    const wat = compile(`
+      export fn run(a: i64, b: i64): i64 { return a / b; }
+    `);
+    assert.throws(
+      () => runExport(wat, "run", [-9223372036854775808n, -1n]),
+      WebAssembly.RuntimeError,
+    );
+  });
+
+  maybeTest("f32 and f64 Infinity truncation to i32 trap", () => {
+    const wat = compile(`
+      export fn fromF32(): i32 { return (1.0 / 0.0) as i32; }
+      export fn fromF64(): i32 {
+        return ((1.0 as f64) / (0.0 as f64)) as i32;
+      }
+    `);
+    assert.throws(() => runExport(wat, "fromF32"), WebAssembly.RuntimeError);
+    assert.throws(() => runExport(wat, "fromF64"), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("NaN truncation to i32 traps", () => {
+    const wat = compile(`
+      export fn run(): i32 { return (0.0 / 0.0) as i32; }
+    `);
+    assert.throws(() => runExport(wat, "run"), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("out-of-range finite f64 truncation to i32 traps", () => {
+    const wat = compile(`
+      export fn run(): i32 { return (3000000000.0 as f64) as i32; }
+    `);
+    assert.throws(() => runExport(wat, "run"), WebAssembly.RuntimeError);
+  });
+
+  maybeTest("signed remainder overflow cases return zero without trapping", () => {
+    const wat = compile(`
+      export fn i32Rem(a: i32, b: i32): i32 { return a % b; }
+      export fn i64Rem(a: i64, b: i64): i64 { return a % b; }
+    `);
+    assert.equal(runExport(wat, "i32Rem", [-2147483648, -1]), 0);
+    assert.equal(runExport(wat, "i64Rem", [-9223372036854775808n, -1n]), 0n);
+  });
+
+  maybeTest("in-range float truncation returns the truncated value", () => {
+    const wat = compile(`
+      export fn fromF32(): i32 { return 3.75 as i32; }
+      export fn fromF64(): i32 { return (0.0 - (3.75 as f64)) as i32; }
+    `);
+    assert.equal(runExport(wat, "fromF32"), 3);
+    assert.equal(runExport(wat, "fromF64"), -3);
+  });
+});
