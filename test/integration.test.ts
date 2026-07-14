@@ -2627,6 +2627,120 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
+  maybeTest("hex escapes use codepoint semantics", () => {
+    const wat = compile(String.raw`
+      export fn asciiLen(): i32 { let s: string = "\x41"; return s.len; }
+      export fn latinLen(): i32 { let s: string = "\xE9"; return s.len; }
+      export fn asciiEqual(): i32 {
+        let escaped: string = "\x41";
+        let literal: string = "A";
+        if (escaped == literal) { return 1; }
+        return 0;
+      }
+      export fn latinEqual(): i32 {
+        let escaped: string = "\xE9";
+        let literal: string = "é";
+        if (escaped == literal) { return 1; }
+        return 0;
+      }
+      export fn hexCaseEqual(): i32 {
+        let lower: string = "\xff";
+        let upper: string = "\xFF";
+        if (lower == upper) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "asciiLen"), 1);
+    assert.equal(runExport(wat, "latinLen"), 2);
+    assert.equal(runExport(wat, "asciiEqual"), 1);
+    assert.equal(runExport(wat, "latinEqual"), 1);
+    assert.equal(runExport(wat, "hexCaseEqual"), 1);
+  });
+
+  maybeTest("NUL bytes remain part of string content", () => {
+    const wat = compile(String.raw`
+      export fn length(): i32 { let s: string = "\x00abc"; return s.len; }
+      export fn equal(): i32 {
+        let a: string = "\x00abc";
+        let b: string = "\x00abc";
+        if (a == b) { return 1; }
+        return 0;
+      }
+      export fn different(): i32 {
+        let a: string = "\x00abc";
+        let b: string = "\x00abd";
+        if (a != b) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "length"), 4);
+    assert.equal(runExport(wat, "equal"), 1);
+    assert.equal(runExport(wat, "different"), 1);
+  });
+
+  maybeTest("string length counts UTF-8 bytes", () => {
+    const wat = compile(`
+      export fn latin(): i32 { let s: string = "héllo"; return s.len; }
+      export fn bmp(): i32 { let s: string = "€"; return s.len; }
+      export fn astral(): i32 { let s: string = "😀"; return s.len; }
+    `);
+    assert.equal(runExport(wat, "latin"), 6);
+    assert.equal(runExport(wat, "bmp"), 3);
+    assert.equal(runExport(wat, "astral"), 4);
+  });
+
+  maybeTest("escaped and empty string lengths are exact", () => {
+    const wat = compile(String.raw`
+      export fn newline(): i32 { let s: string = "a\nb"; return s.len; }
+      export fn tab(): i32 { let s: string = "a\tb"; return s.len; }
+      export fn slash(): i32 { let s: string = "\\"; return s.len; }
+      export fn empty(): i32 { let s: string = ""; return s.len; }
+    `);
+    assert.equal(runExport(wat, "newline"), 3);
+    assert.equal(runExport(wat, "tab"), 3);
+    assert.equal(runExport(wat, "slash"), 1);
+    assert.equal(runExport(wat, "empty"), 0);
+  });
+
+  maybeTest("string equality compares complete UTF-8 content", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let unicodeA: string = "hé😀";
+        let unicodeB: string = "hé😀";
+        let sameA: string = "ab";
+        let sameB: string = "ab";
+        let different: string = "ac";
+        let prefix: string = "abc";
+        let emptyA: string = "";
+        let emptyB: string = "";
+        if (unicodeA != unicodeB) { return 1; }
+        if (sameA == different) { return 2; }
+        if (sameA == prefix) { return 3; }
+        if (emptyA != emptyB) { return 4; }
+        if (sameA != sameB) { return 5; }
+        if (!(sameA != different)) { return 6; }
+        if (!(sameA != prefix)) { return 7; }
+        if (!(emptyA == emptyB)) { return 8; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 0);
+  });
+
+  maybeTest("strings compare correctly through a call boundary", () => {
+    const wat = compile(`
+      fn same(a: string, b: string): bool { return a == b; }
+      export fn run(): i32 {
+        let a: string = "hé😀";
+        let b: string = "hé😀";
+        let c: string = "hé😃";
+        if (same(a, b) && !same(a, c)) { return 1; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
   // stdlib.ts declares `string_copy` with the wrong arity. The actual WAT
   // takes (i32, i32) and returns nothing.
   maybeTest("string_copy import matches its real (src, dst) -> void signature", () => {

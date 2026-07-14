@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { MapleError } from "../src/compiler/errors";
 import { Lexer } from "../src/lexer/Lexer";
+
+function lexError(source: string): MapleError {
+  try {
+    new Lexer(source).getTokens();
+    assert.fail("expected lexing to throw");
+  } catch (error) {
+    assert(error instanceof MapleError);
+    assert(error.line > 0);
+    assert(error.col > 0);
+    return error;
+  }
+}
 
 describe("Lexer", () => {
   test("can accept source text", () => {
@@ -48,7 +61,6 @@ describe("Lexer", () => {
       `'\\x41'`, // 'A'
       `'\\''`, // single quote char
       `'\\\\'`, // backslash char
-      "'\\x4'", // various hex
       "'\\x04'", // various hex
       "'\\x41'", // various hex
     ];
@@ -93,6 +105,69 @@ describe("Lexer Error States", () => {
     assert.throws(() => {
       lexer.getTokens();
     });
+  });
+
+  test("unknown string and char escapes are MapleErrors naming the sequence", () => {
+    for (const source of [String.raw`"\q"`, String.raw`"\z"`]) {
+      const error = lexError(source);
+      assert.equal(
+        error.message,
+        `unknown escape sequence '${source.slice(1, 3)}' in string literal`,
+      );
+    }
+
+    const charError = lexError(String.raw`'\q'`);
+    assert.equal(charError.message, "unknown escape sequence '\\q' in char literal");
+  });
+
+  test("malformed hex escapes name the sequence", () => {
+    assert.equal(
+      lexError(String.raw`"\x"`).message,
+      "malformed escape sequence '\\x' in string literal",
+    );
+    assert.equal(
+      lexError(String.raw`"\xZ1"`).message,
+      "malformed escape sequence '\\xZ1' in string literal",
+    );
+    assert.equal(
+      lexError(String.raw`'\xZ1'`).message,
+      "malformed escape sequence '\\xZ1' in char literal",
+    );
+  });
+
+  test("strings ending after a backslash or escaped quote are not terminated", () => {
+    assert.equal(lexError('"abc\\').message, 'String not terminated: "abc\\');
+    assert.equal(lexError('"abc\\"').message, 'String not terminated: "abc\\"');
+  });
+
+  test("the complete escape set works for both strings and chars", () => {
+    const stringEscapes = [
+      String.raw`"\n"`,
+      String.raw`"\r"`,
+      String.raw`"\t"`,
+      String.raw`"\0"`,
+      String.raw`"\""`,
+      String.raw`"\'"`,
+      String.raw`"\\"`,
+      String.raw`"\x41"`,
+    ];
+    const charEscapes = [
+      String.raw`'\n'`,
+      String.raw`'\r'`,
+      String.raw`'\t'`,
+      String.raw`'\0'`,
+      String.raw`'\"'`,
+      String.raw`'\''`,
+      String.raw`'\\'`,
+      String.raw`'\x41'`,
+    ];
+
+    for (const source of stringEscapes) {
+      assert.equal(new Lexer(source).getTokens()[0]!.type, "StringLiteral");
+    }
+    for (const source of charEscapes) {
+      assert.equal(new Lexer(source).getTokens()[0]!.type, "CharLiteral");
+    }
   });
 });
 

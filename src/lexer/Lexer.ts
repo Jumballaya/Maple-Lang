@@ -1,3 +1,4 @@
+import { MapleError } from "../compiler/errors";
 import { KEYWORDS, TYPE_KEYWORDS } from "./lexer.constants";
 import { isDigit, isLetter } from "./lexer.utils";
 import type { Pos, Token } from "./token.types";
@@ -655,16 +656,19 @@ export class Lexer {
     this.readChar(); // consume opening "
 
     const bytes: number[] = [];
-    // naive UTF-8 encoder for BMP code points (sufficient for MVP); upgrade later if needed
-    const pushUtf8 = (ch: string) => {
-      const code = ch.codePointAt(0)!;
+    const pushUtf8 = (code: number) => {
       if (code <= 0x7f) {
         bytes.push(code & 0xff);
       } else if (code <= 0x7ff) {
         bytes.push((0xc0 | (code >> 6)) & 0xff);
         bytes.push((0x80 | (code & 0x3f)) & 0xff);
-      } else {
+      } else if (code <= 0xffff) {
         bytes.push((0xe0 | (code >> 12)) & 0xff);
+        bytes.push((0x80 | ((code >> 6) & 0x3f)) & 0xff);
+        bytes.push((0x80 | (code & 0x3f)) & 0xff);
+      } else {
+        bytes.push((0xf0 | (code >> 18)) & 0xff);
+        bytes.push((0x80 | ((code >> 12) & 0x3f)) & 0xff);
         bytes.push((0x80 | ((code >> 6) & 0x3f)) & 0xff);
         bytes.push((0x80 | (code & 0x3f)) & 0xff);
       }
@@ -672,7 +676,9 @@ export class Lexer {
 
     while (!this.isEOF() && this.char !== '"') {
       if (this.char === "\\") {
+        const escapeMark = this.mark();
         this.readChar(); // at escape code
+        if (this.isEOF()) continue;
         switch (this.char) {
           case "n":
             this.readChar();
@@ -703,33 +709,45 @@ export class Lexer {
             bytes.push(0x5c);
             break;
           case "x": {
-            // \xNN — exactly 2 hex digits
             const h1 = this.peekChar();
-            this.readChar();
-            const h2 = this.peekChar();
-            this.readChar();
+            const h2 = this.text[this.readPos + 1] ?? "\0";
             const v1 = this.hexVal(h1),
               v2 = this.hexVal(h2);
-            if (v1 < 0 || v2 < 0) throw new Error("Invalid \\x escape (need two hex digits)");
-            bytes.push((v1 << 4) | v2);
+            if (v1 < 0 || v2 < 0) {
+              throw new MapleError(
+                `malformed escape sequence '${this.hexEscapeText('"')}' in string literal`,
+                escapeMark.line,
+                escapeMark.col,
+              );
+            }
+            this.readChar();
+            this.readChar();
+            this.readChar();
+            pushUtf8((v1 << 4) | v2);
             break;
           }
           default: {
-            // Unknown escape: take literally (or throw)
-            const unk = this.char;
-            this.readChar();
-            pushUtf8(unk);
+            throw new MapleError(
+              `unknown escape sequence '\\${this.char}' in string literal`,
+              escapeMark.line,
+              escapeMark.col,
+            );
           }
         }
       } else {
-        // normal char
-        pushUtf8(this.char);
+        const code = this.text.codePointAt(this.pos)!;
+        pushUtf8(code);
         this.readChar();
+        if (code > 0xffff) this.readChar();
       }
     }
 
     if (this.char !== '"') {
-      throw new Error(`String not terminated: ${this.text.slice(start, this.pos)}`);
+      throw new MapleError(
+        `String not terminated: ${this.text.slice(start, this.pos)}`,
+        mark.line,
+        mark.col,
+      );
     }
     this.readChar(); // consume closing "
 
@@ -747,7 +765,15 @@ export class Lexer {
     let code: number;
 
     if ((this.char as string) === "\\") {
+      const escapeMark = this.mark();
       this.readChar(); // at escape code
+      if (this.isEOF()) {
+        throw new MapleError(
+          `Char not terminated: ${this.text.slice(start, this.pos)}`,
+          mark.line,
+          mark.col,
+        );
+      }
       switch (this.char as string) {
         case "n":
           this.readChar();
@@ -778,29 +804,45 @@ export class Lexer {
           code = 0x5c;
           break;
         case "x": {
-          // Allow 1–2 digits for chars: '\x4' == 0x04, '\x41' == 0x41
-          // We are currently on 'x'; consume hex after it:
-          const v = this.readHexDigits(1, 2);
+          const h1 = this.peekChar();
+          const h2 = this.text[this.readPos + 1] ?? "\0";
+          const v1 = this.hexVal(h1),
+            v2 = this.hexVal(h2);
+          if (v1 < 0 || v2 < 0) {
+            throw new MapleError(
+              `malformed escape sequence '${this.hexEscapeText("'")}' in char literal`,
+              escapeMark.line,
+              escapeMark.col,
+            );
+          }
           this.readChar();
-          code = v & 0xff;
+          this.readChar();
+          this.readChar();
+          code = (v1 << 4) | v2;
           break;
         }
         default: {
-          // Unknown escape: take literally (or throw)
-          code = (this.char as string).charCodeAt(0) & 0xff;
-          this.readChar();
+          throw new MapleError(
+            `unknown escape sequence '\\${this.char}' in char literal`,
+            escapeMark.line,
+            escapeMark.col,
+          );
         }
       }
     } else {
       if (this.char === "'" || this.char === "\0") {
-        throw new Error("Char literal cannot be empty");
+        throw new MapleError("Char literal cannot be empty", mark.line, mark.col);
       }
       code = (this.char as string).charCodeAt(0) & 0xff;
       this.readChar();
     }
 
     if (this.char !== "'") {
-      throw new Error(`Char not terminated: ${this.text.slice(start, this.pos)}`);
+      throw new MapleError(
+        `Char not terminated: ${this.text.slice(start, this.pos)}`,
+        mark.line,
+        mark.col,
+      );
     }
     this.readChar(); // consume closing '
 
@@ -922,22 +964,13 @@ export class Lexer {
     return -1;
   }
 
-  private readHexDigits(min: number, max: number): number {
-    // Read between `min` and `max` hex digits, returning the accumulated value.
-    // Uses this.peekChar()/this.readChar() against your current cursor.
-    let read = 0;
-    let value = 0;
-    while (read < max) {
-      const p = this.peekChar();
-      const v = this.hexVal(p);
-      if (v < 0) break;
-      this.readChar(); // advance to include this digit
-      value = (value << 4) | v;
-      read++;
+  private hexEscapeText(terminator: string): string {
+    let sequence = "\\x";
+    for (let offset = 0; offset < 2; offset++) {
+      const char = this.text[this.readPos + offset];
+      if (char === undefined || char === terminator) break;
+      sequence += char;
     }
-    if (read < min) {
-      throw new Error(`Invalid hex escape: expected ${min} hex digit(s)`);
-    }
-    return value;
+    return sequence;
   }
 }
