@@ -109,7 +109,10 @@ function constGlobalValue(
 //  imports and exports. This is to get all this data
 //  up front.
 //
-export function extractModuleMeta(program: ASTProgram): ModuleMeta {
+export function extractModuleMeta(
+  program: ASTProgram,
+  deferArrayElementErrors = false,
+): ModuleMeta {
   const builder = new ModuleBuilder(program.name);
 
   // parse for structs at top level
@@ -200,7 +203,7 @@ export function extractModuleMeta(program: ASTProgram): ModuleMeta {
   }
 
   for (const stmt of program.statements) {
-    extractGlobalData(stmt, builder);
+    extractGlobalData(stmt, builder, false, deferArrayElementErrors);
   }
 
   return builder.build();

@@ -917,6 +917,15 @@ describe("Emission: array index write", () => {
   });
 });
 
+describe("Emission: array literal defense", () => {
+  test("expression elements throw instead of silently encoding zero", () => {
+    assert.throws(
+      () => compile("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }"),
+      /array literal element must be a literal/,
+    );
+  });
+});
+
 describe("Emission: switch", () => {
   test("switch emits br_if dispatch with each case body", () => {
     const { wat } = compile(`

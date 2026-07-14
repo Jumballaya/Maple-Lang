@@ -26,38 +26,39 @@ export function extractGlobalData(
   stmt: ASTStatement,
   builder: ModuleBuilder,
   insideFunction = false,
+  deferArrayElementErrors = false,
 ) {
   if (stmt instanceof BlockStatement) {
     for (const st of stmt.statements) {
-      extractGlobalData(st, builder, insideFunction);
+      extractGlobalData(st, builder, insideFunction, deferArrayElementErrors);
     }
     return;
   }
   if (stmt instanceof FunctionStatement) {
-    extractGlobalData(stmt.fnExpr.body, builder, true);
+    extractGlobalData(stmt.fnExpr.body, builder, true, deferArrayElementErrors);
     return;
   }
   if (stmt instanceof ForStatement) {
-    extractGlobalData(stmt.loopBody, builder, insideFunction);
+    extractGlobalData(stmt.loopBody, builder, insideFunction, deferArrayElementErrors);
     return;
   }
   if (stmt instanceof IfStatement) {
-    extractGlobalData(stmt.thenBlock, builder, insideFunction);
+    extractGlobalData(stmt.thenBlock, builder, insideFunction, deferArrayElementErrors);
     if (stmt.elseBlock) {
-      extractGlobalData(stmt.elseBlock, builder, insideFunction);
+      extractGlobalData(stmt.elseBlock, builder, insideFunction, deferArrayElementErrors);
     }
     return;
   }
   if (stmt instanceof WhileStatement) {
-    extractGlobalData(stmt.loopBody, builder, insideFunction);
+    extractGlobalData(stmt.loopBody, builder, insideFunction, deferArrayElementErrors);
     return;
   }
   if (stmt instanceof SwitchStatement) {
     for (const c of stmt.cases) {
-      extractGlobalData(c.body, builder, insideFunction);
+      extractGlobalData(c.body, builder, insideFunction, deferArrayElementErrors);
     }
     if (stmt.default) {
-      extractGlobalData(stmt.default, builder, insideFunction);
+      extractGlobalData(stmt.default, builder, insideFunction, deferArrayElementErrors);
     }
     return;
   }
@@ -68,7 +69,7 @@ export function extractGlobalData(
         extractStringLiteral(expr.value, builder);
       }
       if (expr.value instanceof ArrayLiteralExpression) {
-        extractArrayLiteral(expr.value, builder);
+        extractArrayLiteral(expr.value, builder, deferArrayElementErrors);
       }
       if (expr.value instanceof StructLiteralExpression && !insideFunction) {
         extractStructLiteral(expr.value, builder);
@@ -81,7 +82,7 @@ export function extractGlobalData(
           extractStringLiteral(p, builder);
         }
         if (p instanceof ArrayLiteralExpression) {
-          extractArrayLiteral(p, builder);
+          extractArrayLiteral(p, builder, deferArrayElementErrors);
         }
         if (p instanceof StructLiteralExpression && !insideFunction) {
           extractStructLiteral(p, builder);
@@ -92,7 +93,7 @@ export function extractGlobalData(
       extractStringLiteral(stmt.expression, builder);
     }
     if (stmt.expression instanceof ArrayLiteralExpression) {
-      extractArrayLiteral(stmt.expression, builder);
+      extractArrayLiteral(stmt.expression, builder, deferArrayElementErrors);
     }
     if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
       extractStructLiteral(stmt.expression, builder);
@@ -104,7 +105,7 @@ export function extractGlobalData(
       extractStringLiteral(stmt.expression, builder);
     }
     if (stmt.expression instanceof ArrayLiteralExpression) {
-      extractArrayLiteral(stmt.expression, builder);
+      extractArrayLiteral(stmt.expression, builder, deferArrayElementErrors);
     }
     if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
       extractStructLiteral(stmt.expression, builder);
@@ -150,23 +151,39 @@ export function isConstInitializer(expr: ASTExpression): boolean {
 
 // Arrays share the string layout: an element block followed by an 8-byte
 // {len, data} header; the array variable holds the header address.
-function extractArrayLiteral(expr: ArrayLiteralExpression, builder: ModuleBuilder) {
+function extractArrayLiteral(
+  expr: ArrayLiteralExpression,
+  builder: ModuleBuilder,
+  deferElementErrors: boolean,
+) {
+  const hasUnsupportedElement = expr.elements.some(
+    (el) =>
+      !(el instanceof IntegerLiteralExpression) &&
+      !(el instanceof FloatLiteralExpression) &&
+      !(el instanceof BooleanLiteralExpression) &&
+      !(el instanceof StringLiteralExpression),
+  );
+  if (hasUnsupportedElement) {
+    if (deferElementErrors) return;
+    throw new Error("array literal element must be a literal");
+  }
+
   const elemType = expr.memberType === "string" ? "i32" : baseScalar(expr.memberType);
   const values = expr.elements.map((el) => {
-    if (el instanceof IntegerLiteralExpression || el instanceof FloatLiteralExpression) {
+    if (el instanceof IntegerLiteralExpression) {
+      return elemType === "i64" || elemType === "u64" ? el.bigValue : el.value;
+    }
+    if (el instanceof FloatLiteralExpression) {
       return el.value;
     }
     if (el instanceof BooleanLiteralExpression) {
       return el.value ? 1 : 0;
     }
-    if (el instanceof CharLiteralExpression) {
-      return el.value;
-    }
     if (el instanceof StringLiteralExpression) {
       extractStringLiteral(el, builder);
       return el.location;
     }
-    return 0; // non-literal elements are not supported yet
+    throw new Error("array literal element must be a literal");
   });
   const dataAddr = builder.addBytes(
     padBytesTo(numToLittleEndian(values, elemType), 4),
@@ -268,36 +285,36 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
   expr.location = addr;
 }
 
-function numToLittleEndian(ns: number[], type: string) {
+function numToLittleEndian(ns: (number | bigint)[], type: string) {
   const baseType = baseScalar(type);
   const byteSize = sizeofType(baseType);
   const buffer = new ArrayBuffer(byteSize * ns.length);
 
   if (baseType === "i32" || baseType === "u32") {
     const i32 = new Int32Array(buffer);
-    i32.set(ns, 0);
+    i32.set(ns.map(Number), 0);
   } else if (baseType === "f32") {
     const f32 = new Float32Array(buffer);
-    f32.set(ns, 0);
+    f32.set(ns.map(Number), 0);
   } else if (baseType === "i64" || baseType === "u64") {
     const i64 = new BigInt64Array(buffer);
     i64.set(
-      ns.map((n) => BigInt(Math.trunc(n))),
+      ns.map((n) => (typeof n === "bigint" ? n : BigInt(Math.trunc(n)))),
       0,
     );
   } else if (baseType === "f64") {
     const f64 = new Float64Array(buffer);
-    f64.set(ns, 0);
+    f64.set(ns.map(Number), 0);
   } else if (baseType === "i8" || baseType === "u8" || baseType === "bool") {
     const u8 = new Uint8Array(buffer);
     u8.set(
-      ns.map((n) => Math.trunc(n) & 0xff),
+      ns.map((n) => Math.trunc(Number(n)) & 0xff),
       0,
     );
   } else if (baseType === "i16" || baseType === "u16") {
     const view = new DataView(buffer);
     for (let i = 0; i < ns.length; i++) {
-      view.setInt16(i * 2, Math.trunc(ns[i]!), true);
+      view.setInt16(i * 2, Math.trunc(Number(ns[i]!)), true);
     }
   } else {
     throw new Error(`unsupported type: "${baseType}"`);

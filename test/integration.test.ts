@@ -2070,6 +2070,16 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run", [4]), 55);
   });
 
+  maybeTest("i64 array elements beyond 2^53 round-trip exactly", () => {
+    const wat = compile(`
+      export fn run(): i64 {
+        let values: i64[] = [9007199254740993];
+        return values[0];
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 9007199254740993n);
+  });
+
   // Arrays of bool / string / fn-ref are natural extensions of i32[]/f32[].
   maybeTest("bool[] is a supported array type", () => {
     const wat = compile(`

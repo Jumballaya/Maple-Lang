@@ -106,6 +106,7 @@ function resolveExprType(
   }
   if (expr instanceof BooleanLiteralExpression) return "bool";
   if (expr instanceof StringLiteralExpression) return "string";
+  if (expr instanceof ArrayLiteralExpression) return `${expr.memberType}[]`;
 
   if (expr instanceof Identifier) {
     const id = expr.tokenLiteral();
@@ -603,7 +604,76 @@ function walkExpression(
   }
 
   if (expr instanceof ArrayLiteralExpression) {
+    const nested = expr.elements.find((element) => element instanceof ArrayLiteralExpression);
+    if (nested) {
+      errors.push(
+        new MapleError(
+          "nested array literals are not supported yet",
+          nested.token.line,
+          nested.token.col,
+        ),
+      );
+      return;
+    }
+
+    const elementTypes: string[] = [];
     for (const element of expr.elements) {
+      let elementType: string;
+      if (element instanceof IntegerLiteralExpression) elementType = "i32";
+      else if (element instanceof FloatLiteralExpression) elementType = "f32";
+      else if (element instanceof BooleanLiteralExpression) elementType = "bool";
+      else if (element instanceof StringLiteralExpression) elementType = "string";
+      else {
+        errors.push(
+          new MapleError(
+            "array literal elements must be literals (expressions are not supported yet)",
+            element.token.line,
+            element.token.col,
+          ),
+        );
+        continue;
+      }
+      elementTypes.push(elementType);
+    }
+
+    if (elementTypes.length !== expr.elements.length) return;
+    const firstType = elementTypes[0];
+    const mixedType = elementTypes.find((elementType) => elementType !== firstType);
+    if (firstType !== undefined && mixedType !== undefined) {
+      errors.push(
+        new MapleError(
+          `array literal has mixed element types: '${firstType}' and '${mixedType}'`,
+          expr.token.line,
+          expr.token.col,
+        ),
+      );
+      return;
+    }
+
+    if (firstType !== undefined) {
+      const integerAdoption = firstType === "i32" && integerRange(expr.memberType) !== null;
+      const floatAdoption =
+        firstType === "f32" && (expr.memberType === "f32" || expr.memberType === "f64");
+      if (
+        !integerAdoption &&
+        !floatAdoption &&
+        !typesCompatible(expr.memberType, firstType, meta)
+      ) {
+        errors.push(
+          new MapleError(
+            `array literal of '${firstType}' elements cannot initialize '${expr.memberType}[]'`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+        return;
+      }
+    }
+
+    for (const element of expr.elements) {
+      if (element instanceof FloatLiteralExpression && expr.memberType === "f64") {
+        element.numericType = "f64";
+      }
       walkExpression(element, scope, meta, errors, expr.memberType);
     }
     return;

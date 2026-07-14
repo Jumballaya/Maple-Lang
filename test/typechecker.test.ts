@@ -10,7 +10,7 @@ function check(src: string): MapleError[] {
   const p = new Parser(src);
   const ast = p.parse("test");
   assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
-  const meta = extractModuleMeta(ast);
+  const meta = extractModuleMeta(ast, true);
   collectFnReferences(ast, meta);
   linkStdlibImports(meta);
   return typeCheck(ast, meta);
@@ -165,6 +165,63 @@ describe("TypeChecker: integer literal ranges", () => {
 
   test("direct literal casts are exempt from range validation", () => {
     expectNoErrors("fn a(): u32 { return -1 as u32; } fn b(): i32 { return 99999999999 as i32; }");
+  });
+});
+
+describe("TypeChecker: array literal elements", () => {
+  const expressionsUnsupported =
+    "array literal elements must be literals (expressions are not supported yet)";
+
+  for (const [name, source] of [
+    ["identifier", "fn f(x: i32): void { let a: i32[] = [x, 2]; }"],
+    ["call", "fn value(x: i32): i32 { return x; } fn f(): void { let a: i32[] = [value(1)]; }"],
+    ["infix expression", "fn f(): void { let a: i32[] = [1 + 2]; }"],
+    ["postfix expression", "fn f(): void { let y: i32 = 1; let a: i32[] = [y++]; }"],
+  ] as const) {
+    test(`${name} elements are rejected until runtime initialization exists`, () => {
+      expectExactError(source, expressionsUnsupported);
+    });
+  }
+
+  test("mixed literal types are rejected", () => {
+    expectExactError(
+      "fn f(): void { let a = [1, 2.5]; }",
+      "array literal has mixed element types: 'i32' and 'f32'",
+    );
+  });
+
+  test("array member and literal types must agree", () => {
+    expectExactError(
+      "fn f(): void { let a: i32[] = [1.0, 2.0]; }",
+      "array literal of 'f32' elements cannot initialize 'i32[]'",
+    );
+  });
+
+  test("nested array literals are rejected temporarily", () => {
+    expectExactError(
+      "fn f(): void { let a: i32[][] = [[1], [2]]; }",
+      "nested array literals are not supported yet",
+    );
+  });
+
+  test("supported literal arrays type-check", () => {
+    expectNoErrors(`
+      fn f(): void {
+        let ints: i32[] = [1, 2, 3];
+        let strings: string[] = ["a", "b"];
+        let bools: bool[] = [true, false];
+        let empty: i32[] = [];
+      }
+    `);
+  });
+
+  test("integer and float literals adopt wider array member types", () => {
+    expectNoErrors(`
+      fn f(): void {
+        let ints: i64[] = [1, 2];
+        let floats: f64[] = [1.0, 2.0];
+      }
+    `);
   });
 });
 

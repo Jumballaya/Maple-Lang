@@ -86,7 +86,7 @@ export async function compiler(
   if (!entryAST) {
     return;
   }
-  const data = extractModuleMeta(entryAST);
+  const data = extractModuleMeta(entryAST, true);
 
   const stdLibList: Record<string, ModuleMeta> = {};
   const pass1: Record<string, { data: ModuleMeta; ast: ASTProgram }> = {
@@ -104,7 +104,7 @@ export async function compiler(
     if (!userMod) {
       throw new Error(`unable to find module: ${imp.module}`);
     }
-    pass1[imp.module] = { data: extractModuleMeta(userMod), ast: userMod };
+    pass1[imp.module] = { data: extractModuleMeta(userMod, true), ast: userMod };
   }
 
   // 1b. Collect function references for closure runtime
