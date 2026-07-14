@@ -1693,6 +1693,26 @@ describe("bitwise and shift", () => {
     assert.equal(runExport(wat, "shr", [16, 2]), 4);
   });
 
+  maybeTest("unsigned shift ignores a signed count and remains unsigned", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        return ((4294967295 as u32) >> 1) == 2147483647;
+      }
+      export fn adopted(x: u32, y: u32): i32 { return (1 + x) < y; }
+    `);
+    assert(wat.includes("i32.shr_u"), wat);
+    assert(wat.includes("i32.lt_u"), wat);
+    assert.equal(runExport(wat, "run"), 1);
+    assert.equal(runExport(wat, "adopted", [4294967294, 1]), 0);
+  });
+
+  maybeTest("unary minus on unsigned wraps modulo the lane width", () => {
+    const wat = compile(`
+      export fn run(): i32 { return -(1 as u32) == 4294967295; }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
   maybeTest("XOR with -1 flips all bits", () => {
     const wat = compile(`
       export fn run(a: i32): i32 { return a ^ (0 - 1); }

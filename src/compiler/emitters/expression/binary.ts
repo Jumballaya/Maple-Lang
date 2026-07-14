@@ -141,7 +141,7 @@ export function emitBinaryOp(expr: InfixExpression, emitter: ModuleEmitter): str
     if (aggregate) return aggregate;
   }
 
-  const [numType, , signedInt] = emitter.resolveBinaryOpTypes(expr.left, expr.right);
+  const [numType, , signedInt] = emitter.resolveBinaryOpTypes(expr.left, expr.right, expr.operator);
   const l = emitOperand(expr.left, numType, emitter);
   const r = emitOperand(expr.right, numType, emitter);
 

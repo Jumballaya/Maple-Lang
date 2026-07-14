@@ -188,6 +188,67 @@ describe("TypeChecker: Mixed arithmetic", () => {
   });
 });
 
+describe("TypeChecker: mixed integer signedness", () => {
+  const mixed = (left: string, right: string) =>
+    `mixed signedness: '${left}' and '${right}' - cast one operand explicitly`;
+
+  for (const [name, source, left, right] of [
+    ["i32 + u32", "fn f(a: i32, b: u32): i32 { return a + b; }", "i32", "u32"],
+    ["u32 - i32", "fn f(a: u32, b: i32): i32 { return a - b; }", "u32", "i32"],
+    ["i32 < u32", "fn f(a: i32, b: u32): i32 { return a < b; }", "i32", "u32"],
+    ["u32 >= i32", "fn f(a: u32, b: i32): i32 { return a >= b; }", "u32", "i32"],
+    ["u16 * i16", "fn f(a: u16, b: i16): i32 { return a * b; }", "u16", "i16"],
+    ["u8 | i8", "fn f(a: u8, b: i8): i32 { return a | b; }", "u8", "i8"],
+    ["u32 += i32", "fn f(): void { let a: u32 = 1; let b: i32 = 2; a += b; }", "u32", "i32"],
+  ] as const) {
+    test(`${name} requires an explicit cast`, () => {
+      expectExactError(source, mixed(left, right));
+    });
+  }
+
+  test("nested literal adoption still exposes a later signed operand", () => {
+    expectExactError("fn f(u: u32, s: i32): i32 { return (1 + u) < s; }", mixed("u32", "i32"));
+    expectExactError("fn f(u: u32, s: i32): i32 { return 1 + 2 + u < s; }", mixed("u32", "i32"));
+  });
+
+  test("comparisons reject mixed Wasm lanes", () => {
+    expectError("fn f(a: i32, b: f32): i32 { return a < b; }", "Mixed types");
+    expectError("fn f(a: f64, b: i64): i32 { return a == b; }", "Mixed types");
+  });
+
+  test("same-signedness operands and explicit casts are accepted", () => {
+    expectNoErrors(`
+      fn f(a: u32, b: u32, c: i32, d: i32, e: u8, g: u8): void {
+        a + b; c - d; e | g; (c as u32) + b;
+      }
+    `);
+  });
+
+  test("equality permits same-lane signed and unsigned operands", () => {
+    expectNoErrors("fn f(a: i32, b: u32): void { a == b; a != b; }");
+  });
+
+  test("unsigned operands adopt bare literals recursively", () => {
+    expectNoErrors(`
+      fn f(x: u32, y: u32): void {
+        x + 1; 1 + x; x < 10; 1 + 2 + x; (1 + x) < y;
+      }
+    `);
+  });
+
+  test("shift counts ignore signedness", () => {
+    expectNoErrors("fn f(x: u32, s: i32): void { x << s; x >> s; }");
+  });
+
+  test("unary minus on unsigned values is legal", () => {
+    expectNoErrors("fn f(u: u32): u32 { return -u; }");
+  });
+
+  test("existing cross-width arithmetic remains an error", () => {
+    expectError("fn f(): void { let a: i32 = 1; let b: i64 = 2 as i64; a + b; }", "Mixed types");
+  });
+});
+
 // ─── Check 4: Function call argument count and types ─────────────────────────
 
 describe("TypeChecker: Call arguments", () => {

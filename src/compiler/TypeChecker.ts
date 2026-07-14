@@ -43,6 +43,10 @@ import { MapleError } from "./errors";
 
 const ARITHMETIC_OPS = new Set(["+", "-", "*", "/", "%"]);
 const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);
+const ORDERING_OPS = new Set(["<", "<=", ">", ">="]);
+const SIGN_MIXING_OPS = new Set([...ARITHMETIC_OPS, "&", "|", "^", ...ORDERING_OPS]);
+const SAME_LANE_OPS = new Set([...ARITHMETIC_OPS, ...cmpOps]);
+const LITERAL_ADOPTION_OPS = new Set([...ARITHMETIC_OPS, ...BITWISE_OPS]);
 
 // ─── Scope ────────────────────────────────────────────────────────────────────
 
@@ -121,6 +125,7 @@ function resolveExprType(
     const lt = resolveExprType(expr.left, scope, meta, errors);
     const rt = resolveExprType(expr.right, scope, meta, errors);
     if (lt === null || rt === null) return null;
+    if (expr.operator === "<<" || expr.operator === ">>") return lt;
     const wl = valueTypeToWasm(lt);
     const wr = valueTypeToWasm(rt);
     if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
@@ -128,10 +133,13 @@ function resolveExprType(
       return "f32";
     }
     if (wl === "i64" || wr === "i64") {
-      if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u64";
+      if (wl !== wr) {
+        return isUnsignedMapleInteger(wl === "i64" ? lt : rt) ? "u64" : "i64";
+      }
+      if (isUnsignedMapleInteger(lt) || isUnsignedMapleInteger(rt)) return "u64";
       return "i64";
     }
-    if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u32";
+    if (isUnsignedMapleInteger(lt) || isUnsignedMapleInteger(rt)) return "u32";
     return "i32";
   }
 
@@ -248,6 +256,53 @@ function checkIntegerLiteralRange(
   }
 }
 
+function isLiteralIntegerTree(expr: ASTExpression): boolean {
+  if (expr instanceof IntegerLiteralExpression) return true;
+  return (
+    expr instanceof InfixExpression &&
+    LITERAL_ADOPTION_OPS.has(expr.operator) &&
+    isLiteralIntegerTree(expr.left) &&
+    isLiteralIntegerTree(expr.right)
+  );
+}
+
+function adoptedOperandTypes(
+  left: ASTExpression,
+  right: ASTExpression,
+  leftType: string,
+  rightType: string,
+): [string, string] {
+  if (isLiteralIntegerTree(left) && isUnsignedMapleInteger(rightType)) {
+    return [rightType, rightType];
+  }
+  if (isLiteralIntegerTree(right) && isUnsignedMapleInteger(leftType)) {
+    return [leftType, leftType];
+  }
+  return [leftType, rightType];
+}
+
+function mixedSignedness(leftType: string, rightType: string): boolean {
+  const left = leftType.match(/^([iu])(8|16|32|64)$/);
+  const right = rightType.match(/^([iu])(8|16|32|64)$/);
+  return left !== null && right !== null && left[2] === right[2] && left[1] !== right[1];
+}
+
+function checkMixedSignedness(
+  leftType: string,
+  rightType: string,
+  token: ASTExpression["token"],
+  errors: MapleError[],
+): void {
+  if (!mixedSignedness(leftType, rightType)) return;
+  errors.push(
+    new MapleError(
+      `mixed signedness: '${leftType}' and '${rightType}' - cast one operand explicitly`,
+      token.line,
+      token.col,
+    ),
+  );
+}
+
 // ─── AST walkers ──────────────────────────────────────────────────────────────
 
 function walkExpression(
@@ -307,28 +362,35 @@ function walkExpression(
     walkExpression(expr.left, scope, meta, errors, leftExpected);
     walkExpression(expr.right, scope, meta, errors, rightExpected);
 
-    if (ARITHMETIC_OPS.has(expr.operator)) {
-      const lt = resolveExprType(expr.left, scope, meta, errors);
-      const rt = resolveExprType(expr.right, scope, meta, errors);
-      if (lt !== null && rt !== null) {
-        if (valueTypeToWasm(lt) !== valueTypeToWasm(rt)) {
+    const resolvedLeftType = resolveExprType(expr.left, scope, meta, errors);
+    const resolvedRightType = resolveExprType(expr.right, scope, meta, errors);
+    if (resolvedLeftType !== null && resolvedRightType !== null) {
+      const [leftType, rightType] = adoptedOperandTypes(
+        expr.left,
+        expr.right,
+        resolvedLeftType,
+        resolvedRightType,
+      );
+      if (SAME_LANE_OPS.has(expr.operator)) {
+        if (valueTypeToWasm(leftType) !== valueTypeToWasm(rightType)) {
           const t = expr.token;
           errors.push(
             new MapleError(
-              `Mixed types in arithmetic: '${lt}' and '${rt}' — use explicit cast`,
+              `Mixed types in arithmetic: '${leftType}' and '${rightType}' — use explicit cast`,
               t.line,
               t.col,
             ),
           );
         }
       }
+      if (SIGN_MIXING_OPS.has(expr.operator)) {
+        checkMixedSignedness(leftType, rightType, expr.token, errors);
+      }
     }
     if (BITWISE_OPS.has(expr.operator)) {
-      const lt = resolveExprType(expr.left, scope, meta, errors);
-      const rt = resolveExprType(expr.right, scope, meta, errors);
       const bad = (x: string | null) =>
         x !== null && (valueTypeToWasm(x) === "f32" || valueTypeToWasm(x) === "f64");
-      if (bad(lt) || bad(rt)) {
+      if (bad(resolvedLeftType) || bad(resolvedRightType)) {
         const t = expr.token;
         errors.push(
           new MapleError(
@@ -472,8 +534,26 @@ function walkExpression(
       }
     }
     const targetType = resolveExprType(expr.left, scope, meta, errors);
+    const assignedValue = expr.value;
     walkExpression(expr.left, scope, meta, errors);
-    walkExpression(expr.value, scope, meta, errors, targetType ?? undefined);
+    walkExpression(assignedValue, scope, meta, errors, targetType ?? undefined);
+    const valueType = assignedValue ? resolveExprType(assignedValue, scope, meta, errors) : null;
+    const compoundOperator = expr.operator.endsWith("=") ? expr.operator.slice(0, -1) : null;
+    if (
+      targetType !== null &&
+      assignedValue !== null &&
+      valueType !== null &&
+      compoundOperator !== null &&
+      SIGN_MIXING_OPS.has(compoundOperator)
+    ) {
+      const [leftType, rightType] = adoptedOperandTypes(
+        expr.left,
+        assignedValue,
+        targetType,
+        valueType,
+      );
+      checkMixedSignedness(leftType, rightType, expr.token, errors);
+    }
     return;
   }
 

@@ -303,6 +303,7 @@ export class ModuleEmitter {
       if (cmpOps.has(expr.operator)) {
         return "bool";
       }
+      if (expr.operator === "<<" || expr.operator === ">>") return lt;
       const wl = valueTypeToWasm(lt);
       const wr = valueTypeToWasm(rt);
       if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
@@ -310,10 +311,13 @@ export class ModuleEmitter {
         return "f32";
       }
       if (wl === "i64" || wr === "i64") {
-        if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u64";
+        if (wl !== wr) {
+          return isUnsignedMapleInteger(wl === "i64" ? lt : rt) ? "u64" : "i64";
+        }
+        if (isUnsignedMapleInteger(lt) || isUnsignedMapleInteger(rt)) return "u64";
         return "i64";
       }
-      if (isUnsignedMapleInteger(lt) && isUnsignedMapleInteger(rt)) return "u32";
+      if (isUnsignedMapleInteger(lt) || isUnsignedMapleInteger(rt)) return "u32";
       return "i32";
     }
     if (expr instanceof PrefixExpression) {
@@ -405,6 +409,7 @@ export class ModuleEmitter {
   public resolveBinaryOpTypes(
     left: ASTExpression,
     right: ASTExpression,
+    operator?: string,
   ): [WasmValueType, WasmValueType, boolean] {
     const lt = this.getExprType(left);
     const rt = this.getExprType(right);
@@ -413,6 +418,9 @@ export class ModuleEmitter {
     }
     const wl = valueTypeToWasm(lt);
     const wr = valueTypeToWasm(rt);
+    if (operator === "<<" || operator === ">>") {
+      return [wl, wl, !isUnsignedMapleInteger(lt)];
+    }
     if (wl === "f32" || wl === "f64" || wr === "f32" || wr === "f64") {
       const w: WasmValueType = wl === "f64" || wr === "f64" ? "f64" : "f32";
       return [w, w, true];
