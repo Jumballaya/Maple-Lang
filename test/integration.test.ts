@@ -2949,3 +2949,205 @@ describe("trap semantics", () => {
     assert.equal(runExport(wat, "fromF64"), -3);
   });
 });
+
+describe("float semantics", () => {
+  maybeTest("f32 NaN is unequal to itself", () => {
+    const wat = compile(`
+      export fn equal(): i32 {
+        let zero: f32 = 0.0;
+        let value: f32 = zero / zero;
+        return value == value;
+      }
+      export fn unequal(): i32 {
+        let zero: f32 = 0.0;
+        let value: f32 = zero / zero;
+        return value != value;
+      }
+    `);
+    assert.equal(runExport(wat, "equal"), 0);
+    assert.equal(runExport(wat, "unequal"), 1);
+  });
+
+  maybeTest("f64 NaN is unequal to itself", () => {
+    const wat = compile(`
+      export fn equal(): i32 {
+        let zero: f64 = 0.0;
+        let value: f64 = zero / zero;
+        return value == value;
+      }
+      export fn unequal(): i32 {
+        let zero: f64 = 0.0;
+        let value: f64 = zero / zero;
+        return value != value;
+      }
+    `);
+    assert.equal(runExport(wat, "equal"), 0);
+    assert.equal(runExport(wat, "unequal"), 1);
+  });
+
+  maybeTest("f32 and f64 infinities order beyond finite values", () => {
+    const wat = compile(`
+      export fn f32Positive(): i32 {
+        let zero: f32 = 0.0;
+        let one: f32 = 1.0;
+        let finite: f32 = 1000000.0;
+        return (one / zero) > finite;
+      }
+      export fn f32Negative(): i32 {
+        let zero: f32 = 0.0;
+        let one: f32 = 1.0;
+        let finite: f32 = 0.0 - 1000000.0;
+        let negativeOne: f32 = zero - one;
+        return (negativeOne / zero) < finite;
+      }
+      export fn f64Positive(): i32 {
+        let zero: f64 = 0.0;
+        let one: f64 = 1.0;
+        let finite: f64 = 1000000.0;
+        return (one / zero) > finite;
+      }
+      export fn f64Negative(): i32 {
+        let zero: f64 = 0.0;
+        let one: f64 = 1.0;
+        let magnitude: f64 = 1000000.0;
+        let finite: f64 = zero - magnitude;
+        let negativeOne: f64 = zero - one;
+        return (negativeOne / zero) < finite;
+      }
+    `);
+    assert.equal(runExport(wat, "f32Positive"), 1);
+    assert.equal(runExport(wat, "f32Negative"), 1);
+    assert.equal(runExport(wat, "f64Positive"), 1);
+    assert.equal(runExport(wat, "f64Negative"), 1);
+  });
+
+  maybeTest("ordered comparisons with NaN are all false", () => {
+    const wat = compile(`
+      export fn f32Comparisons(): i32 {
+        let zero: f32 = 0.0;
+        let one: f32 = 1.0;
+        let value: f32 = zero / zero;
+        if (value < one) { return 1; }
+        if (value <= one) { return 2; }
+        if (value > one) { return 3; }
+        if (value >= one) { return 4; }
+        return 0;
+      }
+      export fn f64Comparisons(): i32 {
+        let zero: f64 = 0.0;
+        let one: f64 = 1.0;
+        let value: f64 = zero / zero;
+        if (value < one) { return 1; }
+        if (value <= one) { return 2; }
+        if (value > one) { return 3; }
+        if (value >= one) { return 4; }
+        return 0;
+      }
+    `);
+    assert.equal(runExport(wat, "f32Comparisons"), 0);
+    assert.equal(runExport(wat, "f64Comparisons"), 0);
+  });
+
+  maybeTest("f32 negative remainder matches truncated JS remainder", () => {
+    const wat = compile(`
+      export fn negativeDividend(): f32 {
+        let magnitude: f32 = 7.5;
+        let zero: f32 = 0.0;
+        let divisor: f32 = 2.0;
+        let negative: f32 = zero - magnitude;
+        return negative % divisor;
+      }
+      export fn negativeDivisor(): f32 {
+        let dividend: f32 = 7.5;
+        let magnitude: f32 = 2.0;
+        let zero: f32 = 0.0;
+        let negative: f32 = zero - magnitude;
+        return dividend % negative;
+      }
+    `);
+    const negativeDividend = Math.fround(Math.fround(-7.5) % Math.fround(2.0));
+    const negativeDivisor = Math.fround(Math.fround(7.5) % Math.fround(-2.0));
+    assert.equal(runExport(wat, "negativeDividend"), negativeDividend);
+    assert.equal(runExport(wat, "negativeDivisor"), negativeDivisor);
+  });
+
+  maybeTest("f64 negative remainder matches truncated JS remainder", () => {
+    const wat = compile(`
+      export fn negativeDividend(): f64 {
+        let magnitude: f64 = 7.5;
+        let zero: f64 = 0.0;
+        let divisor: f64 = 2.0;
+        let negative: f64 = zero - magnitude;
+        return negative % divisor;
+      }
+      export fn negativeDivisor(): f64 {
+        let dividend: f64 = 7.5;
+        let magnitude: f64 = 2.0;
+        let zero: f64 = 0.0;
+        let negative: f64 = zero - magnitude;
+        return dividend % negative;
+      }
+    `);
+    assert.equal(runExport(wat, "negativeDividend"), -7.5 % 2.0);
+    assert.equal(runExport(wat, "negativeDivisor"), 7.5 % -2.0);
+  });
+
+  maybeTest("f32 and f64 preserve their distinct addition precision", () => {
+    const wat = compile(`
+      export fn f32Sum(): f32 {
+        let a: f32 = 0.1;
+        let b: f32 = 0.2;
+        return a + b;
+      }
+      export fn f64Sum(): f64 {
+        let a: f64 = 0.1;
+        let b: f64 = 0.2;
+        return a + b;
+      }
+    `);
+    const f32Sum = runExport(wat, "f32Sum");
+    const f64Sum = runExport(wat, "f64Sum");
+    assert.equal(f32Sum, Math.fround(Math.fround(0.1) + Math.fround(0.2)));
+    assert.equal(f64Sum, 0.1 + 0.2);
+    assert.notEqual(f32Sum, f64Sum);
+  });
+
+  maybeTest("negative-zero literal compares equal but has a negative reciprocal", () => {
+    const wat = compile(`
+      export fn equal(): i32 { return 0.0 == -0.0; }
+      export fn inverse(): f32 { return 1.0 / -0.0; }
+    `);
+    assert.equal(runExport(wat, "equal"), 1);
+    assert.equal(runExport(wat, "inverse"), Number.NEGATIVE_INFINITY);
+  });
+
+  maybeTest("multiplying a negative by zero constructs negative zero", () => {
+    const wat = compile(`
+      export fn value(): f32 {
+        let negative: f32 = -1.0;
+        let zero: f32 = 0.0;
+        return negative * zero;
+      }
+      export fn inverse(): f32 {
+        let negative: f32 = -1.0;
+        let zero: f32 = 0.0;
+        let value: f32 = negative * zero;
+        return 1.0 / value;
+      }
+    `);
+    assert(Object.is(runExport(wat, "value"), -0));
+    assert.equal(runExport(wat, "inverse"), Number.NEGATIVE_INFINITY);
+  });
+
+  maybeTest("f64 to f32 demotion loses precision", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let a: f64 = 0.1;
+        let b: f32 = a as f32;
+        let c: f64 = b as f64;
+        return c != a;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
+  });
+});
