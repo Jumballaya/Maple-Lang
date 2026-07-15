@@ -1,11 +1,12 @@
-import { exec } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
 import type { ModuleMeta } from "./emitters/emitter.types";
-import { emitModule, extractModuleMeta } from "./emitters/module";
-import type { MapleModule } from "./MapleModule";
+import { emitMergedProgram } from "./emitters/merge";
+import { buildMergedProgram } from "./emitters/merge-model";
+import { extractModuleMeta } from "./emitters/module";
 import {
   buildModuleGraph,
   type ResolvedImportModule,
@@ -50,13 +51,9 @@ export function linkStdlibImports(meta: ModuleMeta): void {
 //  3) Validation pass
 //     - run typeCheck() over each module before emission
 //
-//  4) Emit WAT
-//     - emitModule() -> MapleModule
-//     - MapleModule.buildWat() -> build/*.wat
+//  4) Build the whole-program model and emit one WAT module
 //
-//  5) Assemble + link
-//     - wat2wasm build/*.wat -> build/*.o
-//     - wasm-ld build/*.o -> final .wasm
+//  5) Assemble the final WebAssembly module with wat2wasm
 //
 // Next idea status:
 //   1) Optimization pass (constant folding/static simplification): pending.
@@ -95,7 +92,7 @@ export async function compiler(
     return;
   }
   const data = extractModuleMeta(entryAST, true);
-  const absoluteEntryPath = path.resolve(cwd, path.basename(entryPoint));
+  const absoluteEntryPath = path.resolve(cwd, entryPoint);
   const graph = buildModuleGraph(absoluteEntryPath, {
     entryModule: {
       kind: "maple",
@@ -127,6 +124,7 @@ export async function compiler(
       // hook up the export -> import
       imp.info = entry;
       imp.resolved = true;
+      imp.mergeable = true;
     }
   }
 
@@ -142,51 +140,28 @@ export async function compiler(
   }
   // @TODO: Optimization pass
 
-  // step 3. compile
-  // Emit code
-  const toWrite: MapleModule[] = [];
-  for (const mod of graph.modules.values()) {
-    toWrite.push(emitModule(mod.ast, mod.data));
-  }
-
-  // create build folder + output destination
-  await run("mkdir -p build");
+  const model = buildMergedProgram(graph);
+  const wat = emitMergedProgram(model);
   const outputDir = path.dirname(outputPath);
-  if (outputDir && outputDir !== "." && outputDir !== "build") {
-    await run(`mkdir -p ${outputDir}`);
-  }
-  // build .wat files
-  const toCompile: string[] = [];
-  for (const mod of toWrite) {
-    console.log(`Assembling module: ${mod.name}`);
-    await writeFile(`build/${mod.name}.wat`, mod.buildWat());
-    toCompile.push(mod.name);
-  }
-  // remove any stale objects from previous builds before assembling
-  await run("rm -f build/*.o");
-  // compile to wasm
-  for (const path of toCompile) {
-    await run(`wat2wasm -r build/${path}.wat -o build/${path}.o`);
-  }
-  // step 4. Linking
-  await run(`wasm-ld --no-gc-sections --no-check-features build/*.o -o ${outputPath}`);
+  await mkdir(outputDir, { recursive: true });
+  const watPath = outputPath.endsWith(".wasm")
+    ? `${outputPath.slice(0, -".wasm".length)}.wat`
+    : `${outputPath}.wat`;
+  await writeFile(watPath, wat);
+  await run("wat2wasm", [watPath, "-o", outputPath]);
   console.log(`Compiled: ${outputPath}`);
 }
 
-function run(cmd: string): Promise<void> {
-  return new Promise((res) => {
-    exec(cmd, (exception, out, err) => {
-      if (exception) {
-        throw exception;
-      }
-      if (err) {
-        console.error(err);
+function run(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
         return;
       }
-      if (out) {
-        console.log(out);
-      }
-      res();
+      if (stderr) console.error(stderr);
+      if (stdout) console.log(stdout);
+      resolve();
     });
   });
 }

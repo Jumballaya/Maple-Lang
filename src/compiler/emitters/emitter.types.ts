@@ -71,6 +71,7 @@ export type ImportMeta = {
   info?: ExportMeta | undefined;
   resolved: boolean;
   synthesized?: boolean;
+  mergeable?: boolean;
 };
 export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
 

@@ -344,9 +344,11 @@ function walkExpression(
     }
     const imp = meta.imports[id];
     if (imp?.info?.kind === "func") {
-      errors.push(
-        new MapleError(`cannot take a reference to imported function '${id}'`, t.line, t.col),
-      );
+      if (!imp.mergeable) {
+        errors.push(
+          new MapleError(`cannot take a reference to imported function '${id}'`, t.line, t.col),
+        );
+      }
       return;
     }
     if (!scope.has(id)) {

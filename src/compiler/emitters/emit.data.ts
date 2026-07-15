@@ -217,9 +217,7 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuil
   //    }
   //
   // Pad raw bytes to a 4-byte boundary with explicit \00 bytes so the emitted
-  // data segment covers the full allocation stride. Without this, wasm-ld packs
-  // data segments contiguously and eliminates the implicit gap, misaligning the
-  // header address that the code has already hard-coded.
+  // data segment covers the full allocation stride and keeps headers aligned.
   const paddedLen = alignup(len, 4);
   let rawBytes = Array.from(utf8).reduce((acc, b) => {
     return `${acc}\\${b.toString(16).padStart(2, "0")}`;

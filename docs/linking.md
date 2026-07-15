@@ -1,5 +1,9 @@
 # Linking modules
 
+> **Superseded by whole-program merge.** The compiler now emits one WAT module
+> and assembles it directly. The legacy object-linking design below is retained
+> only as historical context until its scheduled documentation cleanup.
+
 ## Toolchain:
 
 - wat2wasm

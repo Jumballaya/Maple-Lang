@@ -440,8 +440,7 @@ function emitFnTable(mod: ModuleMeta, emitter: ModuleEmitter): void {
   if (n === 0) return;
   // Declarative elem marks the trampolines as address-takable so `ref.func`
   // can reference them. Actual population happens at runtime inside
-  // __make_fnref (see emitMakeFnRefHelper) — wasm-ld silently drops active
-  // elem segments from object files, so we can't rely on a link-time init.
+  // __make_fnref (see emitMakeFnRefHelper) performs table initialization.
   const trampolines = entries.map((e) => `$${e.trampolineName}`).join(" ");
   emitter.addElemWat(`(elem declare func ${trampolines})`);
 }
@@ -454,8 +453,7 @@ function emitTrampolines(mod: ModuleMeta, emitter: ModuleEmitter): void {
     // Exporting the trampoline serves two purposes:
     //   1. It marks the function as address-takable (reference-types spec),
     //      which is required for `ref.func $__indirect_*` inside __make_fnref.
-    //   2. It survives `wasm-ld`, which strips declarative elem segments and
-    //      any non-exported address-take hints from relocatable objects.
+    //   2. It preserves the existing address-take hint for compatibility.
     // The export name is internal (`__indirect_*`) and not part of the user
     // API surface.
     let wat = `(func $${entry.trampolineName} (export "${entry.trampolineName}") (param $__env i32)`;
@@ -479,8 +477,7 @@ function emitMakeFnRefHelper(mod: ModuleMeta, emitter: ModuleEmitter): void {
   const entries = [...mod.fnTable.values()].sort((a, b) => a.slot - b.slot);
 
   // Guard global: table population runs exactly once, on the first
-  // __make_fnref call. We can't use an active `(elem (offset ...) ...)`
-  // segment because wasm-ld strips them from relocatable objects.
+  // __make_fnref call.
   emitter.addGlobalWat("(global $__fn_table_inited (mut i32) (i32.const 0))");
 
   const lines: string[] = [];
