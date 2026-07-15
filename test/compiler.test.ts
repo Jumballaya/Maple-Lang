@@ -1054,11 +1054,50 @@ describe("Compiler: stdlib source resolution", () => {
     }
   });
 
-  test("math still resolves through legacy metadata", () => {
+  test("bare math resolves through bundled Maple source", () => {
     const resolved = resolveImportModule("math", "/unused");
-    assert.equal(resolved.kind, "legacy");
+    assert.equal(resolved.kind, "maple");
+    assert.equal(path.basename(resolved.path), "math.maple");
+    assert.deepEqual(Object.keys(resolved.data.exports).sort(), [
+      "E",
+      "HALF_PI",
+      "PI",
+      "TWO_PI",
+      "abs_f32",
+      "abs_f64",
+      "abs_i32",
+      "atan2",
+      "ceil",
+      "ceil_f64",
+      "copysign",
+      "copysign_f64",
+      "cos",
+      "floor",
+      "floor_f64",
+      "fmod",
+      "fraction",
+      "i_to_f",
+      "max_f32",
+      "max_i32",
+      "min_f32",
+      "min_i32",
+      "pow",
+      "round",
+      "round_f64",
+      "sin",
+      "sqrt",
+      "sqrt_f64",
+      "tan",
+      "trunc",
+      "trunc_f64",
+    ]);
     assert.equal(resolved.data.exports.sqrt?.kind, "func");
     assert.equal(resolved.data.exports.sqrt?.signature, "f_f");
+    assert.equal(resolved.data.exports.pow?.kind, "func");
+    assert.equal(resolved.data.exports.pow?.signature, "fi_f");
+    assert.equal(resolved.data.exports.PI?.kind, "global");
+    assert.equal(resolved.data.exports.PI?.type, "f32");
+    assert.equal(resolved.data.exports.fraction?.kind, "struct");
   });
 
   test("unknown bare imports keep the existing file error", () => {

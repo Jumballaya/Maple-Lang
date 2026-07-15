@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe } from "node:test";
 import { fileURLToPath } from "node:url";
-import { maybeTest } from "./helpers";
+import { compile, maybeTest } from "./helpers";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const MATH_WAT = join(__dirname, "../src/compiler/stdlib/math.wat");
+const MATH_MAPLE = join(__dirname, "../src/compiler/stdlib/math.maple");
 
 const EPS_F = 5e-4;
 const EPS_ATAN2 = 5e-3;
@@ -20,18 +20,22 @@ function assertNearF(a: number, b: number, eps: number, msg?: string): void {
 
 async function loadMathWasm(): Promise<WebAssembly.Instance> {
   const dir = mkdtempSync(join(tmpdir(), "maple-math-"));
+  const watPath = join(dir, "m.wat");
   const wasmPath = join(dir, "m.wasm");
   try {
-    execFileSync("wat2wasm", [MATH_WAT, "-o", wasmPath], { stdio: "pipe" });
+    const wat = compile(readFileSync(MATH_MAPLE, "utf8"));
+    writeFileSync(watPath, wat);
+    execFileSync("wat2wasm", [watPath, "-o", wasmPath], { stdio: "pipe" });
     const buf = readFileSync(wasmPath);
-    const { instance } = await WebAssembly.instantiate(buf);
+    const memory = new WebAssembly.Memory({ initial: 2 });
+    const { instance } = await WebAssembly.instantiate(buf, { runtime: { memory } });
     return instance;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-describe("stdlib math.wat (Tier 1)", () => {
+describe("stdlib math.maple (Tier 1)", () => {
   maybeTest("opcode-backed f32 helpers are exact at spot values", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
@@ -62,7 +66,7 @@ describe("stdlib math.wat (Tier 1)", () => {
   });
 });
 
-describe("stdlib math.wat (Tier 2 accuracy)", () => {
+describe("stdlib math.maple (Tier 2 accuracy)", () => {
   maybeTest("sin / cos / tan spot checks", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
@@ -100,6 +104,19 @@ describe("stdlib math.wat (Tier 2 accuracy)", () => {
     assertNearF(atan2(0, -1), PI, EPS_ATAN2);
   });
 
+  maybeTest("atan2 covers all four quadrants within 1e-3", async () => {
+    const i = await loadMathWasm();
+    const atan2 = i.exports.atan2 as (y: number, x: number) => number;
+    for (const [y, x] of [
+      [0.1, 1],
+      [0.1, -1],
+      [-0.1, -1],
+      [-0.1, 1],
+    ]) {
+      assertNearF(atan2(y, x), Math.atan2(y, x), 1e-3);
+    }
+  });
+
   maybeTest("pow and fmod", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
@@ -112,6 +129,7 @@ describe("stdlib math.wat (Tier 2 accuracy)", () => {
 
     assertNearF(fmod(5.5, 2.0), 1.5, EPS_F);
     assertNearF(fmod(-5.5, 2.0), -1.5, EPS_F);
+    assert.equal(fmod(-7.5, 2.0), -1.5);
   });
 
   maybeTest("constants are plausible f32 values", async () => {

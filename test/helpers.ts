@@ -157,7 +157,7 @@ function getStdlibModules(): StdlibModules {
       "string",
       compile(readFileSync(join(stdlibDir, "string.maple"), "utf8")),
     ),
-    math: assembleModule("math", join(stdlibDir, "math.wat")),
+    math: assembleSource("math", compile(readFileSync(join(stdlibDir, "math.maple"), "utf8"))),
   };
   return stdlibModules;
 }
@@ -188,7 +188,7 @@ export function runStdlibExport(
   const stringInstance = instantiateModule("string", modules.string, {
     runtime: { memory },
   });
-  const mathInstance = instantiateModule("math", modules.math, {});
+  const mathInstance = instantiateModule("math", modules.math, { runtime: { memory } });
   const userModule = assembleSource("user", wat);
   const userInstance = instantiateModule("user", userModule, {
     runtime: { memory },

@@ -3376,6 +3376,29 @@ describe("stdlib execution", () => {
     assert(Math.abs(result - Math.PI) < 1e-6);
   });
 
+  maybeTest("one program imports sin, sqrt, and PI from Maple math", () => {
+    const wat = compile(`
+      import sin, sqrt, PI from "math"
+      export fn run(): f32 {
+        return sin(PI / 2.0) + sqrt(16.0);
+      }
+    `);
+    const result = runStdlibExport(wat, "run") as number;
+    assert(Math.abs(result - 5) < 1e-3);
+  });
+
+  maybeTest("math sqrt matches the intrinsic across representative f32 values", () => {
+    const wat = compile(`
+      import sqrt from "math"
+      export fn run(value: f32): f32 {
+        return sqrt(value) - __sqrt_f32(value);
+      }
+    `);
+    for (const value of [0, 2, 16, 1e30]) {
+      assert.equal(runStdlibExport(wat, "run", [value]), 0);
+    }
+  });
+
   maybeTest("string_copy keeps the longer destination length and tail", () => {
     const wat = compile(`
       import string_copy from "string"

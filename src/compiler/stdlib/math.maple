@@ -1,0 +1,155 @@
+export const PI: f32 = 3.14159265;
+export const TWO_PI: f32 = 6.28318530;
+export const HALF_PI: f32 = 1.57079632;
+export const E: f32 = 2.71828182;
+
+export struct fraction {
+  numerator: i32,
+  denominator: i32,
+}
+
+export fn sqrt(x: f32): f32 { return __sqrt_f32(x); }
+export fn abs_f32(x: f32): f32 { return __abs_f32(x); }
+
+export fn abs_i32(x: i32): i32 {
+  let t: i32 = x >> 31;
+  return (x ^ t) - t;
+}
+
+export fn floor(x: f32): f32 { return __floor_f32(x); }
+export fn ceil(x: f32): f32 { return __ceil_f32(x); }
+export fn round(x: f32): f32 { return __nearest_f32(x); }
+export fn trunc(x: f32): f32 { return __trunc_f32(x); }
+export fn copysign(x: f32, y: f32): f32 { return __copysign_f32(x, y); }
+export fn sqrt_f64(x: f64): f64 { return __sqrt_f64(x); }
+export fn abs_f64(x: f64): f64 { return __abs_f64(x); }
+export fn floor_f64(x: f64): f64 { return __floor_f64(x); }
+export fn ceil_f64(x: f64): f64 { return __ceil_f64(x); }
+export fn round_f64(x: f64): f64 { return __nearest_f64(x); }
+export fn trunc_f64(x: f64): f64 { return __trunc_f64(x); }
+export fn copysign_f64(x: f64, y: f64): f64 { return __copysign_f64(x, y); }
+
+fn sin_reduced(x: f32): f32 {
+  let x2: f32 = x * x;
+  let a: f32 = 0.008333333 + (-0.0001984127 * x2);
+  let b: f32 = (a * x2) - 0.16666667;
+  let s: f32 = 1.0 + (b * x2);
+  return x * s;
+}
+
+fn atan_small(u: f32): f32 {
+  return u / (1.0 + (0.28 * (u * u)));
+}
+
+fn atan_full(t: f32): f32 {
+  let one: f32 = 1.0;
+  let sgn: f32 = __copysign_f32(one, t);
+  let u: f32 = __abs_f32(t);
+  if (u <= 1.0) {
+    return sgn * atan_small(u);
+  }
+  return (sgn * HALF_PI) - atan_small(1.0 / u);
+}
+
+export fn sin(x: f32): f32 {
+  let t: f32 = x + PI;
+  t = t / TWO_PI;
+  t = __floor_f32(t);
+  t = t * TWO_PI;
+  let xr: f32 = x - t;
+  if (xr > HALF_PI) {
+    xr = PI - xr;
+  }
+  if (xr < -HALF_PI) {
+    xr = -PI - xr;
+  }
+  return sin_reduced(xr);
+}
+
+export fn cos(x: f32): f32 {
+  return sin(x + HALF_PI);
+}
+
+export fn tan(x: f32): f32 {
+  let s: f32 = sin(x);
+  let c: f32 = cos(x);
+  return s / c;
+}
+
+export fn atan2(y: f32, x: f32): f32 {
+  if (x == 0.0 && y == 0.0) {
+    return 0.0;
+  }
+  if (x == 0.0) {
+    return __copysign_f32(HALF_PI, y);
+  }
+  let t: f32 = y / x;
+  let a: f32 = atan_full(t);
+  if (x < 0.0) {
+    if (y >= 0.0) {
+      a = a + PI;
+    } else {
+      a = a - PI;
+    }
+  }
+  return a;
+}
+
+export fn pow(base: f32, exp: i32): f32 {
+  let neg: i32 = 0;
+  let e: i32 = exp;
+  if (exp < 0) {
+    neg = 1;
+    e = 0 - exp;
+  }
+  let r: f32 = 1.0;
+  let b: f32 = base;
+  while (e != 0) {
+    if ((e & 1) != 0) {
+      r = r * b;
+    }
+    b = b * b;
+    e = ((e as u32) >> 1) as i32;
+  }
+  if (neg == 0) {
+    return r;
+  }
+  return 1.0 / r;
+}
+
+export fn fmod(x: f32, y: f32): f32 {
+  let q: f32 = __trunc_f32(x / y);
+  return x - (q * y);
+}
+
+export fn i_to_f(i: i32): f32 {
+  return i as f32;
+}
+
+export fn min_i32(a: i32, b: i32): i32 {
+  if (a < b) {
+    return a;
+  }
+  return b;
+}
+
+export fn min_f32(a: f32, b: f32): f32 {
+  if (a < b) {
+    return a;
+  }
+  return b;
+}
+
+export fn max_i32(a: i32, b: i32): i32 {
+  if (a < b) {
+    return b;
+  }
+  return a;
+}
+
+export fn max_f32(a: f32, b: f32): f32 {
+  if (a < b) {
+    return b;
+  }
+  return a;
+}
