@@ -587,7 +587,7 @@ describe("Compiler: merged-program acceptance", () => {
         .join(path.delimiter);
       const result = spawnSync(
         npm,
-        ["start", "--", path.join(repoRoot, "demo/01_functions_imports/main.maple"), "-o", output],
+        ["start", "--", "demo/01_functions_imports/main.maple", "-o", output],
         {
           cwd: repoRoot,
           encoding: "utf8",

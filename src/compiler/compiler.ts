@@ -106,10 +106,11 @@ function parseFile(name: string, text: string): ASTProgram | null {
 export async function compiler(
   entryPoint: string,
   entryMod: string,
-  cwd: string,
+  _cwd: string,
   outputPath = "build/app.wasm",
 ) {
-  const entrySrc = await openFile(entryPoint);
+  const absoluteEntryPath = path.resolve(entryPoint);
+  const entrySrc = await openFile(absoluteEntryPath);
   if (!entrySrc) {
     return;
   }
@@ -119,7 +120,6 @@ export async function compiler(
     return;
   }
   const data = extractModuleMeta(entryAST, true);
-  const absoluteEntryPath = path.resolve(cwd, entryPoint);
   const graph = buildModuleGraph(absoluteEntryPath, {
     entryModule: {
       kind: "maple",
