@@ -6,6 +6,7 @@ import {
   valueTypeToWasm,
 } from "../compiler/emitters/emit.types";
 import { MapleError } from "../compiler/errors";
+import { getIntrinsic } from "../compiler/intrinsics";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
 import { alignofType, alignTo, type StructMember } from "../shared/types";
@@ -148,14 +149,16 @@ export class Parser {
     return this.identifierTypes.get(name);
   }
 
-  private isReservedPrefix(name: string): boolean {
-    return Parser.RESERVED_PREFIXES.some((p) => name.startsWith(p));
+  private isReservedName(name: string): boolean {
+    return (
+      Parser.RESERVED_PREFIXES.some((p) => name.startsWith(p)) || getIntrinsic(name) !== undefined
+    );
   }
 
   private rejectIfReserved(name: string, kind: string, token: Token): void {
-    if (this.isReservedPrefix(name)) {
+    if (this.isReservedName(name)) {
       this.pushError(
-        `identifier '${name}' uses a reserved prefix; ${kind} names cannot start with __lambda_, __indirect_, __env, __make_fnref, or __fn_table`,
+        `identifier '${name}' uses a reserved prefix or intrinsic name; ${kind} names cannot use compiler-reserved identifiers`,
         token,
       );
     }
@@ -417,6 +420,7 @@ export class Parser {
     const imported: string[] = [];
     const identToken = this.tokenizer.curToken();
     const ident = identToken.literal.toString();
+    this.rejectIfReserved(ident, "import", identToken);
     imported.push(ident);
 
     while (this.tokenizer.peekTokenIs("Comma")) {
@@ -424,6 +428,7 @@ export class Parser {
       this.tokenizer.nextToken(); // consume the comma
       const identToken = this.tokenizer.curToken();
       const ident = identToken.literal.toString();
+      this.rejectIfReserved(ident, "import", identToken);
       imported.push(ident);
     }
 
@@ -773,6 +778,10 @@ export class Parser {
     if (expr instanceof CastExpression) return expr.targetType;
     if (expr instanceof Identifier) {
       const name = expr.tokenLiteral();
+      const intrinsic = getIntrinsic(name);
+      if (intrinsic) {
+        return canonicalFnType([...intrinsic.params], [intrinsic.result]);
+      }
       const fnReturns = this.functionReturnTypes.get(name);
       if (fnReturns !== undefined) {
         const paramTypes = this.functionParamTypes.get(name) ?? [];
@@ -823,6 +832,8 @@ export class Parser {
       return this.inferTypeFromExpr(expr.left ?? null);
     }
     if (expr instanceof CallExpression) {
+      const intrinsic = getIntrinsic(expr.func);
+      if (intrinsic) return intrinsic.result === "void" ? "" : intrinsic.result;
       const rt = this.functionReturnTypes.get(expr.func) ?? [];
       if (rt.length === 1) return rt[0] ?? "";
       return "";

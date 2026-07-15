@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
 import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
 import type { MapleError } from "../src/compiler/errors";
+import { INTRINSICS } from "../src/compiler/intrinsics";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
 
@@ -44,6 +45,43 @@ function expectExactError(src: string, message: string) {
     `Expected exact error "${message}", got: ${errors.map((error) => error.message).join("; ")}`,
   );
 }
+
+const intrinsicCases = [
+  { name: "__load_i32", params: ["i32"], result: "i32", args: ["65536"] },
+  { name: "__store_i32", params: ["i32", "i32"], result: "void", args: ["65536", "42"] },
+  { name: "__memory_size", params: [], result: "i32", args: [] },
+  { name: "__memory_grow", params: ["i32"], result: "i32", args: ["1"] },
+  {
+    name: "__memory_copy",
+    params: ["i32", "i32", "i32"],
+    result: "void",
+    args: ["65544", "65536", "8"],
+  },
+  { name: "__sqrt_f32", params: ["f32"], result: "f32", args: ["16.0"] },
+  { name: "__abs_f32", params: ["f32"], result: "f32", args: ["-3.0"] },
+  { name: "__floor_f32", params: ["f32"], result: "f32", args: ["1.9"] },
+  { name: "__ceil_f32", params: ["f32"], result: "f32", args: ["1.1"] },
+  { name: "__nearest_f32", params: ["f32"], result: "f32", args: ["2.5"] },
+  { name: "__trunc_f32", params: ["f32"], result: "f32", args: ["-1.9"] },
+  {
+    name: "__copysign_f32",
+    params: ["f32", "f32"],
+    result: "f32",
+    args: ["3.0", "-1.0"],
+  },
+  { name: "__sqrt_f64", params: ["f64"], result: "f64", args: ["16.0 as f64"] },
+  { name: "__abs_f64", params: ["f64"], result: "f64", args: ["-3.0 as f64"] },
+  { name: "__floor_f64", params: ["f64"], result: "f64", args: ["1.9 as f64"] },
+  { name: "__ceil_f64", params: ["f64"], result: "f64", args: ["1.1 as f64"] },
+  { name: "__nearest_f64", params: ["f64"], result: "f64", args: ["2.5 as f64"] },
+  { name: "__trunc_f64", params: ["f64"], result: "f64", args: ["-1.9 as f64"] },
+  {
+    name: "__copysign_f64",
+    params: ["f64", "f64"],
+    result: "f64",
+    args: ["3.0 as f64", "-1.0 as f64"],
+  },
+] as const;
 
 // ─── Check 1: Assignment type compatibility ──────────────────────────────────
 
@@ -1238,4 +1276,61 @@ describe("TypeChecker: imported stdlib globals", () => {
       "Return type mismatch",
     );
   });
+});
+
+describe("TypeChecker: compiler intrinsics", () => {
+  test("the intrinsic table contains exactly the specified signatures", () => {
+    assert.deepEqual(
+      Object.entries(INTRINSICS).map(([name, definition]) => ({
+        name,
+        params: definition.params,
+        result: definition.result,
+      })),
+      intrinsicCases.map(({ name, params, result }) => ({ name, params, result })),
+    );
+  });
+
+  for (const intrinsic of intrinsicCases) {
+    test(`${intrinsic.name} accepts its declared signature`, () => {
+      const call = `${intrinsic.name}(${intrinsic.args.join(", ")})`;
+      const statement =
+        intrinsic.result === "void" ? `${call};` : `let value: ${intrinsic.result} = ${call};`;
+      expectNoErrors(`fn run(): void { ${statement} }`);
+    });
+  }
+
+  for (const [name, wrongArity, wrongType] of [
+    ["__load_i32", "__load_i32()", "__load_i32(1.0)"],
+    ["__store_i32", "__store_i32(1)", "__store_i32(1, 2.0)"],
+    ["__sqrt_f32", "__sqrt_f32()", "__sqrt_f32(1)"],
+  ] as const) {
+    test(`${name} rejects wrong arity`, () => {
+      expectError(`fn run(): void { ${wrongArity}; }`, "expects");
+    });
+
+    test(`${name} rejects wrong argument types`, () => {
+      expectError(`fn run(): void { ${wrongType}; }`, "Type mismatch");
+    });
+  }
+
+  test("intrinsics cannot be used as function values", () => {
+    expectError(
+      "fn run(): void { let operation = __sqrt_f32; }",
+      "cannot take a reference to intrinsic '__sqrt_f32'",
+    );
+  });
+
+  for (const source of [
+    'import __load_i32 from "memory"',
+    "fn __load_i32(addr: i32): i32 { return addr; }",
+  ]) {
+    test(`${source.split(" ").slice(0, 2).join(" ")} is reserved`, () => {
+      const parser = new Parser(source);
+      parser.parse("test");
+      assert(
+        parser.errors.some((error) => error.message.includes("reserved")),
+        parser.errors.map((error) => error.message).join("; "),
+      );
+    });
+  }
 });

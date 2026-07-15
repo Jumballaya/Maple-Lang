@@ -1,5 +1,6 @@
 import type { CallExpression } from "../../../parser/ast/expressions/CallExpression";
 import { Identifier } from "../../../parser/ast/expressions/Identifier";
+import { getIntrinsic } from "../../intrinsics";
 import type { ModuleEmitter } from "../../ModuleEmitter";
 import { Writer } from "../../writer/Writer";
 import { fnTypeToSigName, isFnType } from "../emit.types";
@@ -7,6 +8,13 @@ import type { VariableMeta } from "../emitter.types";
 import { emitExpression } from "./expression";
 
 export function emitFunctionCall(expr: CallExpression, emitter: ModuleEmitter): string {
+  const intrinsic = getIntrinsic(expr.func);
+  if (intrinsic) {
+    const args = expr.args.map((arg) => emitExpression(arg, emitter));
+    const operands = args.length === 0 ? "" : ` ${args.join(" ")}`;
+    return `(${intrinsic.instruction}${operands})`;
+  }
+
   const fnVar = emitter.getVar(expr.func);
   if (fnVar && isFnType(fnVar.type)) {
     return emitIndirectCallViaLocal(expr, fnVar, emitter);

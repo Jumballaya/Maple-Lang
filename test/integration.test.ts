@@ -3420,3 +3420,101 @@ describe("stdlib execution", () => {
     assert.equal(runStdlibExport(wat, "run"), 4);
   });
 });
+
+describe("compiler intrinsics", () => {
+  maybeTest("raw i32 store and load round-trip", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        __store_i32(65536, 42);
+        return __load_i32(65536);
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 42);
+  });
+
+  maybeTest("memory size and grow share the user memory", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let before: i32 = __memory_size();
+        let previous: i32 = __memory_grow(1);
+        let after: i32 = __memory_size();
+        return before * 100 + previous * 10 + after;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 223);
+  });
+
+  maybeTest("memory copy preserves both stored i32 values", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        __store_i32(65536, 42);
+        __store_i32(65540, 7);
+        __memory_copy(65552, 65536, 8);
+        return __load_i32(65552) * 100 + __load_i32(65556);
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 4207);
+  });
+
+  for (const intrinsic of [
+    { name: "__sqrt_f32", type: "f32", args: "16.0", expected: 4 },
+    { name: "__abs_f32", type: "f32", args: "-3.0", expected: 3 },
+    { name: "__floor_f32", type: "f32", args: "1.9", expected: 1 },
+    { name: "__ceil_f32", type: "f32", args: "1.1", expected: 2 },
+    { name: "__nearest_f32", type: "f32", args: "2.5", expected: 2 },
+    { name: "__trunc_f32", type: "f32", args: "-1.9", expected: -1 },
+    { name: "__copysign_f32", type: "f32", args: "3.0, -1.0", expected: -3 },
+    { name: "__sqrt_f64", type: "f64", args: "16.0 as f64", expected: 4 },
+    { name: "__abs_f64", type: "f64", args: "-3.0 as f64", expected: 3 },
+    { name: "__floor_f64", type: "f64", args: "1.9 as f64", expected: 1 },
+    { name: "__ceil_f64", type: "f64", args: "1.1 as f64", expected: 2 },
+    { name: "__nearest_f64", type: "f64", args: "2.5 as f64", expected: 2 },
+    { name: "__trunc_f64", type: "f64", args: "-1.9 as f64", expected: -1 },
+    {
+      name: "__copysign_f64",
+      type: "f64",
+      args: "3.0 as f64, -1.0 as f64",
+      expected: -3,
+    },
+  ] as const) {
+    maybeTest(`${intrinsic.name} executes its wasm opcode`, () => {
+      const wat = compile(`
+        export fn run(): ${intrinsic.type} {
+          return ${intrinsic.name}(${intrinsic.args});
+        }
+      `);
+      assert.equal(runExport(wat, "run"), intrinsic.expected);
+    });
+  }
+
+  maybeTest("intrinsic calls support inferred lets", () => {
+    const wat = compile(`
+      export fn run(): f32 {
+        let value = __sqrt_f32(16.0);
+        return value;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 4);
+  });
+
+  maybeTest("intrinsic calls compose in arithmetic", () => {
+    const wat = compile(`
+      export fn run(): f32 { return __sqrt_f32(16.0) + 1.0; }
+    `);
+    assert.equal(runExport(wat, "run"), 5);
+  });
+
+  maybeTest("intrinsic calls can be returned directly", () => {
+    const wat = compile(`
+      export fn run(): i32 { return __memory_size(); }
+    `);
+    assert.equal(runExport(wat, "run"), 2);
+  });
+
+  maybeTest("intrinsic calls compose inside casts", () => {
+    const wat = compile(`
+      export fn run(): i32 { return __sqrt_f32(16.0) as i32; }
+    `);
+    assert.equal(runExport(wat, "run"), 4);
+  });
+});

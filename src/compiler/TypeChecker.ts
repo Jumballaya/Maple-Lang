@@ -40,6 +40,7 @@ import {
 } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { MapleError } from "./errors";
+import { getIntrinsic } from "./intrinsics";
 
 const ARITHMETIC_OPS = new Set(["+", "-", "*", "/", "%"]);
 const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);
@@ -54,6 +55,9 @@ type ScopeEntry = { type: string; mutable: boolean };
 type Scope = Map<string, ScopeEntry>;
 
 function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): string[] | null {
+  const intrinsic = getIntrinsic(fnName);
+  if (intrinsic) return intrinsic.result === "void" ? [] : [intrinsic.result];
+
   const fn = meta.functions[fnName];
   if (fn) return fn.mapleResults;
 
@@ -110,6 +114,10 @@ function resolveExprType(
 
   if (expr instanceof Identifier) {
     const id = expr.tokenLiteral();
+    const intrinsic = getIntrinsic(id);
+    if (intrinsic) {
+      return canonicalFnType([...intrinsic.params], [intrinsic.result]);
+    }
     const imp = meta.imports[id];
     if (imp?.info?.kind === "global") {
       return imp.info.type;
@@ -326,6 +334,10 @@ function walkExpression(
   if (expr instanceof Identifier) {
     const id = expr.tokenLiteral();
     const t = expr.token;
+    if (getIntrinsic(id)) {
+      errors.push(new MapleError(`cannot take a reference to intrinsic '${id}'`, t.line, t.col));
+      return;
+    }
     if (id === "_start") {
       errors.push(new MapleError("cannot take a reference to '_start'", t.line, t.col));
       return;
@@ -407,6 +419,7 @@ function walkExpression(
 
   // Check 4 — call argument count and types
   if (expr instanceof CallExpression) {
+    const intrinsic = getIntrinsic(expr.func);
     const fn = meta.functions[expr.func];
     const localFnType = scope.get(expr.func)?.type;
     const localParams =
@@ -423,11 +436,38 @@ function walkExpression(
             return "i32";
           })
         : null;
-    const parameterTypes = fn?.params.map((param) => param.type) ?? localParams ?? importedParams;
+    const parameterTypes =
+      intrinsic?.params ?? fn?.params.map((param) => param.type) ?? localParams ?? importedParams;
     for (let i = 0; i < expr.args.length; i++) {
       walkExpression(expr.args[i]!, scope, meta, errors, parameterTypes?.[i]);
     }
-    if (fn) {
+    if (intrinsic) {
+      if (expr.args.length !== intrinsic.params.length) {
+        const t = expr.token;
+        errors.push(
+          new MapleError(
+            `Intrinsic '${expr.func}' expects ${intrinsic.params.length} arguments, got ${expr.args.length}`,
+            t.line,
+            t.col,
+          ),
+        );
+      } else {
+        for (let i = 0; i < expr.args.length; i++) {
+          const argType = resolveExprType(expr.args[i]!, scope, meta, errors);
+          const paramType = intrinsic.params[i]!;
+          if (argType !== null && !typesCompatible(paramType, argType, meta)) {
+            const t = expr.args[i]!.token;
+            errors.push(
+              new MapleError(
+                `Type mismatch in argument ${i + 1} of '${expr.func}': expected '${paramType}', got '${argType}'`,
+                t.line,
+                t.col,
+              ),
+            );
+          }
+        }
+      }
+    } else if (fn) {
       if (expr.args.length !== fn.params.length) {
         const t = expr.token;
         errors.push(

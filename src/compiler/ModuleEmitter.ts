@@ -27,6 +27,7 @@ import type {
   VariableMeta,
 } from "./emitters/emitter.types";
 import { makeLabel } from "./emitters/emitter.utils";
+import { getIntrinsic } from "./intrinsics";
 import { MapleModule } from "./MapleModule";
 import { FuncWriter } from "./writer/FuncWriter";
 import { Writer } from "./writer/Writer";
@@ -241,6 +242,11 @@ export class ModuleEmitter {
   }
 
   public getCallReturnTypes(funcName: string): WasmValueType[] | null {
+    const intrinsic = getIntrinsic(funcName);
+    if (intrinsic) {
+      return intrinsic.result === "void" ? [] : [valueTypeToWasm(intrinsic.result)];
+    }
+
     const internal = this.mod.functions[funcName];
     if (internal) {
       return internal.results;
@@ -342,6 +348,9 @@ export class ModuleEmitter {
       return this.getExprType(expr.left);
     }
     if (expr instanceof CallExpression) {
+      const intrinsic = getIntrinsic(expr.func);
+      if (intrinsic) return intrinsic.result;
+
       const internal = this.mod.functions[expr.func];
       if (internal) {
         if (internal.results.length === 0) return "void";
