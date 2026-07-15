@@ -7,12 +7,14 @@ import { Parser } from "../parser/Parser";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { collectFnReferences, emitModule, extractModuleMeta } from "./emitters/module";
 import type { MapleModule } from "./MapleModule";
-import { stdlib } from "./stdlib";
 import { typeCheck } from "./TypeChecker";
 
-export type ResolvedImportModule =
-  | { kind: "legacy"; data: ModuleMeta }
-  | { kind: "maple"; path: string; ast: ASTProgram; data: ModuleMeta };
+export type ResolvedImportModule = {
+  kind: "maple";
+  path: string;
+  ast: ASTProgram;
+  data: ModuleMeta;
+};
 
 const localStdlibSourceDir = path.join(__dirname, "stdlib");
 const stdlibSourceDir = existsSync(localStdlibSourceDir)
@@ -42,11 +44,7 @@ function parseMapleModule(importPath: string, sourcePath: string): ResolvedImpor
 
 function resolveStdlibModule(importPath: string): ResolvedImportModule | undefined {
   const sourcePath = bundledStdlibPath(importPath);
-  if (sourcePath) {
-    return parseMapleModule(importPath, sourcePath);
-  }
-  const legacy = stdlib[importPath];
-  return legacy ? { kind: "legacy", data: legacy } : undefined;
+  return sourcePath ? parseMapleModule(importPath, sourcePath) : undefined;
 }
 
 export function resolveImportModule(importPath: string, importerDir: string): ResolvedImportModule {
@@ -96,7 +94,6 @@ export function linkStdlibImports(meta: ModuleMeta): void {
 //
 //  5) Assemble + link
 //     - wat2wasm build/*.wat -> build/*.o
-//     - copy stdlib *.o files
 //     - wasm-ld build/*.o -> final .wasm
 //
 // Next idea status:
@@ -137,7 +134,6 @@ export async function compiler(
   }
   const data = extractModuleMeta(entryAST, true);
 
-  const stdLibList: Record<string, ModuleMeta> = {};
   const pass1: Record<string, { data: ModuleMeta; ast: ASTProgram }> = {
     [entryAST.name]: { data, ast: entryAST },
   };
@@ -145,10 +141,6 @@ export async function compiler(
   // 1. Build module data
   for (const imp of Object.values(data.imports)) {
     const resolvedModule = resolveImportModule(imp.module, cwd);
-    if (resolvedModule.kind === "legacy") {
-      stdLibList[imp.module] = resolvedModule.data;
-      continue;
-    }
     pass1[imp.module] = { data: resolvedModule.data, ast: resolvedModule.ast };
   }
 
@@ -161,9 +153,13 @@ export async function compiler(
   // (collectFnReferences may inject e.g. memory.malloc for __make_fnref).
   for (const mod of Object.values(pass1)) {
     for (const imp of Object.values(mod.data.imports)) {
-      const stdMod = stdlib[imp.module];
-      if (stdMod && !stdLibList[imp.module]) {
-        stdLibList[imp.module] = stdMod;
+      if (pass1[imp.module]) {
+        continue;
+      }
+      const sourcePath = bundledStdlibPath(imp.module);
+      if (sourcePath) {
+        const resolvedModule = parseMapleModule(imp.module, sourcePath);
+        pass1[imp.module] = { data: resolvedModule.data, ast: resolvedModule.ast };
       }
     }
   }
@@ -175,19 +171,6 @@ export async function compiler(
       if (imp.resolved) {
         continue;
       }
-      // see if we have an stdlib import
-      const stdLibEntry = stdLibList[imp.module];
-      if (stdLibEntry) {
-        const entry = stdLibEntry.exports[impName];
-        if (!entry) {
-          throw new Error(`no function "${impName}" exported from stdlib "${imp.module}"`);
-        }
-        // hook up the export -> import
-        imp.info = entry;
-        imp.resolved = true;
-        continue;
-      }
-      // now with the user files
       const userEntry = pass1[imp.module];
       if (!userEntry) {
         throw new Error(`no module "${imp.module}" found`);
@@ -241,10 +224,6 @@ export async function compiler(
     await run(`wat2wasm -r build/${path}.wat -o build/${path}.o`);
   }
   // step 4. Linking
-  // 4a. get std lib binaries
-  for (const bin of Object.values(stdLibList)) {
-    await run(`cp src/compiler/stdlib/${bin.name}.o build/${bin.name}.o`);
-  }
   await run(`wasm-ld --no-gc-sections --no-check-features build/*.o -o ${outputPath}`);
   console.log(`Compiled: ${outputPath}`);
 }

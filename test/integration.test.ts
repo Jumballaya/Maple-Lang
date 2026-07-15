@@ -3343,6 +3343,92 @@ describe("stdlib execution", () => {
     assert.equal(runStdlibExport(wat, "run"), 10203);
   });
 
+  // Double-free and use-after-free are undefined until the ownership design (O1).
+  maybeTest("malloc payloads are 8-byte aligned", () => {
+    const wat = compile(`
+      import malloc from "memory"
+      export fn run(): i32 {
+        let a: i32 = malloc(1);
+        let b: i32 = malloc(7);
+        let c: i32 = malloc(8);
+        let d: i32 = malloc(100);
+        if (a % 8 != 0) { return 0; }
+        if (b % 8 != 0) { return 0; }
+        if (c % 8 != 0) { return 0; }
+        if (d % 8 != 0) { return 0; }
+        return 1;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("malloc splits a reused free block", () => {
+    const wat = compile(`
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let prefix: i32 = malloc(8);
+        let large: i32 = malloc(64);
+        let guard: i32 = malloc(8);
+        free(large);
+        let first: i32 = malloc(16);
+        let second: i32 = malloc(16);
+        if (prefix >= large) { return 0; }
+        if (first != large) { return 0; }
+        if (second != first + 24) { return 0; }
+        return second < guard;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("free coalesces adjacent blocks", () => {
+    const wat = compile(`
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let prefix: i32 = malloc(8);
+        let a: i32 = malloc(16);
+        let b: i32 = malloc(16);
+        let c: i32 = malloc(16);
+        free(b);
+        free(a);
+        let combined: i32 = malloc(32);
+        if (prefix >= a) { return 0; }
+        if (c <= b) { return 0; }
+        return combined == a;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("free reclaims the wilderness block", () => {
+    const wat = compile(`
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let prefix: i32 = malloc(8);
+        let last: i32 = malloc(32);
+        free(last);
+        let reused: i32 = malloc(32);
+        if (prefix >= last) { return 0; }
+        return reused == last;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("malloc grows memory when the wilderness exceeds capacity", () => {
+    const wat = compile(`
+      import malloc from "memory"
+      export fn run(): i32 {
+        let before: i32 = __memory_size();
+        let block: i32 = malloc((before * 65536) + 1);
+        let after: i32 = __memory_size();
+        if (block == 0) { return 0; }
+        return after > before;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
   maybeTest("math sqrt executes through the stdlib instance", () => {
     const wat = compile(`
       import sqrt from "math"

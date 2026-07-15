@@ -1100,6 +1100,19 @@ describe("Compiler: stdlib source resolution", () => {
     assert.equal(resolved.data.exports.fraction?.kind, "struct");
   });
 
+  test("bare memory resolves through bundled Maple source", () => {
+    const resolved = resolveImportModule("memory", "/unused");
+    assert.equal(resolved.kind, "maple");
+    assert.equal(path.basename(resolved.path), "memory.maple");
+    assert.deepEqual(Object.keys(resolved.data.exports).sort(), ["free", "malloc", "realloc"]);
+    assert.equal(resolved.data.exports.malloc?.kind, "func");
+    assert.equal(resolved.data.exports.malloc?.signature, "i_i");
+    assert.equal(resolved.data.exports.free?.kind, "func");
+    assert.equal(resolved.data.exports.free?.signature, "i_v");
+    assert.equal(resolved.data.exports.realloc?.kind, "func");
+    assert.equal(resolved.data.exports.realloc?.signature, "iii_i");
+  });
+
   test("unknown bare imports keep the existing file error", () => {
     assert.throws(
       () => resolveImportModule("definitely-not-a-maple-module", "/nonexistent"),

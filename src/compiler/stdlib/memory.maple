@@ -1,0 +1,161 @@
+let HEAP_BASE: i32 = 0;
+let heap_end: i32 = 0;
+let free_head: i32 = 0;
+
+fn align8(x: i32): i32 {
+  return (x + 7) & -8;
+}
+
+fn hdr_next(hdr: i32): i32 {
+  return __load_i32(hdr);
+}
+
+fn hdr_set_next(hdr: i32, next: i32): void {
+  __store_i32(hdr, next);
+}
+
+fn hdr_raw(hdr: i32): i32 {
+  return __load_i32(hdr + 4);
+}
+
+fn hdr_size(hdr: i32): i32 {
+  return hdr_raw(hdr) & -8;
+}
+
+fn hdr_is_alloc(hdr: i32): i32 {
+  if ((hdr_raw(hdr) & 1) != 0) {
+    return 1;
+  }
+  return 0;
+}
+
+fn hdr_write(hdr: i32, size: i32, alloc: i32): void {
+  __store_i32(hdr + 4, (size & -8) | (alloc & 1));
+}
+
+fn ensure_capacity(need_end: i32): i32 {
+  let cur_bytes: i32 = __memory_size() << 16;
+  if ((need_end as u32) <= (cur_bytes as u32)) {
+    return 1;
+  }
+  let pages: i32 = ((((need_end - cur_bytes) + 65535) as u32) >> 16) as i32;
+  if (__memory_grow(pages) != -1) {
+    return 1;
+  }
+  return 0;
+}
+
+fn split_if_big(hdr: i32, want: i32): i32 {
+  let size: i32 = hdr_size(hdr);
+  if (((size - want) as u32) >= (16 as u32)) {
+    let tail_hdr: i32 = hdr + want;
+    let tail_size: i32 = size - want;
+    hdr_write(tail_hdr, tail_size, 0);
+    hdr_write(hdr, want, 0);
+    freelist_push(tail_hdr);
+    return 1;
+  }
+  return 0;
+}
+
+// heap_init intentionally remains unwired, so heap state starts at zero.
+// T19 will initialize it from the merged static-data end.
+fn heap_init(data_end: i32): void {
+  HEAP_BASE = align8(data_end);
+  heap_end = HEAP_BASE;
+  free_head = 0;
+}
+
+fn freelist_push(hdr: i32): void {
+  hdr_set_next(hdr, free_head);
+  free_head = hdr;
+}
+
+fn freelist_unlink(hdr: i32): void {
+  let prev: i32 = 0;
+  let cur: i32 = free_head;
+  while (cur != 0) {
+    if (cur == hdr) {
+      if (prev == 0) {
+        free_head = hdr_next(hdr);
+      } else {
+        hdr_set_next(prev, hdr_next(hdr));
+      }
+      return;
+    }
+    prev = cur;
+    cur = hdr_next(cur);
+  }
+}
+
+export fn malloc(n_bytes: i32): i32 {
+  let n: i32 = n_bytes;
+  if ((n_bytes as u32) < (1 as u32)) {
+    n = 1;
+  }
+  let needed: i32 = align8(n) + 8;
+  let prev: i32 = 0;
+  let cur: i32 = free_head;
+  let size: i32 = 0;
+  while (cur != 0) {
+    size = hdr_size(cur);
+    if ((size as u32) >= (needed as u32)) {
+      split_if_big(cur, needed);
+      freelist_unlink(cur);
+      hdr_write(cur, needed, 1);
+      return cur + 8;
+    }
+    prev = cur;
+    cur = hdr_next(cur);
+  }
+
+  let hdr: i32 = heap_end;
+  let need_end: i32 = heap_end + needed;
+  if (ensure_capacity(need_end) == 0) {
+    return 0;
+  }
+  heap_end = need_end;
+  hdr_write(hdr, needed, 1);
+  return hdr + 8;
+}
+
+export fn free(ptr: i32): void {
+  if (ptr == 0) {
+    return;
+  }
+  let hdr: i32 = ptr - 8;
+  if (hdr_is_alloc(hdr) == 0) {
+    return;
+  }
+  let size: i32 = hdr_size(hdr);
+  let next: i32 = hdr + size;
+  if ((next as u32) < (heap_end as u32)) {
+    if (hdr_is_alloc(next) == 0) {
+      freelist_unlink(next);
+      size = size + hdr_size(next);
+    }
+  }
+  hdr_write(hdr, size, 0);
+  freelist_push(hdr);
+  if (hdr + size == heap_end) {
+    freelist_unlink(hdr);
+    heap_end = hdr;
+  }
+}
+
+export fn realloc(old: i32, old_size: i32, new_size: i32): i32 {
+  let next: i32 = malloc(new_size);
+  if (next == 0) {
+    return 0;
+  }
+  if (old == 0) {
+    return next;
+  }
+  let copy_size: i32 = new_size;
+  if ((old_size as u32) < (new_size as u32)) {
+    copy_size = old_size;
+  }
+  __memory_copy(next, old, copy_size);
+  free(old);
+  return next;
+}

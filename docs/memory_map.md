@@ -58,14 +58,15 @@ The reason `dataPtr` starts at `65536` rather than a lower address: `wasm-ld` pl
 
 ### Heap  (HEAP_BASE – heap_end)
 
-Runtime-managed by the `memory` stdlib module (`src/compiler/stdlib/memory.wat`). The allocator is a free-list allocator:
+Runtime-managed by the Maple stdlib module (`src/compiler/stdlib/memory.maple`). The allocator is a free-list allocator:
 
 - Each chunk has an **8-byte header** `{ next: i32, size_and_flags: u32 }` where `size` is 8-aligned and bit 0 is the `ALLOC` flag.
 - `malloc(n)` — scans the free list for a fit, splits oversized blocks, or carves from the wilderness; returns a pointer to the payload (header + 8).
 - `free(ptr)` — marks the block free, coalesces with the next block if it is also free, and reclaims the wilderness top if the freed block is at `heap_end`.
 - `realloc(old, old_size, new_size)` — `malloc` + `memory.copy` + `free`.
 - `memory.grow` is called automatically when `malloc` needs more capacity.
-- `heap_init(data_end)` must be called once before any `malloc`; programs that import `memory` typically call this in their `_start` function, passing the address just past their static data.
+- `heap_init(data_end)` exists as a private function but is currently never called. `HEAP_BASE` and `heap_end` therefore remain zero, so allocation starts at address 0 and can overlap the shadow stack.
+- This base-zero defect is preserved for allocator parity; T19 will initialize the heap from the merged static-data end. Until then, tests and programs must not mix `malloc` with struct locals or string/array literals.
 
 Programs that never call `malloc` never touch the heap region.
 

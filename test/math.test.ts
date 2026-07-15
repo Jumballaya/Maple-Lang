@@ -112,7 +112,7 @@ describe("stdlib math.maple (Tier 2 accuracy)", () => {
       [0.1, -1],
       [-0.1, -1],
       [-0.1, 1],
-    ]) {
+    ] as const) {
       assertNearF(atan2(y, x), Math.atan2(y, x), 1e-3);
     }
   });

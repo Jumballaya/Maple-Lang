@@ -152,7 +152,10 @@ function assembleSource(moduleName: string, wat: string): WebAssembly.Module {
 
 function getStdlibModules(): StdlibModules {
   stdlibModules ??= {
-    memory: assembleModule("memory", join(stdlibDir, "memory.wat")),
+    memory: assembleSource(
+      "memory",
+      compile(readFileSync(join(stdlibDir, "memory.maple"), "utf8")),
+    ),
     string: assembleSource(
       "string",
       compile(readFileSync(join(stdlibDir, "string.maple"), "utf8")),
@@ -183,7 +186,6 @@ export function runStdlibExport(
   const memory = new WebAssembly.Memory({ initial: 4 });
   const memoryInstance = instantiateModule("memory", modules.memory, {
     runtime: { memory },
-    console: { print_string: () => {} },
   });
   const stringInstance = instantiateModule("string", modules.string, {
     runtime: { memory },
