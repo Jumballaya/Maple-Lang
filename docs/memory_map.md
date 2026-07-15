@@ -54,7 +54,9 @@ Local struct literals (declared inside function bodies) are **not** placed here 
 
 When a global struct field uses an expression (for example `{ x = other + 1 }`), the compiler writes a zero placeholder in static data and emits a one-time runtime store guarded by `$__globals_inited`. Literal-valued fields remain fully compile-time encoded.
 
-The reason `dataPtr` starts at `65536` rather than a lower address: `wasm-ld` places the data section at `__global_base` (default `65536`), so the `i32.const` addresses baked into the emitted WAT must match. If `dataPtr` started lower, the linker would relocate the data while leaving code references unchanged, causing silent wrong-address reads.
+`dataPtr` starts at `65536` so the first WebAssembly page remains reserved for
+the compiler-managed shadow stack. Static addresses baked into emitted code use
+the same whole-program layout.
 
 ### Heap  (HEAP_BASE – heap_end)
 
@@ -72,7 +74,9 @@ Programs that never call `malloc` never touch the heap region.
 
 ## Notes
 
-- `wasm-ld --stack-first` (the default) places the shadow stack in the first page so `__global_base = 65536`. Maple follows this convention.
+- Maple reserves the first page for the shadow stack and begins merged static
+  data at `65536`.
 - The shadow stack grows **down** and the heap grows **up**. They could theoretically collide if a program has deeply recursive functions with many large struct locals and simultaneously performs heavy heap allocation. No overflow detection is currently implemented.
-- The static data region is fixed at link time — it never changes at runtime.
+- The static data region is fixed during whole-program emission and never
+  changes at runtime.
 - The default `(import "runtime" "memory" (memory 2))` provides 2 pages (128 KB) to start. `memory.grow` will request additional pages as needed.

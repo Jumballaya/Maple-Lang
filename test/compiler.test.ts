@@ -2634,9 +2634,8 @@ describe("Emission: named function references", () => {
       fn add(a: i32, b: i32): i32 { return a + b; }
       fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
     `);
-    // Declarative elem (rather than an active segment with a constant offset)
-    // is used because wasm-ld strips active elem segments from relocatable
-    // objects. The table is populated at runtime inside __make_fnref.
+    // Declarative elem preserves the existing runtime table initialization.
+    // The table is populated on demand inside __make_fnref.
     assert(wat.includes("(elem declare func $__indirect_add)"), `Missing elem: ${wat}`);
     assert(
       wat.includes("(table.set $__fn_table (i32.const 0) (ref.func $__indirect_add))"),

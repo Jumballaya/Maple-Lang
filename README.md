@@ -4,12 +4,20 @@ WASM first programming language
 
 ## Installation
 
-- 1. You must have the following installed
-  - wat2wasm
-    - via [https://github.com/WebAssembly/wabt](WABT)
-  - wasm-ld
-    - via [https://github.com/emscripten-core/emscripten](Emscripten)
-- 2. Set up the project: `npm install`
+Install the project dependencies:
+
+```bash
+npm install
+```
+
+No system WebAssembly toolchain is required. The project uses the `wat2wasm`
+binary supplied by its `wabt` development dependency.
+
+## Compilation pipeline
+
+The compiler parses the entry module and its dependency graph, type-checks each
+module, merges the whole program into one deterministic WAT module, and uses the
+project-local `wat2wasm` binary to produce the final `.wasm` file.
 
 ## Usage
 
@@ -20,7 +28,7 @@ Usage: maple <file> [optional_arg]
 Compiles a maple source code file into a .wasm file
 
 Options:
-  -o, --output <file>   Specify output file (default: <input>.wasm)
+  -o, --output <file>   Specify output file (default: build/app.wasm)
 
 Examples:
   maple src/main.maple
@@ -31,27 +39,35 @@ Examples:
 
 ### Demo 1 -- imports
 
-- Files: `demo/demo1/main.maple`, `demo/demo1/test.maple`
+- Files: `demo/01_functions_imports/main.maple`,
+  `demo/01_functions_imports/math.maple`
 
 **main.maple**
 
 ```ts
-import add from "./test.maple"
+import add, add64 from "./math.maple"
 
 export fn _start(a: i32, b: i32): i32 {
-  return add(a, b);
+  let lo: i32 = add(a, b);
+  let hi: i64 = add64(a as i64, b as i64);
+  return lo + (hi as i32);
 }
 ```
 
-**test.maple**
+**math.maple**
 
 ```ts
 export fn add(a: i32, b: i32):i32 {
   return a + b;
 }
+
+export fn add64(a: i64, b: i64): i64 {
+  return a + b;
+}
 ```
 
-To compile, run: `npm start -- demo/demo1/main.maple` and you will find your `app.wasm` in the build folder that was created.
+To compile, run `npm start -- demo/01_functions_imports/main.maple`. The output
+is written to `build/app.wasm` unless `-o` specifies another path.
 
 # Language Features
 

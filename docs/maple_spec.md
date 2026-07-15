@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maple is a statically-typed, compiled language that targets WebAssembly. Source files are compiled to `.wat` (WebAssembly Text Format), assembled to relocatable `.o` objects with `wat2wasm`, and linked into a final `.wasm` binary with `wasm-ld`.
+Maple is a statically-typed, compiled language that targets WebAssembly. The compiler merges the source dependency graph into one `.wat` (WebAssembly Text Format) module and assembles it directly into the final `.wasm` binary with the project-local `wat2wasm` tool.
 
 ---
 

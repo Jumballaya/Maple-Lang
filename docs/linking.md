@@ -1,8 +1,9 @@
 # Linking modules
 
-> **Superseded by whole-program merge.** The compiler now emits one WAT module
-> and assembles it directly. The legacy object-linking design below is retained
-> only as historical context until its scheduled documentation cleanup.
+> **Superseded by whole-program merge.** The npm-only CLI now accepts the full
+> demo suite, emits one WAT module, and assembles it with the project-local WABT
+> dependency. The legacy design below remains only as historical context until
+> its scheduled documentation cleanup.
 
 ## Toolchain:
 

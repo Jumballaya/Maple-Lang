@@ -3,12 +3,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
+import { canonicalFnType, parseFnType } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { emitMergedProgram } from "./emitters/merge";
 import { buildMergedProgram } from "./emitters/merge-model";
 import { extractModuleMeta } from "./emitters/module";
 import {
   buildModuleGraph,
+  type ModuleGraph,
+  type ModuleRecord,
   type ResolvedImportModule,
   resolveBundledStdlibModule,
   resolveImportModule,
@@ -17,6 +20,29 @@ import { typeCheck } from "./TypeChecker";
 
 export type { ResolvedImportModule };
 export { resolveImportModule };
+
+function resolveLinkedType(graph: ModuleGraph, module: ModuleRecord, type: string): string {
+  if (type.startsWith("*")) return `*${resolveLinkedType(graph, module, type.slice(1))}`;
+  if (type.endsWith("[]")) {
+    return `${resolveLinkedType(graph, module, type.slice(0, -2))}[]`;
+  }
+  const fnType = parseFnType(type);
+  if (fnType) {
+    return canonicalFnType(
+      fnType.params.map((entry) => resolveLinkedType(graph, module, entry)),
+      fnType.results.map((entry) => resolveLinkedType(graph, module, entry)),
+    );
+  }
+  if (type === "string") return type;
+  if (module.data.structs[type]) return `${module.manglePrefix}$$${type}`;
+  const imported = module.data.imports[type];
+  if (!imported) return type;
+  const dependency = module.dependencies.find((entry) => entry.specifier === imported.module);
+  if (!dependency || dependency.kind === "external") return type;
+  const exporter = graph.modules.get(dependency.key);
+  if (exporter?.data.exports[imported.name]?.kind !== "struct") return type;
+  return `${exporter.manglePrefix}$$${imported.name}`;
+}
 
 /** Resolve stdlib imports on a single module (tests, tooling). */
 export function linkStdlibImports(meta: ModuleMeta): void {
@@ -125,6 +151,31 @@ export async function compiler(
       imp.info = entry;
       imp.resolved = true;
       imp.mergeable = true;
+      if (entry.kind === "struct") {
+        imp.typeIdentity = `${userEntry.manglePrefix}$$${entry.meta.name}`;
+        imp.structMeta = {
+          ...entry.meta,
+          name: imp.typeIdentity,
+          members: Object.fromEntries(
+            Object.entries(entry.meta.members).map(([name, member]) => [
+              name,
+              { ...member, type: resolveLinkedType(graph, userEntry, member.type) },
+            ]),
+          ),
+        };
+      } else if (entry.kind === "global") {
+        imp.mapleType = resolveLinkedType(graph, userEntry, entry.type);
+      } else {
+        const target = userEntry.data.functions[imp.name];
+        if (target) {
+          imp.mapleParams = target.params.map((param) =>
+            resolveLinkedType(graph, userEntry, param.type),
+          );
+          imp.mapleResults = target.mapleResults.map((result) =>
+            resolveLinkedType(graph, userEntry, result),
+          );
+        }
+      }
     }
   }
 

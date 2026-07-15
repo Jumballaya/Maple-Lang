@@ -72,6 +72,11 @@ export type ImportMeta = {
   resolved: boolean;
   synthesized?: boolean;
   mergeable?: boolean;
+  typeIdentity?: string;
+  structMeta?: StructData;
+  mapleType?: string;
+  mapleParams?: string[];
+  mapleResults?: string[];
 };
 export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
 

@@ -38,7 +38,7 @@ import {
   parseFnType,
   valueTypeToWasm,
 } from "./emitters/emit.types";
-import type { ModuleMeta } from "./emitters/emitter.types";
+import type { ModuleMeta, StructData } from "./emitters/emitter.types";
 import { MapleError } from "./errors";
 import { getIntrinsic } from "./intrinsics";
 
@@ -53,6 +53,25 @@ const LITERAL_ADOPTION_OPS = new Set([...ARITHMETIC_OPS, ...BITWISE_OPS]);
 
 type ScopeEntry = { type: string; mutable: boolean };
 type Scope = Map<string, ScopeEntry>;
+
+function resolveTypeIdentity(type: string, meta: ModuleMeta): string {
+  if (type.startsWith("*")) return `*${resolveTypeIdentity(type.slice(1), meta)}`;
+  if (type.endsWith("[]")) return `${resolveTypeIdentity(type.slice(0, -2), meta)}[]`;
+  const fnType = parseFnType(type);
+  if (fnType) {
+    return canonicalFnType(
+      fnType.params.map((entry) => resolveTypeIdentity(entry, meta)),
+      fnType.results.map((entry) => resolveTypeIdentity(entry, meta)),
+    );
+  }
+  return meta.imports[type]?.typeIdentity ?? type;
+}
+
+function structDefinition(type: string, meta: ModuleMeta): StructData | undefined {
+  const direct = meta.structs[type];
+  if (direct) return direct;
+  return Object.values(meta.imports).find((entry) => entry.typeIdentity === type)?.structMeta;
+}
 
 function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): string[] | null {
   const intrinsic = getIntrinsic(fnName);
@@ -75,6 +94,7 @@ function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): st
 
   const imp = meta.imports[fnName];
   if (imp?.info?.kind === "func") {
+    if (imp.mapleResults) return imp.mapleResults;
     const resultChars = imp.info.signature.split("_")[1] ?? "";
     if (resultChars === "v") return [];
     const out: string[] = [];
@@ -110,7 +130,9 @@ function resolveExprType(
   }
   if (expr instanceof BooleanLiteralExpression) return "bool";
   if (expr instanceof StringLiteralExpression) return "string";
-  if (expr instanceof ArrayLiteralExpression) return `${expr.memberType}[]`;
+  if (expr instanceof ArrayLiteralExpression) {
+    return `${resolveTypeIdentity(expr.memberType, meta)}[]`;
+  }
 
   if (expr instanceof Identifier) {
     const id = expr.tokenLiteral();
@@ -120,13 +142,14 @@ function resolveExprType(
     }
     const imp = meta.imports[id];
     if (imp?.info?.kind === "global") {
-      return imp.info.type;
+      return imp.mapleType ?? imp.info.type;
     }
-    return scope.get(id)?.type ?? null;
+    const scoped = scope.get(id)?.type;
+    return scoped ? resolveTypeIdentity(scoped, meta) : null;
   }
 
   if (expr instanceof CastExpression) {
-    return expr.targetType;
+    return resolveTypeIdentity(expr.targetType, meta);
   }
 
   if (expr instanceof InfixExpression) {
@@ -171,7 +194,10 @@ function resolveExprType(
     const returnTypes = getCallReturnTypes(meta, expr.func, scope);
     if (!returnTypes) return null;
     if (returnTypes.length === 0) return "void";
-    if (returnTypes.length === 1) return returnTypes[0] ?? null;
+    if (returnTypes.length === 1) {
+      const result = returnTypes[0];
+      return result ? resolveTypeIdentity(result, meta) : null;
+    }
     if (errors) {
       const t = expr.token;
       errors.push(
@@ -196,7 +222,7 @@ function resolveExprType(
       return expr.member === "len" || expr.member === "data" ? "i32" : null;
     }
     const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
-    const memberData = meta.structs[structName]?.members[expr.member];
+    const memberData = structDefinition(structName, meta)?.members[expr.member];
     return memberData?.type ?? null;
   }
 
@@ -204,12 +230,15 @@ function resolveExprType(
     return resolveExprType(expr.left, scope, meta, errors);
   }
   if (expr instanceof StructLiteralExpression) {
-    return expr.name;
+    return resolveTypeIdentity(expr.name, meta);
   }
 
   if (expr instanceof FunctionLiteralExpression) {
-    const paramTypes = expr.params.map((p) => p.type);
-    const results = expr.returnTypes.length === 0 ? ["void"] : expr.returnTypes;
+    const paramTypes = expr.params.map((p) => resolveTypeIdentity(p.type, meta));
+    const results =
+      expr.returnTypes.length === 0
+        ? ["void"]
+        : expr.returnTypes.map((type) => resolveTypeIdentity(type, meta));
     return canonicalFnType(paramTypes, results);
   }
 
@@ -227,12 +256,21 @@ function resolveExprType(
 //      This lets bool/u8/i32 all be compatible with each other.
 
 function typesCompatible(declared: string, actual: string, meta: ModuleMeta): boolean {
+  declared = resolveTypeIdentity(declared, meta);
+  actual = resolveTypeIdentity(actual, meta);
   if (declared === actual) return true;
   if (isFnType(declared) && isFnType(actual)) return declared === actual;
   if (isFnType(declared) || isFnType(actual)) return false;
   if (declared === "void" || actual === "void") return false;
   if (declared === "string" || actual === "string") return false;
-  if (declared in meta.structs || actual in meta.structs) return false;
+  if (
+    structDefinition(declared, meta) ||
+    structDefinition(actual, meta) ||
+    declared.includes("$$") ||
+    actual.includes("$$")
+  ) {
+    return false;
+  }
   if (declared.endsWith("[]") || actual.endsWith("[]")) return false;
   return valueTypeToWasm(declared) === valueTypeToWasm(actual);
 }
@@ -426,18 +464,20 @@ function walkExpression(
     const localFnType = scope.get(expr.func)?.type;
     const localParams =
       localFnType && isFnType(localFnType) ? parseFnType(localFnType)?.params : null;
-    const importSignature = meta.imports[expr.func]?.info;
+    const importedFunction = meta.imports[expr.func];
+    const importSignature = importedFunction?.info;
     const importedParamChars =
       importSignature?.kind === "func" ? (importSignature.signature.split("_")[0] ?? "") : null;
     const importedParams =
-      importedParamChars !== null
+      importedFunction?.mapleParams ??
+      (importedParamChars !== null
         ? Array.from(importedParamChars === "v" ? "" : importedParamChars).map((char) => {
             if (char === "I") return "i64";
             if (char === "f") return "f32";
             if (char === "F") return "f64";
             return "i32";
           })
-        : null;
+        : null);
     const parameterTypes =
       intrinsic?.params ?? fn?.params.map((param) => param.type) ?? localParams ?? importedParams;
     for (let i = 0; i < expr.args.length; i++) {
@@ -519,7 +559,8 @@ function walkExpression(
         const imp = meta.imports[expr.func];
         if (imp?.info?.kind === "func") {
           const paramChars = imp.info.signature.split("_")[0] ?? "";
-          const expectedCount = paramChars === "v" ? 0 : paramChars.length;
+          const expectedCount =
+            imp.mapleParams?.length ?? (paramChars === "v" ? 0 : paramChars.length);
           if (expr.args.length !== expectedCount) {
             const t = expr.token;
             errors.push(
@@ -529,6 +570,21 @@ function walkExpression(
                 t.col,
               ),
             );
+          } else if (imp.mapleParams) {
+            for (let index = 0; index < expr.args.length; index++) {
+              const argType = resolveExprType(expr.args[index]!, scope, meta, errors);
+              const paramType = imp.mapleParams[index]!;
+              if (argType !== null && !typesCompatible(paramType, argType, meta)) {
+                const token = expr.args[index]!.token;
+                errors.push(
+                  new MapleError(
+                    `Type mismatch in argument ${index + 1} of '${expr.func}': expected '${paramType}', got '${argType}'`,
+                    token.line,
+                    token.col,
+                  ),
+                );
+              }
+            }
           }
         }
       }
@@ -547,7 +603,7 @@ function walkExpression(
         }
       } else {
         const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
-        const structDef = meta.structs[structName];
+        const structDef = structDefinition(structName, meta);
         if (structDef && !(expr.member in structDef.members)) {
           const t = expr.token;
           errors.push(
@@ -601,14 +657,15 @@ function walkExpression(
   }
 
   if (expr instanceof StructLiteralExpression) {
-    const sd = meta.structs[expr.name];
+    const identity = resolveTypeIdentity(expr.name, meta);
+    const sd = structDefinition(identity, meta);
     if (!sd) return;
 
     for (const fieldName of Object.keys(expr.members)) {
       if (!(fieldName in sd.members)) {
         const t = expr.token;
         errors.push(
-          new MapleError(`Struct '${expr.name}' has no field '${fieldName}'`, t.line, t.col),
+          new MapleError(`Struct '${identity}' has no field '${fieldName}'`, t.line, t.col),
         );
       }
     }
@@ -618,7 +675,7 @@ function walkExpression(
         const t = expr.token;
         errors.push(
           new MapleError(
-            `Struct '${expr.name}' field '${fieldName}' is not initialized`,
+            `Struct '${identity}' field '${fieldName}' is not initialized`,
             t.line,
             t.col,
           ),
@@ -635,7 +692,7 @@ function walkExpression(
         const t = fieldExpr.token;
         errors.push(
           new MapleError(
-            `Struct '${expr.name}' field '${fieldName}': expected '${memberMeta.type}', got '${fieldType}'`,
+            `Struct '${identity}' field '${fieldName}': expected '${memberMeta.type}', got '${fieldType}'`,
             t.line,
             t.col,
           ),
@@ -1087,7 +1144,7 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const globals: Scope = new Map();
   for (const [id, imp] of Object.entries(meta.imports)) {
     if (imp.info?.kind === "global") {
-      globals.set(id, { type: imp.info.type, mutable: false });
+      globals.set(id, { type: imp.mapleType ?? imp.info.type, mutable: false });
     }
   }
   for (const stmt of program.statements) {
