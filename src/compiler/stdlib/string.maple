@@ -1,0 +1,7 @@
+export fn string_copy(from: string, to: string): void {
+  let len: i32 = from.len;
+  if (to.len < len) {
+    len = to.len;
+  }
+  __memory_copy(to.data, from.data, len);
+}

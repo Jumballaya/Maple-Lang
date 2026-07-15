@@ -139,72 +139,7 @@ const memory: ModuleMeta = {
   deferredGlobalInits: [],
 };
 
-const string: ModuleMeta = {
-  fnTable: new Map(),
-  fnSignatures: new Map(),
-  liftedLambdas: [],
-  needsClosureRuntime: false,
-  name: "string",
-  dataPtr: 0,
-  exports: {
-    string_copy: {
-      kind: "func",
-      signature: "ii_v",
-    },
-    string: {
-      kind: "struct",
-      meta: {
-        name: "string",
-        size: 8,
-        exported: true,
-        members: {
-          len: {
-            name: "len",
-            offset: 0,
-            size: 4,
-            type: "i32",
-          },
-          data: {
-            name: "data",
-            offset: 4,
-            size: 4,
-            type: "i32",
-          },
-        },
-      },
-    },
-  },
-  functions: {},
-  globals: {},
-  imports: {},
-  stringPool: {},
-  structs: {
-    string: {
-      name: "string",
-      size: 8,
-      exported: true,
-      members: {
-        len: {
-          name: "len",
-          offset: 0,
-          size: 4,
-          type: "i32",
-        },
-        data: {
-          name: "data",
-          offset: 4,
-          size: 4,
-          type: "*u8",
-        },
-      },
-    },
-  },
-  data: [],
-  deferredGlobalInits: [],
-};
-
 export const stdlib: Record<string, ModuleMeta> = {
   math,
   memory,
-  string,
 };

@@ -1,4 +1,5 @@
 import { exec } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
@@ -9,16 +10,64 @@ import type { MapleModule } from "./MapleModule";
 import { stdlib } from "./stdlib";
 import { typeCheck } from "./TypeChecker";
 
+export type ResolvedImportModule =
+  | { kind: "legacy"; data: ModuleMeta }
+  | { kind: "maple"; path: string; ast: ASTProgram; data: ModuleMeta };
+
+const localStdlibSourceDir = path.join(__dirname, "stdlib");
+const stdlibSourceDir = existsSync(localStdlibSourceDir)
+  ? localStdlibSourceDir
+  : path.resolve("src/compiler/stdlib");
+
+function bundledStdlibPath(importPath: string): string | undefined {
+  if (importPath.includes("/") || importPath.startsWith(".")) {
+    return undefined;
+  }
+  const sourcePath = path.join(stdlibSourceDir, `${importPath}.maple`);
+  return existsSync(sourcePath) ? sourcePath : undefined;
+}
+
+function parseMapleModule(importPath: string, sourcePath: string): ResolvedImportModule {
+  const ast = parseFile(importPath, readFileSync(sourcePath, "utf8"));
+  if (!ast) {
+    throw new Error(`unable to find module: ${importPath}`);
+  }
+  return {
+    kind: "maple",
+    path: sourcePath,
+    ast,
+    data: extractModuleMeta(ast, true),
+  };
+}
+
+function resolveStdlibModule(importPath: string): ResolvedImportModule | undefined {
+  const sourcePath = bundledStdlibPath(importPath);
+  if (sourcePath) {
+    return parseMapleModule(importPath, sourcePath);
+  }
+  const legacy = stdlib[importPath];
+  return legacy ? { kind: "legacy", data: legacy } : undefined;
+}
+
+export function resolveImportModule(importPath: string, importerDir: string): ResolvedImportModule {
+  const stdlibModule = resolveStdlibModule(importPath);
+  if (stdlibModule) {
+    return stdlibModule;
+  }
+  return parseMapleModule(importPath, path.join(importerDir, importPath));
+}
+
 /** Resolve stdlib imports on a single module (tests, tooling). */
 export function linkStdlibImports(meta: ModuleMeta): void {
   for (const [impName, imp] of Object.entries(meta.imports)) {
     if (imp.resolved) {
       continue;
     }
-    const stdMod = stdlib[imp.module];
-    if (!stdMod) {
+    const resolvedModule = resolveStdlibModule(imp.module);
+    if (!resolvedModule) {
       continue;
     }
+    const stdMod = resolvedModule.data;
     const entry = stdMod.exports[impName];
     if (!entry) {
       throw new Error(`no export "${impName}" from stdlib "${imp.module}"`);
@@ -95,16 +144,12 @@ export async function compiler(
 
   // 1. Build module data
   for (const imp of Object.values(data.imports)) {
-    const stdMod = stdlib[imp.module];
-    if (stdMod) {
-      stdLibList[imp.module] = stdMod;
+    const resolvedModule = resolveImportModule(imp.module, cwd);
+    if (resolvedModule.kind === "legacy") {
+      stdLibList[imp.module] = resolvedModule.data;
       continue;
     }
-    const userMod = parseFile(imp.module, await openFile(path.join(cwd, imp.module)));
-    if (!userMod) {
-      throw new Error(`unable to find module: ${imp.module}`);
-    }
-    pass1[imp.module] = { data: extractModuleMeta(userMod, true), ast: userMod };
+    pass1[imp.module] = { data: resolvedModule.data, ast: resolvedModule.ast };
   }
 
   // 1b. Collect function references for closure runtime

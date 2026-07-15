@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { compiler, linkStdlibImports } from "../src/compiler/compiler";
+import { compiler, linkStdlibImports, resolveImportModule } from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { resolveStructMember } from "../src/compiler/emitters/expression/member";
@@ -1031,6 +1031,58 @@ describe("Compiler Pipeline", () => {
   test("emitted wat includes runtime memory import", () => {
     const { wat } = compile("fn test(): void {}");
     assert(wat.includes('(import "runtime" "memory" (memory 2))'));
+  });
+});
+
+describe("Compiler: stdlib source resolution", () => {
+  test("bare string resolves to bundled Maple source before a local file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "maple-stdlib-source-"));
+    await writeFile(
+      path.join(dir, "string"),
+      "export fn string_copy(value: i32): i32 { return value; }",
+    );
+
+    try {
+      const resolved = resolveImportModule("string", dir);
+      assert.equal(resolved.kind, "maple");
+      assert.equal(resolved.data.exports.string_copy?.kind, "func");
+      assert.equal(resolved.data.exports.string_copy?.signature, "ii_v");
+      assert.deepEqual(Object.keys(resolved.data.exports), ["string_copy"]);
+      assert.equal(path.basename(resolved.path), "string.maple");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("math still resolves through legacy metadata", () => {
+    const resolved = resolveImportModule("math", "/unused");
+    assert.equal(resolved.kind, "legacy");
+    assert.equal(resolved.data.exports.sqrt?.kind, "func");
+    assert.equal(resolved.data.exports.sqrt?.signature, "f_f");
+  });
+
+  test("unknown bare imports keep the existing file error", () => {
+    assert.throws(
+      () => resolveImportModule("definitely-not-a-maple-module", "/nonexistent"),
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
+  });
+
+  test("relative string paths resolve to the importer-local file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "maple-local-source-"));
+    const localPath = path.join(dir, "string.maple");
+    await writeFile(localPath, "export fn local_string(value: i32): i32 { return value; }");
+
+    try {
+      const resolved = resolveImportModule("./string.maple", dir);
+      assert.equal(resolved.kind, "maple");
+      assert.equal(resolved.path, localPath);
+      assert.equal(resolved.data.exports.local_string?.kind, "func");
+      assert.equal(resolved.data.exports.local_string?.signature, "i_i");
+      assert.equal(resolved.data.exports.string_copy, undefined);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

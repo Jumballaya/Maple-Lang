@@ -2748,9 +2748,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  // stdlib.ts declares `string_copy` with the wrong arity. The actual WAT
-  // takes (i32, i32) and returns nothing.
-  maybeTest("string_copy import matches its real (src, dst) -> void signature", () => {
+  maybeTest("string_copy import uses its parsed (src, dst) -> void signature", () => {
     const wat = compile(`
       import string_copy from "string"
       export fn run(): void {
@@ -3406,6 +3404,32 @@ describe("stdlib execution", () => {
       }
     `);
     assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("string_copy with an empty source is a no-op", () => {
+    const wat = compile(`
+      import string_copy from "string"
+      export fn run(): i32 {
+        let source: string = "";
+        let destination: string = "abc";
+        let expected: string = "abc";
+        string_copy(source, destination);
+        if (source.len != 0) { return 0; }
+        if (destination.len != 3) { return 0; }
+        return destination == expected;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 1);
+  });
+
+  maybeTest("built-in string metadata works without importing string", () => {
+    const wat = compile(`
+      export fn run(): i32 {
+        let value: string = "maple";
+        return value.len;
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 5);
   });
 
   maybeTest("one program can import memory and math together", () => {
