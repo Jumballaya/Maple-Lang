@@ -15,7 +15,9 @@ import type { ASTExpression } from "../parser/ast/types/ast.type";
 import {
   baseScalar,
   cmpOps,
+  isFnType,
   isUnsignedMapleInteger,
+  parseFnType,
   valueTypeToWasm,
   type WasmValueType,
 } from "./emitters/emit.types";
@@ -354,6 +356,29 @@ export class ModuleEmitter {
     if (expr instanceof CallExpression) {
       const intrinsic = getIntrinsic(expr.func);
       if (intrinsic) return intrinsic.result;
+
+      const fnVariable = this.getVar(expr.func);
+      if (fnVariable && isFnType(fnVariable.type)) {
+        const parsed = parseFnType(fnVariable.type);
+        if (!parsed || parsed.results.length > 1) return null;
+        const result = parsed.results[0];
+        if (!result || result === "void") return "void";
+        const scalar = baseScalar(result);
+        if (scalar === "f32" || scalar === "f64" || scalar === "i64" || scalar === "u64") {
+          return scalar;
+        }
+        if (
+          scalar === "u32" ||
+          scalar === "u16" ||
+          scalar === "u8" ||
+          scalar === "i32" ||
+          scalar === "i16" ||
+          scalar === "i8"
+        ) {
+          return scalar;
+        }
+        return valueTypeToWasm(result);
+      }
 
       const internal = this.mod.functions[expr.func];
       if (internal) {

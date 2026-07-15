@@ -495,7 +495,7 @@ function emitMakeFnRefHelper(mod: ModuleMeta, emitter: ModuleEmitter): void {
     lines.push("    )");
     lines.push("  )");
   }
-  lines.push("  (local.set $ptr (call $alloc (i32.const 8)))");
+  lines.push(`  (local.set $ptr (call $${mod.closureAllocator ?? "alloc"} (i32.const 8)))`);
   lines.push("  (i32.store (local.get $ptr) (local.get $idx))");
   lines.push("  (i32.store offset=4 (local.get $ptr) (i32.const 0))");
   lines.push("  (local.get $ptr)");

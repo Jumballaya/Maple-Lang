@@ -247,12 +247,17 @@ function rewriteBlock(
   }
 }
 
-function rewriteData(bytes: string, addresses: Map<number, number>): string {
+function rewriteData(
+  bytes: string,
+  addresses: Map<number, number>,
+  pointerOffsets: number[],
+): string {
   const values = bytes
     .split("\\")
     .filter(Boolean)
     .map((value) => Number.parseInt(value, 16));
-  for (let offset = 0; offset + 3 < values.length; offset += 4) {
+  for (const offset of pointerOffsets) {
+    if (offset < 0 || offset + 3 >= values.length) continue;
     const source =
       (values[offset] ?? 0) |
       ((values[offset + 1] ?? 0) << 8) |
@@ -373,7 +378,11 @@ function buildMeta(model: MergedProgram): ModuleMeta {
     data: model.data.map((entry) => ({
       name: entry.id,
       addr: entry.address,
-      bytes: rewriteData(entry.bytes, model.dataAddresses.get(entry.moduleKey) ?? new Map()),
+      bytes: rewriteData(
+        entry.bytes,
+        model.dataAddresses.get(entry.moduleKey) ?? new Map(),
+        entry.pointerOffsets,
+      ),
     })),
     stringPool: {},
     dataPtr: model.dataEnd,
@@ -406,11 +415,11 @@ export function emitMergedProgram(model: MergedProgram): string {
   const allocator = [...model.imports].find(
     ([local, target]) => local.endsWith("$$alloc") && target.endsWith("$$malloc"),
   )?.[1];
-  if (meta.imports.alloc?.synthesized) delete meta.imports.alloc;
-  let wat = emitModule(ast, meta).buildWat();
   if (meta.needsClosureRuntime) {
     if (!allocator) throw new Error("function references require the merged memory allocator");
-    wat = wat.replaceAll("$alloc", () => `$${allocator}`);
+    meta.closureAllocator = allocator;
   }
+  if (meta.imports.alloc?.synthesized) delete meta.imports.alloc;
+  const wat = emitModule(ast, meta).buildWat();
   return publicExports(wat, model);
 }

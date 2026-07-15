@@ -103,10 +103,10 @@ export class ModuleBuilder {
   }
 
   // Push an already-encoded byte string at an address; returns addr
-  public addBytes(bytes: string, addr?: number, align = 8): number {
+  public addBytes(bytes: string, addr?: number, align = 8, pointerOffsets?: number[]): number {
     const size = Math.floor(bytes.length / 3); // \xx <-- 3 characters per byte
     const a = addr ?? this.dataAlloc(size, align);
-    this.data.push({ bytes, addr: a });
+    this.data.push({ bytes, addr: a, ...(pointerOffsets ? { pointerOffsets } : {}) });
     return a;
   }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe } from "node:test";
@@ -56,7 +56,9 @@ async function compileProject(files: Project): Promise<{
   const dir = await mkdtemp(path.join(tmpdir(), "maple-merge-"));
   try {
     for (const [name, source] of Object.entries(files)) {
-      await writeFile(path.join(dir, name), source);
+      const filePath = path.join(dir, name);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, source);
     }
     const entry = path.join(dir, "main.maple");
     const output = path.join(dir, "app.wasm");
@@ -188,6 +190,26 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 2);
   });
 
+  maybeTest("relocates only pointer fields in merged data", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        import dependency from "./dependency.maple"
+        let values: i32[] = [65536];
+        let labels: string[] = ["kept"];
+        let expected: string = "kept";
+        export fn run(): i32 {
+          return values[0] + (labels[0] == expected) + dependency() - dependency();
+        }
+      `,
+      "dependency.maple": `
+        let text: string = "data";
+        export fn dependency(): i32 { return text.len; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 65537);
+  });
+
   maybeTest("exports only entry-module API names", async () => {
     const { instance, module, wat } = await compileProject({
       "main.maple": `
@@ -203,6 +225,23 @@ describe("Compiler: merged whole-program emission", () => {
       ["run"],
     );
     assert(!wat.includes('(export "add"'));
+  });
+
+  maybeTest("preserves an alloc export when function references need malloc", async () => {
+    const { instance, module } = await compileProject({
+      "main.maple": `
+        fn add(a: i32, b: i32): i32 { return a + b; }
+        export fn alloc(): i32 { return 7; }
+        export fn run(): i32 {
+          let op: fn(i32,i32):i32 = add;
+          return op(19, 23);
+        }
+      `,
+    });
+
+    assert.equal(call(instance, "alloc"), 7);
+    assert.equal(call(instance, "run"), 42);
+    assert(WebAssembly.Module.exports(module).some((entry) => entry.name === "alloc"));
   });
 
   maybeTest("keeps same-named struct equality helpers module-local", async () => {
@@ -440,6 +479,40 @@ describe("Compiler: merged-program acceptance", () => {
     });
 
     assert.equal(call(instance, "run"), 11);
+  });
+
+  maybeTest("materializes a global literal of an imported struct type", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        import Pair from "./types.maple"
+        let origin: Pair = { left = 10, right = 32, label = "pair" };
+        let expected: string = "pair";
+        export fn run(): i32 { return origin.left + origin.right + (origin.label == expected); }
+      `,
+      "types.maple": "export struct Pair { left: i32, right: i32, label: string }",
+    });
+
+    assert.equal(call(instance, "run"), 43);
+  });
+
+  maybeTest("does not wire heap startup to a user stdlib path lookalike", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        import spoof_calls from "./stdlib/memory.maple"
+        import malloc from "memory"
+        export fn run(): i32 {
+          let block: i32 = malloc(8);
+          return spoof_calls() + (block - block);
+        }
+      `,
+      "stdlib/memory.maple": `
+        let calls: i32 = 0;
+        export fn heap_init(data_end: i32): void { calls = calls + 1; }
+        export fn spoof_calls(): i32 { return calls; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 0);
   });
 
   maybeTest("rejects identical layouts with different nominal identities", async () => {

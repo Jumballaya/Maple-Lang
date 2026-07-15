@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
+import { extractLinkedStructGlobals } from "./emitters/emit.data";
 import { canonicalFnType, parseFnType } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
 import { emitMergedProgram } from "./emitters/merge";
@@ -177,6 +178,10 @@ export async function compiler(
         }
       }
     }
+  }
+
+  for (const mod of graph.modules.values()) {
+    extractLinkedStructGlobals(mod.ast, mod.data);
   }
 
   // Validation pass — type checker

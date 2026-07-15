@@ -78,7 +78,12 @@ export type ImportMeta = {
   mapleParams?: string[];
   mapleResults?: string[];
 };
-export type ModuleDataMeta = { name?: string; addr: number; bytes: string };
+export type ModuleDataMeta = {
+  name?: string;
+  addr: number;
+  bytes: string;
+  pointerOffsets?: number[];
+};
 
 // Initializer that runs once at startup (guarded by $__globals_inited):
 // "memory" writes a struct-literal field, "global" assigns a non-const global.
@@ -127,6 +132,7 @@ export type ModuleMeta = {
   stringPool: Record<string, number>;
   dataPtr: number;
   memoryMinimumPages?: number;
+  closureAllocator?: string;
   deferredGlobalInits: DeferredGlobalInit[];
   fnTable: Map<string, FnTableEntry>;
   fnSignatures: Map<FnTypeKey, FnSignature>;

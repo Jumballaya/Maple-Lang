@@ -10,6 +10,7 @@ export type ResolvedImportModule = {
   path: string;
   ast: ASTProgram;
   data: ModuleMeta;
+  bundledStdlib?: string;
 };
 
 export type ResolvedExternalModule = {
@@ -42,6 +43,7 @@ export type ModuleRecord = {
   filePath: string;
   ast: ASTProgram;
   data: ModuleMeta;
+  bundledStdlib?: string;
   dependencies: ModuleDependency[];
 };
 
@@ -90,7 +92,8 @@ function bundledStdlibPath(specifier: string): string | undefined {
 
 export function resolveBundledStdlibModule(specifier: string): ResolvedImportModule | undefined {
   const sourcePath = bundledStdlibPath(specifier);
-  return sourcePath ? parseMapleModule(specifier, sourcePath) : undefined;
+  if (!sourcePath) return undefined;
+  return { ...parseMapleModule(specifier, sourcePath), bundledStdlib: specifier };
 }
 
 export function resolveImportModule(specifier: string, importerDir: string): ResolvedImportModule {
@@ -168,6 +171,7 @@ export function buildModuleGraph(
       filePath,
       ast: resolvedModule.ast,
       data: resolvedModule.data,
+      ...(resolvedModule.bundledStdlib ? { bundledStdlib: resolvedModule.bundledStdlib } : {}),
       dependencies: [],
     };
     modules.set(key, record);

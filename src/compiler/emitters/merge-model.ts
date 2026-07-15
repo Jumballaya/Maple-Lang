@@ -88,6 +88,7 @@ export type MergedDataSegment = {
   address: number;
   size: number;
   bytes: string;
+  pointerOffsets: number[];
 };
 
 export type MergedDataAllocation = {
@@ -303,6 +304,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         address: dataCursor,
         size: segmentSize(source.bytes),
         bytes: source.bytes,
+        pointerOffsets: source.pointerOffsets ?? [],
       };
       data.push(entry);
       moduleData.push(entry);
@@ -735,9 +737,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
 
   const startupInitializers: MergedStartupInitializer[] = [];
   const memoryModule = orderedModules.find(
-    (module) =>
-      module.filePath.endsWith("/stdlib/memory.maple") &&
-      module.data.exports.heap_init?.kind === "func",
+    (module) => module.bundledStdlib === "memory" && module.data.exports.heap_init?.kind === "func",
   );
   if (memoryModule) {
     startupInitializers.push({

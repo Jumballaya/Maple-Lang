@@ -3286,6 +3286,18 @@ describe("stress", () => {
 });
 
 describe("stdlib execution", () => {
+  maybeTest("fn-reference calls compose inside binary expressions", () => {
+    const wat = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn plus_one(value: i32): i32 { return value + 1; }
+      export fn run(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1, 2) + plus_one(4);
+      }
+    `);
+    assert.equal(runStdlibExport(wat, "run"), 8);
+  });
+
   maybeTest("direct malloc fallback stays clear of structs and static data", () => {
     const wat = compile(`
       import malloc from "memory"

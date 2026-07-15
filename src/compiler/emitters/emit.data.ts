@@ -1,3 +1,4 @@
+import type { ASTProgram } from "../../parser/ast/ASTProgram";
 import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression";
 import { BooleanLiteralExpression } from "../../parser/ast/expressions/BooleanLiteralExpression";
@@ -21,6 +22,12 @@ import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.typ
 import type { ModuleBuilder } from "../ModuleBuilder";
 import type { ModuleEmitter } from "../ModuleEmitter";
 import { baseScalar, sizeofType } from "./emit.types";
+import type { ModuleMeta, StructData } from "./emitter.types";
+
+type StaticDataBuilder = Pick<
+  ModuleBuilder,
+  "addBytes" | "dataAlloc" | "deferredGlobalInits" | "getStruct"
+>;
 
 export function extractGlobalData(
   stmt: ASTStatement,
@@ -189,9 +196,10 @@ function extractArrayLiteral(
     padBytesTo(numToLittleEndian(values, elemType), 4),
     undefined,
     4,
+    expr.memberType === "string" ? values.map((_, index) => index * 4) : undefined,
   );
   const header = numToLittleEndian([expr.elements.length, dataAddr], "i32");
-  expr.location = builder.addBytes(header, undefined, 4);
+  expr.location = builder.addBytes(header, undefined, 4, [4]);
 }
 
 // Pad an encoded "\xx" byte string with explicit zeros to a multiple of
@@ -205,7 +213,7 @@ function padBytesTo(bytes: string, alignment: number): string {
   return padded;
 }
 
-function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuilder) {
+function extractStringLiteral(expr: StringLiteralExpression, builder: StaticDataBuilder) {
   const lit = expr.value;
   const utf8 = new TextEncoder().encode(lit);
   const len = utf8.length;
@@ -228,12 +236,16 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: ModuleBuil
 
   const charPtr = builder.addBytes(rawBytes, undefined, 4); // paddedLen bytes, align 4
   const header = numToLittleEndian([len, charPtr], "i32"); // [len, ptr]
-  const hdrAddr = builder.addBytes(header, undefined, 4); // header immediately follows
+  const hdrAddr = builder.addBytes(header, undefined, 4, [4]); // header immediately follows
   expr.location = hdrAddr; // string pointer points to header
 }
 
-function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuilder) {
-  const sd = builder.getStruct(expr.name);
+function extractStructLiteral(
+  expr: StructLiteralExpression,
+  builder: StaticDataBuilder,
+  linkedStruct?: StructData,
+) {
+  const sd = linkedStruct ?? builder.getStruct(expr.name);
   if (!sd) {
     const addr = builder.dataAlloc(0);
     expr.location = addr;
@@ -243,6 +255,7 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
   const addr = builder.dataAlloc(sd.size, 8);
   let encoded = "";
   let coveredBytes = 0;
+  const pointerOffsets: number[] = [];
   const members = Object.values(sd.members).sort((a, b) => a.offset - b.offset);
   for (const member of members) {
     for (; coveredBytes < member.offset; coveredBytes++) {
@@ -260,6 +273,7 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
     } else if (value instanceof StringLiteralExpression) {
       extractStringLiteral(value, builder);
       encoded += numToLittleEndian([value.location], "i32");
+      pointerOffsets.push(member.offset);
     } else {
       encoded += numToLittleEndian([0], encodedType);
       if (value) {
@@ -279,8 +293,34 @@ function extractStructLiteral(expr: StructLiteralExpression, builder: ModuleBuil
   }
 
   // cover dataAlloc's full 8-byte stride so data segments stay dense
-  builder.addBytes(padBytesTo(encoded, 8), addr);
+  builder.addBytes(padBytesTo(encoded, 8), addr, 8, pointerOffsets);
   expr.location = addr;
+}
+
+export function extractLinkedStructGlobals(program: ASTProgram, meta: ModuleMeta): void {
+  const builder: StaticDataBuilder = {
+    deferredGlobalInits: meta.deferredGlobalInits,
+    getStruct: (name) => meta.structs[name] ?? meta.imports[name]?.structMeta,
+    dataAlloc: (size, alignment = 4) => {
+      const address = meta.dataPtr;
+      meta.dataPtr += alignup(size, alignment);
+      return address;
+    },
+    addBytes: (bytes, address, alignment = 8, pointerOffsets) => {
+      const size = Math.floor(bytes.length / 3);
+      const target = address ?? builder.dataAlloc(size, alignment);
+      meta.data.push({ bytes, addr: target, ...(pointerOffsets ? { pointerOffsets } : {}) });
+      return target;
+    },
+  };
+
+  for (const statement of program.statements) {
+    if (!(statement instanceof LetStatement)) continue;
+    if (!(statement.expression instanceof StructLiteralExpression)) continue;
+    const structImport = meta.imports[statement.expression.name];
+    if (!structImport?.structMeta || meta.structs[statement.expression.name]) continue;
+    extractStructLiteral(statement.expression, builder, structImport.structMeta);
+  }
 }
 
 function numToLittleEndian(ns: (number | bigint)[], type: string) {
