@@ -1,59 +1,21 @@
 import { exec } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
 import type { ModuleMeta } from "./emitters/emitter.types";
-import { collectFnReferences, emitModule, extractModuleMeta } from "./emitters/module";
+import { emitModule, extractModuleMeta } from "./emitters/module";
 import type { MapleModule } from "./MapleModule";
+import {
+  buildModuleGraph,
+  type ResolvedImportModule,
+  resolveBundledStdlibModule,
+  resolveImportModule,
+} from "./module-graph";
 import { typeCheck } from "./TypeChecker";
 
-export type ResolvedImportModule = {
-  kind: "maple";
-  path: string;
-  ast: ASTProgram;
-  data: ModuleMeta;
-};
-
-const localStdlibSourceDir = path.join(__dirname, "stdlib");
-const stdlibSourceDir = existsSync(localStdlibSourceDir)
-  ? localStdlibSourceDir
-  : path.resolve("src/compiler/stdlib");
-
-function bundledStdlibPath(importPath: string): string | undefined {
-  if (importPath.includes("/") || importPath.startsWith(".")) {
-    return undefined;
-  }
-  const sourcePath = path.join(stdlibSourceDir, `${importPath}.maple`);
-  return existsSync(sourcePath) ? sourcePath : undefined;
-}
-
-function parseMapleModule(importPath: string, sourcePath: string): ResolvedImportModule {
-  const ast = parseFile(importPath, readFileSync(sourcePath, "utf8"));
-  if (!ast) {
-    throw new Error(`unable to find module: ${importPath}`);
-  }
-  return {
-    kind: "maple",
-    path: sourcePath,
-    ast,
-    data: extractModuleMeta(ast, true),
-  };
-}
-
-function resolveStdlibModule(importPath: string): ResolvedImportModule | undefined {
-  const sourcePath = bundledStdlibPath(importPath);
-  return sourcePath ? parseMapleModule(importPath, sourcePath) : undefined;
-}
-
-export function resolveImportModule(importPath: string, importerDir: string): ResolvedImportModule {
-  const stdlibModule = resolveStdlibModule(importPath);
-  if (stdlibModule) {
-    return stdlibModule;
-  }
-  return parseMapleModule(importPath, path.join(importerDir, importPath));
-}
+export type { ResolvedImportModule };
+export { resolveImportModule };
 
 /** Resolve stdlib imports on a single module (tests, tooling). */
 export function linkStdlibImports(meta: ModuleMeta): void {
@@ -61,7 +23,7 @@ export function linkStdlibImports(meta: ModuleMeta): void {
     if (imp.resolved) {
       continue;
     }
-    const resolvedModule = resolveStdlibModule(imp.module);
+    const resolvedModule = resolveBundledStdlibModule(imp.module);
     if (!resolvedModule) {
       continue;
     }
@@ -133,45 +95,28 @@ export async function compiler(
     return;
   }
   const data = extractModuleMeta(entryAST, true);
-
-  const pass1: Record<string, { data: ModuleMeta; ast: ASTProgram }> = {
-    [entryAST.name]: { data, ast: entryAST },
-  };
-
-  // 1. Build module data
-  for (const imp of Object.values(data.imports)) {
-    const resolvedModule = resolveImportModule(imp.module, cwd);
-    pass1[imp.module] = { data: resolvedModule.data, ast: resolvedModule.ast };
-  }
-
-  // 1b. Collect function references for closure runtime
-  for (const mod of Object.values(pass1)) {
-    collectFnReferences(mod.ast, mod.data);
-  }
-
-  // 1c. Re-scan imports for stdlib modules synthesized in step 1b
-  // (collectFnReferences may inject e.g. memory.malloc for __make_fnref).
-  for (const mod of Object.values(pass1)) {
-    for (const imp of Object.values(mod.data.imports)) {
-      if (pass1[imp.module]) {
-        continue;
-      }
-      const sourcePath = bundledStdlibPath(imp.module);
-      if (sourcePath) {
-        const resolvedModule = parseMapleModule(imp.module, sourcePath);
-        pass1[imp.module] = { data: resolvedModule.data, ast: resolvedModule.ast };
-      }
-    }
-  }
+  const absoluteEntryPath = path.resolve(cwd, path.basename(entryPoint));
+  const graph = buildModuleGraph(absoluteEntryPath, {
+    entryModule: {
+      kind: "maple",
+      path: absoluteEntryPath,
+      ast: entryAST,
+      data,
+    },
+  });
 
   // 2. Link module imports/exports
-  for (const mod of Object.values(pass1)) {
+  for (const mod of graph.modules.values()) {
     const data = mod.data;
     for (const [impName, imp] of Object.entries(data.imports)) {
       if (imp.resolved) {
         continue;
       }
-      const userEntry = pass1[imp.module];
+      const dependency = mod.dependencies.find((entry) => entry.specifier === imp.module);
+      if (dependency?.kind === "external") {
+        continue;
+      }
+      const userEntry = dependency ? graph.modules.get(dependency.key) : undefined;
       if (!userEntry) {
         throw new Error(`no module "${imp.module}" found`);
       }
@@ -186,7 +131,7 @@ export async function compiler(
   }
 
   // Validation pass — type checker
-  for (const mod of Object.values(pass1)) {
+  for (const mod of graph.modules.values()) {
     const typeErrors = typeCheck(mod.ast, mod.data);
     if (typeErrors.length > 0) {
       for (const e of typeErrors) {
@@ -200,7 +145,7 @@ export async function compiler(
   // step 3. compile
   // Emit code
   const toWrite: MapleModule[] = [];
-  for (const mod of Object.values(pass1)) {
+  for (const mod of graph.modules.values()) {
     toWrite.push(emitModule(mod.ast, mod.data));
   }
 
