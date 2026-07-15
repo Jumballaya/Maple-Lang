@@ -58,9 +58,8 @@ fn split_if_big(hdr: i32, want: i32): i32 {
   return 0;
 }
 
-// heap_init intentionally remains unwired, so heap state starts at zero.
-// T19 will initialize it from the merged static-data end.
-fn heap_init(data_end: i32): void {
+// Resetting the heap invalidates every allocation returned before this call.
+export fn heap_init(data_end: i32): void {
   HEAP_BASE = align8(data_end);
   heap_end = HEAP_BASE;
   free_head = 0;
@@ -89,6 +88,11 @@ fn freelist_unlink(hdr: i32): void {
 }
 
 export fn malloc(n_bytes: i32): i32 {
+  // Lazy fallback for unwired single-module and direct-harness instantiations.
+  // Merged programs initialize the heap from their final static-data end.
+  if (HEAP_BASE == 0) {
+    heap_init(131072);
+  }
   let n: i32 = n_bytes;
   if ((n_bytes as u32) < (1 as u32)) {
     n = 1;

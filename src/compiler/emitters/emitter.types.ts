@@ -95,6 +95,11 @@ export type DeferredGlobalInit =
       name: string;
       type: string;
       expr: ASTExpression;
+    }
+  | {
+      kind: "call";
+      name: string;
+      args: Array<{ type: "i32"; value: number }>;
     };
 
 export type FunctionContext = {
@@ -121,6 +126,7 @@ export type ModuleMeta = {
   data: Array<ModuleDataMeta>;
   stringPool: Record<string, number>;
   dataPtr: number;
+  memoryMinimumPages?: number;
   deferredGlobalInits: DeferredGlobalInit[];
   fnTable: Map<string, FnTableEntry>;
   fnSignatures: Map<FnTypeKey, FnSignature>;

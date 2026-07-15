@@ -1104,7 +1104,14 @@ describe("Compiler: stdlib source resolution", () => {
     const resolved = resolveImportModule("memory", "/unused");
     assert.equal(resolved.kind, "maple");
     assert.equal(path.basename(resolved.path), "memory.maple");
-    assert.deepEqual(Object.keys(resolved.data.exports).sort(), ["free", "malloc", "realloc"]);
+    assert.deepEqual(Object.keys(resolved.data.exports).sort(), [
+      "free",
+      "heap_init",
+      "malloc",
+      "realloc",
+    ]);
+    assert.equal(resolved.data.exports.heap_init?.kind, "func");
+    assert.equal(resolved.data.exports.heap_init?.signature, "i_v");
     assert.equal(resolved.data.exports.malloc?.kind, "func");
     assert.equal(resolved.data.exports.malloc?.signature, "i_i");
     assert.equal(resolved.data.exports.free?.kind, "func");

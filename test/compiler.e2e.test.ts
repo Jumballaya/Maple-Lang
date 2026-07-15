@@ -7,17 +7,20 @@ import path from "node:path";
 import { describe } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compiler } from "../src/compiler/compiler";
-import { maybeTest } from "./helpers";
+import { maybeTest, memoryMinimumFromWat } from "./helpers";
 
 type Project = Record<string, string>;
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-function instantiate(bytes: Uint8Array): {
+function instantiate(
+  bytes: Uint8Array,
+  wat: string,
+): {
   instance: WebAssembly.Instance;
   module: WebAssembly.Module;
 } {
-  const memory = new WebAssembly.Memory({ initial: 4 });
+  const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
   const wasmBytes = new Uint8Array(bytes.byteLength);
   wasmBytes.set(bytes);
   const module = new WebAssembly.Module(wasmBytes);
@@ -39,7 +42,7 @@ async function compileEntry(entry: string): Promise<{
       readFile(path.join(outputDir, "app.wat"), "utf8"),
       readFile(output),
     ]);
-    return { wat, ...instantiate(bytes) };
+    return { wat, ...instantiate(bytes, wat) };
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }
@@ -62,7 +65,7 @@ async function compileProject(files: Project): Promise<{
       readFile(path.join(dir, "app.wat"), "utf8"),
       readFile(output),
     ]);
-    return { wat, ...instantiate(bytes) };
+    return { wat, ...instantiate(bytes, wat) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -91,6 +94,15 @@ function call(instance: WebAssembly.Instance, name: string, ...args: number[]): 
   const fn = instance.exports[name];
   assert.equal(typeof fn, "function", `missing function export ${name}`);
   return (fn as (...values: number[]) => unknown)(...args);
+}
+
+function wiredHeapBase(wat: string): number {
+  const values = [...wat.matchAll(/\(call \$[^\s()]*heap_init \(i32\.const (\d+)\)\)/g)].map(
+    (match) => Number(match[1]),
+  );
+  const generated = values.find((value) => value !== 131072);
+  assert(generated !== undefined, "missing generated heap_init call");
+  return generated;
 }
 
 describe("Compiler: merged whole-program emission", () => {
@@ -255,6 +267,95 @@ describe("Compiler: merged whole-program emission", () => {
     assert.deepEqual(WebAssembly.Module.imports(module), [
       { module: "runtime", name: "memory", kind: "memory" },
     ]);
+  });
+
+  maybeTest("starts the merged heap above static data without corrupting literals", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        struct Cell { value: i32 }
+        let label: string = "heap-safe";
+        let expected: string = "heap-safe";
+
+        export fn run(): i32 {
+          let ptr: i32 = malloc(8);
+          let cell: Cell = ptr as Cell;
+          cell.value = 37;
+          if (cell.value != 37) { return 0; }
+          if (label != expected) { return 0; }
+          return ptr;
+        }
+      `,
+    });
+
+    const heapBase = wiredHeapBase(wat);
+    const pointer = call(instance, "run") as number;
+    assert(pointer >= heapBase + 8);
+    assert.equal(pointer % 8, 0);
+  });
+
+  maybeTest("mixes heap, shadow-stack structs, and string literals", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        struct Cell { value: i32 }
+        let label: string = "all-regions";
+        let expected: string = "all-regions";
+
+        export fn run(): i32 {
+          let local: Cell = { value = 5 };
+          let ptr: i32 = malloc(8);
+          let heap: Cell = ptr as Cell;
+          heap.value = 36;
+          return local.value + heap.value + (label == expected);
+        }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 42);
+  });
+
+  maybeTest("sizes memory and the heap from more than one page of static data", async () => {
+    const literals = Array.from({ length: 72 }, (_, index) => {
+      const contents = `${"x".repeat(1016)}-${index.toString().padStart(3, "0")}`;
+      return `let static_${index}: string = "${contents}";`;
+    }).join("\n");
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        ${literals}
+        let expected: string = "${"x".repeat(1016)}-071";
+
+        export fn allocate(): i32 {
+          if (static_71 != expected) { return 0; }
+          return malloc(8);
+        }
+        export fn pages(): i32 { return __memory_size(); }
+      `,
+    });
+
+    const heapBase = wiredHeapBase(wat);
+    const minimum = memoryMinimumFromWat(wat);
+    assert(heapBase > 2 * 65_536);
+    assert.equal(minimum, Math.max(2, Math.ceil(heapBase / 65_536) + 1));
+    assert.equal(call(instance, "pages"), minimum);
+    assert((call(instance, "allocate") as number) >= heapBase + 8);
+  });
+
+  maybeTest("resets the heap when heap_init is called explicitly", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        import malloc, heap_init from "memory"
+        export fn run(base: i32): i32 {
+          let first: i32 = malloc(8);
+          heap_init(base);
+          let second: i32 = malloc(8);
+          return first == second;
+        }
+      `,
+    });
+
+    assert.equal(call(instance, "run", wiredHeapBase(wat)), 1);
   });
 
   maybeTest("runs deferred global initializers in dependency post-order", async () => {
@@ -424,7 +525,11 @@ describe("Compiler: merged-program acceptance", () => {
         },
       );
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      const { instance } = instantiate(await readFile(output));
+      const [bytes, wat] = await Promise.all([
+        readFile(output),
+        readFile(path.join(outputDir, "app.wat"), "utf8"),
+      ]);
+      const { instance } = instantiate(bytes, wat);
       assert.equal(call(instance, "_start", 2, 3), 10);
     } finally {
       await rm(outputDir, { recursive: true, force: true });

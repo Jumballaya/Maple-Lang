@@ -28,7 +28,7 @@ import type {
 } from "./emitters/emitter.types";
 import { makeLabel } from "./emitters/emitter.utils";
 import { getIntrinsic } from "./intrinsics";
-import { MapleModule } from "./MapleModule";
+import { MapleModule, minimumMemoryPages } from "./MapleModule";
 import { FuncWriter } from "./writer/FuncWriter";
 import { Writer } from "./writer/Writer";
 import type { IWriter } from "./writer/writer.type";
@@ -139,15 +139,19 @@ export class ModuleEmitter {
     const globals = this.needsShadowStack
       ? ["(global $__sp (mut i32) (i32.const 65536))", ...this.globals]
       : this.globals;
-    return new MapleModule(this.mod.name, {
-      globals,
-      data: this.data,
-      functions: this.functions,
-      imports: this.imports,
-      signatures: this.signatures,
-      tables: this.tables,
-      elem: this.elem,
-    });
+    return new MapleModule(
+      this.mod.name,
+      {
+        globals,
+        data: this.data,
+        functions: this.functions,
+        imports: this.imports,
+        signatures: this.signatures,
+        tables: this.tables,
+        elem: this.elem,
+      },
+      this.mod.memoryMinimumPages ?? minimumMemoryPages(this.mod.dataPtr),
+    );
   }
 
   // Add Definitions

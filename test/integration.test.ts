@@ -3286,8 +3286,27 @@ describe("stress", () => {
 });
 
 describe("stdlib execution", () => {
-  // Until heap_init is wired, malloc tests cannot mix heap allocations with
-  // shadow-stack structs or static string/array data in the same user module.
+  maybeTest("direct malloc fallback stays clear of structs and static data", () => {
+    const wat = compile(`
+      import malloc from "memory"
+      struct Cell { value: i32 }
+      let label: string = "fallback-safe";
+      let expected: string = "fallback-safe";
+
+      export fn run(): i32 {
+        let local: Cell = { value = 5 };
+        let ptr: i32 = malloc(8);
+        let heap: Cell = ptr;
+        heap.value = 36;
+        if (local.value + heap.value + (label == expected) != 42) { return 0; }
+        return ptr;
+      }
+    `);
+    const pointer = runStdlibExport(wat, "run") as number;
+    assert(pointer >= 131080);
+    assert.equal(pointer % 8, 0);
+  });
+
   maybeTest("malloc-backed vec2 addition preserves both fields", () => {
     const wat = compile(`
       import malloc from "memory"

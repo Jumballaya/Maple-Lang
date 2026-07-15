@@ -185,6 +185,25 @@ describe("Merged program model", () => {
     );
   });
 
+  test("wires the heap before other startup initializers", () => {
+    const model = modelFor({
+      "main.maple": `
+        import malloc from "memory"
+        fn seed(): i32 { return 41; }
+        let answer: i32 = seed();
+        export fn run(): i32 { return answer + (malloc(8) - malloc(8)); }
+      `,
+    });
+
+    const first = model.startupInitializers[0]?.initializer;
+    assert.equal(first?.kind, "call");
+    if (first?.kind !== "call") return;
+    assert(first.name.endsWith("$$heap_init"));
+    assert.deepEqual(first.args, [{ type: "i32", value: Math.ceil(model.dataEnd / 8) * 8 }]);
+    assert.equal(model.memoryMinimumPages, Math.max(2, Math.ceil(model.dataEnd / 65_536) + 1));
+    assert.equal(model.startupInitializers[1]?.owner, "main$$answer");
+  });
+
   test("deduplicates and deterministically renumbers provisional fn-table entries", () => {
     const model = modelFor({
       "main.maple": `

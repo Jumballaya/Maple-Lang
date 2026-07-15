@@ -19,7 +19,7 @@
 |                              |
 |   Unused                     |
 |                              |
-+------------------------------+  memory.size × 64 KiB  (default: 2 pages = 128 KB)
++------------------------------+  memory.size × 64 KiB  (static data + at least one heap page)
 ```
 
 ## Regions
@@ -67,8 +67,9 @@ Runtime-managed by the Maple stdlib module (`src/compiler/stdlib/memory.maple`).
 - `free(ptr)` — marks the block free, coalesces with the next block if it is also free, and reclaims the wilderness top if the freed block is at `heap_end`.
 - `realloc(old, old_size, new_size)` — `malloc` + `memory.copy` + `free`.
 - `memory.grow` is called automatically when `malloc` needs more capacity.
-- `heap_init(data_end)` exists as a private function but is currently never called. `HEAP_BASE` and `heap_end` therefore remain zero, so allocation starts at address 0 and can overlap the shadow stack.
-- This base-zero defect is preserved for allocator parity; T19 will initialize the heap from the merged static-data end. Until then, tests and programs must not mix `malloc` with struct locals or string/array literals.
+- Merged programs call `heap_init(align8(finalDataEnd))` as the first one-time startup initializer, placing the heap above all static data.
+- `heap_init(data_end)` is exported for explicit resets. It discards the free list and resets the wilderness to `align8(data_end)`, invalidating every allocation returned before the call.
+- Unwired single-module and direct-harness instances initialize lazily at `131072` on their first `malloc` call.
 
 Programs that never call `malloc` never touch the heap region.
 
@@ -79,4 +80,4 @@ Programs that never call `malloc` never touch the heap region.
 - The shadow stack grows **down** and the heap grows **up**. They could theoretically collide if a program has deeply recursive functions with many large struct locals and simultaneously performs heavy heap allocation. No overflow detection is currently implemented.
 - The static data region is fixed during whole-program emission and never
   changes at runtime.
-- The default `(import "runtime" "memory" (memory 2))` provides 2 pages (128 KB) to start. `memory.grow` will request additional pages as needed.
+- The runtime memory import declares `max(2, ceil(finalDataEnd / 65536) + 1)` initial pages, reserving enough room for static data and one heap page. `memory.grow` requests additional pages as needed.

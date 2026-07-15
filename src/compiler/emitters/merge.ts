@@ -335,6 +335,7 @@ function buildMeta(model: MergedProgram): ModuleMeta {
   const deferredGlobalInits: DeferredGlobalInit[] = model.startupInitializers.map((entry) => {
     const module = model.modules.get(entry.moduleKey)!;
     const initializer = clone(entry.initializer);
+    if (initializer.kind === "call") return initializer;
     rewriteExpression(initializer.expr, model, module, []);
     if (initializer.kind === "global") {
       initializer.name = symbolName(model, module, initializer.name);
@@ -376,6 +377,7 @@ function buildMeta(model: MergedProgram): ModuleMeta {
     })),
     stringPool: {},
     dataPtr: model.dataEnd,
+    memoryMinimumPages: model.memoryMinimumPages,
     deferredGlobalInits,
     fnTable: new Map(),
     fnSignatures: new Map(),

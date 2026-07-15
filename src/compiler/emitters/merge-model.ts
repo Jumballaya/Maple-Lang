@@ -25,6 +25,7 @@ import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
 import type { StructMember } from "../../shared/types";
 import { getIntrinsic } from "../intrinsics";
+import { minimumMemoryPages } from "../MapleModule";
 import type { ModuleGraph, ModuleRecord } from "../module-graph";
 import type {
   DeferredGlobalInit,
@@ -134,6 +135,7 @@ export type MergedProgram = {
   externalImports: Array<{ module: "runtime"; name: "memory" }>;
   data: MergedDataSegment[];
   dataEnd: number;
+  memoryMinimumPages: number;
   dataAddresses: Map<string, Map<number, number>>;
   dataAllocations: Map<string, MergedDataAllocation>;
   startupInitializers: MergedStartupInitializer[];
@@ -732,6 +734,23 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   }
 
   const startupInitializers: MergedStartupInitializer[] = [];
+  const memoryModule = orderedModules.find(
+    (module) =>
+      module.filePath.endsWith("/stdlib/memory.maple") &&
+      module.data.exports.heap_init?.kind === "func",
+  );
+  if (memoryModule) {
+    startupInitializers.push({
+      id: `${memoryModule.manglePrefix}$$heap-init`,
+      moduleKey: memoryModule.key,
+      owner: mangledName(memoryModule, "heap_init"),
+      initializer: {
+        kind: "call",
+        name: mangledName(memoryModule, "heap_init"),
+        args: [{ type: "i32", value: Math.ceil(dataCursor / 8) * 8 }],
+      },
+    });
+  }
   for (const module of orderedModules) {
     for (let index = 0; index < module.data.deferredGlobalInits.length; index++) {
       const initializer = module.data.deferredGlobalInits[index]!;
@@ -799,6 +818,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     externalImports: [{ module: "runtime", name: "memory" }],
     data,
     dataEnd: dataCursor,
+    memoryMinimumPages: minimumMemoryPages(dataCursor),
     dataAddresses,
     dataAllocations,
     startupInitializers,

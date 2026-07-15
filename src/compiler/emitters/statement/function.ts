@@ -93,6 +93,11 @@ export function emitFunction(fn: FunctionStatement, emitter: ModuleEmitter): voi
         w.line(`(if (i32.eqz (global.get $__globals_inited)) (then`);
         w.line(`(global.set $__globals_inited (i32.const 1))`);
         for (const init of deferredInits) {
+          if (init.kind === "call") {
+            const args = init.args.map((arg) => `(${arg.type}.const ${arg.value})`).join(" ");
+            w.line(`(call $${init.name}${args ? ` ${args}` : ""})`);
+            continue;
+          }
           const val = emitExpression(init.expr, emitter);
           if (init.kind === "global") {
             w.line(`(global.set $${init.name} ${val})`);

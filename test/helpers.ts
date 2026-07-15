@@ -81,6 +81,12 @@ export function validateWithWat2Wasm(wat: string): string | null {
   }
 }
 
+export function memoryMinimumFromWat(wat: string): number {
+  const match = wat.match(/\(import "runtime" "memory" \(memory (\d+)\)\)/);
+  if (!match) throw new Error("missing runtime memory import");
+  return Number(match[1]);
+}
+
 /** i64-returning exports yield BigInt; assert against `123n`, not `123`. */
 export function runExport(wat: string, fnName: string, args: (number | bigint)[] = []): unknown {
   const dir = mkdtempSync(join(tmpdir(), "maple-run-"));
@@ -96,7 +102,7 @@ export function runExport(wat: string, fnName: string, args: (number | bigint)[]
     }
     const bytes = readFileSync(wasmFile);
     const module = new WebAssembly.Module(bytes);
-    const memory = new WebAssembly.Memory({ initial: 2 });
+    const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
     const instance = new WebAssembly.Instance(module, { runtime: { memory } });
     const fn = instance.exports[fnName];
     if (typeof fn !== "function") {
@@ -112,6 +118,7 @@ type StdlibModules = {
   memory: WebAssembly.Module;
   string: WebAssembly.Module;
   math: WebAssembly.Module;
+  minimum: number;
 };
 
 const stdlibDir = fileURLToPath(new URL("../src/compiler/stdlib/", import.meta.url));
@@ -151,17 +158,21 @@ function assembleSource(moduleName: string, wat: string): WebAssembly.Module {
 }
 
 function getStdlibModules(): StdlibModules {
-  stdlibModules ??= {
-    memory: assembleSource(
-      "memory",
-      compile(readFileSync(join(stdlibDir, "memory.maple"), "utf8")),
-    ),
-    string: assembleSource(
-      "string",
-      compile(readFileSync(join(stdlibDir, "string.maple"), "utf8")),
-    ),
-    math: assembleSource("math", compile(readFileSync(join(stdlibDir, "math.maple"), "utf8"))),
-  };
+  if (!stdlibModules) {
+    const memoryWat = compile(readFileSync(join(stdlibDir, "memory.maple"), "utf8"));
+    const stringWat = compile(readFileSync(join(stdlibDir, "string.maple"), "utf8"));
+    const mathWat = compile(readFileSync(join(stdlibDir, "math.maple"), "utf8"));
+    stdlibModules = {
+      memory: assembleSource("memory", memoryWat),
+      string: assembleSource("string", stringWat),
+      math: assembleSource("math", mathWat),
+      minimum: Math.max(
+        memoryMinimumFromWat(memoryWat),
+        memoryMinimumFromWat(stringWat),
+        memoryMinimumFromWat(mathWat),
+      ),
+    };
+  }
   return stdlibModules;
 }
 
@@ -183,7 +194,9 @@ export function runStdlibExport(
   args: (number | bigint)[] = [],
 ): unknown {
   const modules = getStdlibModules();
-  const memory = new WebAssembly.Memory({ initial: 4 });
+  const memory = new WebAssembly.Memory({
+    initial: Math.max(modules.minimum, memoryMinimumFromWat(wat)),
+  });
   const memoryInstance = instantiateModule("memory", modules.memory, {
     runtime: { memory },
   });
