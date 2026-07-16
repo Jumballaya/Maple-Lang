@@ -503,9 +503,17 @@ function emitMakeFnRefHelper(mod: ModuleMeta, emitter: ModuleEmitter): void {
   emitter.addFunctionWat(lines.join("\n"));
 }
 
-export function emitModule(ast: ASTProgram, data: ModuleMeta): MapleModule {
+export type EmitOptions = {
+  importMemory: boolean;
+};
+
+export function emitModule(
+  ast: ASTProgram,
+  data: ModuleMeta,
+  options: EmitOptions = { importMemory: false },
+): MapleModule {
   resetLabels();
-  const emitter = new ModuleEmitter(data);
+  const emitter = new ModuleEmitter(data, options.importMemory);
   const ctx = emitter.ctx;
 
   // raw strings

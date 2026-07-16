@@ -24,15 +24,38 @@ project-local `wat2wasm` binary to produce the final `.wasm` file.
 You can run via `npm start -- <your_entry_file>`
 
 ```bash
-Usage: maple <file> [optional_arg]
+Usage: maple [options] <file>
 Compiles a maple source code file into a .wasm file
 
 Options:
   -o, --output <file>   Specify output file (default: build/app.wasm)
+  --import-memory       Import runtime.memory instead of exporting owned memory
 
 Examples:
   maple src/main.maple
   maple src/main.maple -o app.wasm
+  maple --import-memory src/main.maple
+```
+
+## Host memory
+
+Compiled modules own and export their linear memory by default, so they need no
+import object:
+
+```js
+const { instance } = await WebAssembly.instantiate(bytes);
+const memory = instance.exports.memory;
+```
+
+Use `--import-memory` when the host needs to provide a shared or pre-sized
+memory. The host memory's initial size must meet the minimum declared by the
+compiled module:
+
+```js
+const memory = new WebAssembly.Memory({ initial: requiredInitialPages });
+const { instance } = await WebAssembly.instantiate(bytes, {
+  runtime: { memory },
+});
 ```
 
 ## Examples

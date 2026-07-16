@@ -80,4 +80,7 @@ Programs that never call `malloc` never touch the heap region.
 - The shadow stack grows **down** and the heap grows **up**. They could theoretically collide if a program has deeply recursive functions with many large struct locals and simultaneously performs heavy heap allocation. No overflow detection is currently implemented.
 - The static data region is fixed during whole-program emission and never
   changes at runtime.
-- The runtime memory import declares `max(2, ceil(finalDataEnd / 65536) + 1)` initial pages, reserving enough room for static data and one heap page. `memory.grow` requests additional pages as needed.
+- The module-owned memory declaration, or the runtime memory import under
+  `--import-memory`, declares `max(2, ceil(finalDataEnd / 65536) + 1)` initial
+  pages, reserving enough room for static data and one heap page. `memory.grow`
+  requests additional pages as needed.

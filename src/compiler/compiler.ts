@@ -22,6 +22,10 @@ import { typeCheck } from "./TypeChecker";
 export type { ResolvedImportModule };
 export { resolveImportModule };
 
+export type CompilerOptions = {
+  importMemory: boolean;
+};
+
 function resolveLinkedType(graph: ModuleGraph, module: ModuleRecord, type: string): string {
   if (type.startsWith("*")) return `*${resolveLinkedType(graph, module, type.slice(1))}`;
   if (type.endsWith("[]")) {
@@ -108,6 +112,7 @@ export async function compiler(
   entryMod: string,
   _cwd: string,
   outputPath = "build/app.wasm",
+  options: CompilerOptions = { importMemory: false },
 ) {
   const absoluteEntryPath = path.resolve(entryPoint);
   const entrySrc = await openFile(absoluteEntryPath);
@@ -197,7 +202,7 @@ export async function compiler(
   // @TODO: Optimization pass
 
   const model = buildMergedProgram(graph);
-  const wat = emitMergedProgram(model);
+  const wat = emitMergedProgram(model, options);
   const outputDir = path.dirname(outputPath);
   await mkdir(outputDir, { recursive: true });
   const watPath = outputPath.endsWith(".wasm")

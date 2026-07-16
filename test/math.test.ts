@@ -27,8 +27,7 @@ async function loadMathWasm(): Promise<WebAssembly.Instance> {
     writeFileSync(watPath, wat);
     execFileSync("wat2wasm", [watPath, "-o", wasmPath], { stdio: "pipe" });
     const buf = readFileSync(wasmPath);
-    const memory = new WebAssembly.Memory({ initial: 2 });
-    const { instance } = await WebAssembly.instantiate(buf, { runtime: { memory } });
+    const { instance } = await WebAssembly.instantiate(buf);
     return instance;
   } finally {
     rmSync(dir, { recursive: true, force: true });

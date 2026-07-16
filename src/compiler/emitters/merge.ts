@@ -408,7 +408,10 @@ function publicExports(wat: string, model: MergedProgram): string {
   return result;
 }
 
-export function emitMergedProgram(model: MergedProgram): string {
+export function emitMergedProgram(
+  model: MergedProgram,
+  options: { importMemory: boolean } = { importMemory: false },
+): string {
   const ast = buildMergedAst(model);
   const meta = buildMeta(model);
   collectFnReferences(ast, meta);
@@ -420,6 +423,6 @@ export function emitMergedProgram(model: MergedProgram): string {
     meta.closureAllocator = allocator;
   }
   if (meta.imports.alloc?.synthesized) delete meta.imports.alloc;
-  const wat = emitModule(ast, meta).buildWat();
+  const wat = emitModule(ast, meta, options).buildWat();
   return publicExports(wat, model);
 }

@@ -1028,9 +1028,19 @@ describe("Compiler Pipeline", () => {
     assert(wat.endsWith(")"));
   });
 
-  test("emitted wat includes runtime memory import", () => {
+  test("emitted wat owns and exports memory by default", () => {
     const { wat } = compile("fn test(): void {}");
+    assert(wat.includes('(memory (export "memory") 2)'));
+    assert(!wat.includes('(import "runtime" "memory"'));
+  });
+
+  test("emitModule can request an imported memory", () => {
+    const p = new Parser("fn test(): void {}");
+    const ast = p.parse("test");
+    const meta = extractModuleMeta(ast);
+    const wat = emitModule(ast, meta, { importMemory: true }).buildWat();
     assert(wat.includes('(import "runtime" "memory" (memory 2))'));
+    assert(!wat.includes('(memory (export "memory")'));
   });
 });
 

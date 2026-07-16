@@ -61,9 +61,11 @@ export class ModuleEmitter {
   public needsArrayRuntime = false;
   public needsStringEq = false;
   public readonly structEqNames = new Set<string>();
+  private readonly importMemory: boolean;
 
-  constructor(data: ModuleMeta) {
+  constructor(data: ModuleMeta, importMemory = false) {
     this.mod = data;
+    this.importMemory = importMemory;
   }
 
   public get writer(): IWriter {
@@ -153,6 +155,7 @@ export class ModuleEmitter {
         elem: this.elem,
       },
       this.mod.memoryMinimumPages ?? minimumMemoryPages(this.mod.dataPtr),
+      this.importMemory,
     );
   }
 

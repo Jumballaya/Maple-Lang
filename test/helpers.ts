@@ -4,10 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { linkStdlibImports } from "../src/compiler/compiler";
+import { compiler, linkStdlibImports } from "../src/compiler/compiler";
 import {
   collectFnReferences,
+  type EmitOptions,
   emitModule,
   extractModuleMeta,
 } from "../src/compiler/emitters/module";
@@ -49,7 +49,7 @@ export function maybeTest(name: string, fn: () => void | Promise<void>): void {
   }
 }
 
-export function compile(src: string): string {
+export function compile(src: string, options: EmitOptions = { importMemory: false }): string {
   const parser = new Parser(src);
   const ast = parser.parse("integration");
   assert.equal(
@@ -60,7 +60,7 @@ export function compile(src: string): string {
   const meta = extractModuleMeta(ast);
   collectFnReferences(ast, meta);
   linkStdlibImports(meta);
-  return emitModule(ast, meta).buildWat();
+  return emitModule(ast, meta, options).buildWat();
 }
 
 export function validateWithWat2Wasm(wat: string): string | null {
@@ -82,13 +82,18 @@ export function validateWithWat2Wasm(wat: string): string | null {
 }
 
 export function memoryMinimumFromWat(wat: string): number {
-  const match = wat.match(/\(import "runtime" "memory" \(memory (\d+)\)\)/);
-  if (!match) throw new Error("missing runtime memory import");
-  return Number(match[1]);
+  const match = wat.match(
+    /\(import "runtime" "memory" \(memory (\d+)\)\)|\(memory \(export "memory"\) (\d+)\)/,
+  );
+  if (!match) throw new Error("missing memory declaration");
+  return Number(match[1] ?? match[2]);
 }
 
-/** i64-returning exports yield BigInt; assert against `123n`, not `123`. */
-export function runExport(wat: string, fnName: string, args: (number | bigint)[] = []): unknown {
+export type RunExportOptions = {
+  importMemory: boolean;
+};
+
+function assembleWat(wat: string): WebAssembly.Module {
   const dir = mkdtempSync(join(tmpdir(), "maple-run-"));
   const watFile = join(dir, "out.wat");
   const wasmFile = join(dir, "out.wasm");
@@ -100,120 +105,54 @@ export function runExport(wat: string, fnName: string, args: (number | bigint)[]
     if (assembly.status !== 0) {
       throw new Error(`wat2wasm failed: ${assembly.stderr}`);
     }
-    const bytes = readFileSync(wasmFile);
-    const module = new WebAssembly.Module(bytes);
-    const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
-    const instance = new WebAssembly.Instance(module, { runtime: { memory } });
-    const fn = instance.exports[fnName];
-    if (typeof fn !== "function") {
-      throw new Error(`export ${fnName} is not a function`);
-    }
-    return (fn as (...fnArgs: (number | bigint)[]) => unknown)(...args);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-type StdlibModules = {
-  memory: WebAssembly.Module;
-  string: WebAssembly.Module;
-  math: WebAssembly.Module;
-  minimum: number;
-};
-
-const stdlibDir = fileURLToPath(new URL("../src/compiler/stdlib/", import.meta.url));
-let stdlibModules: StdlibModules | undefined;
-
-function assembleModule(moduleName: string, watFile: string): WebAssembly.Module {
-  const dir = mkdtempSync(join(tmpdir(), "maple-stdlib-"));
-  const wasmFile = join(dir, `${moduleName}.wasm`);
-  try {
-    const assembly = spawnSync("wat2wasm", [watFile, "-o", wasmFile], {
-      encoding: "utf8",
-    });
-    if (assembly.error || assembly.status !== 0) {
-      const detail = assembly.stderr || assembly.error?.message || "wat2wasm failed";
-      throw new Error(`failed to assemble ${moduleName}: ${detail}`);
-    }
     return new WebAssembly.Module(readFileSync(wasmFile));
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("failed to assemble")) {
-      throw error;
-    }
-    throw new Error(`failed to assemble ${moduleName}: ${String(error)}`, { cause: error });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function assembleSource(moduleName: string, wat: string): WebAssembly.Module {
-  const dir = mkdtempSync(join(tmpdir(), "maple-stdlib-user-"));
-  const watFile = join(dir, `${moduleName}.wat`);
-  writeFileSync(watFile, wat);
-  try {
-    return assembleModule(moduleName, watFile);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-function getStdlibModules(): StdlibModules {
-  if (!stdlibModules) {
-    const memoryWat = compile(readFileSync(join(stdlibDir, "memory.maple"), "utf8"));
-    const stringWat = compile(readFileSync(join(stdlibDir, "string.maple"), "utf8"));
-    const mathWat = compile(readFileSync(join(stdlibDir, "math.maple"), "utf8"));
-    stdlibModules = {
-      memory: assembleSource("memory", memoryWat),
-      string: assembleSource("string", stringWat),
-      math: assembleSource("math", mathWat),
-      minimum: Math.max(
-        memoryMinimumFromWat(memoryWat),
-        memoryMinimumFromWat(stringWat),
-        memoryMinimumFromWat(mathWat),
-      ),
-    };
-  }
-  return stdlibModules;
-}
-
-function instantiateModule(
-  moduleName: string,
-  module: WebAssembly.Module,
-  imports: WebAssembly.Imports,
-): WebAssembly.Instance {
-  try {
-    return new WebAssembly.Instance(module, imports);
-  } catch (error) {
-    throw new Error(`failed to instantiate ${moduleName}: ${String(error)}`, { cause: error });
-  }
-}
-
-export function runStdlibExport(
-  wat: string,
+function callExport(
+  instance: WebAssembly.Instance,
   fnName: string,
-  args: (number | bigint)[] = [],
+  args: (number | bigint)[],
 ): unknown {
-  const modules = getStdlibModules();
-  const memory = new WebAssembly.Memory({
-    initial: Math.max(modules.minimum, memoryMinimumFromWat(wat)),
-  });
-  const memoryInstance = instantiateModule("memory", modules.memory, {
-    runtime: { memory },
-  });
-  const stringInstance = instantiateModule("string", modules.string, {
-    runtime: { memory },
-  });
-  const mathInstance = instantiateModule("math", modules.math, { runtime: { memory } });
-  const userModule = assembleSource("user", wat);
-  const userInstance = instantiateModule("user", userModule, {
-    runtime: { memory },
-    memory: memoryInstance.exports,
-    string: stringInstance.exports,
-    math: mathInstance.exports,
-  });
-  const fn = userInstance.exports[fnName];
+  const fn = instance.exports[fnName];
   if (typeof fn !== "function") {
     throw new Error(`export ${fnName} is not a function`);
   }
   return (fn as (...fnArgs: (number | bigint)[]) => unknown)(...args);
+}
+
+/** i64-returning exports yield BigInt; assert against `123n`, not `123`. */
+export function runExport(
+  wat: string,
+  fnName: string,
+  args: (number | bigint)[] = [],
+  options: RunExportOptions = { importMemory: false },
+): unknown {
+  const module = assembleWat(wat);
+  if (options.importMemory) {
+    const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
+    const instance = new WebAssembly.Instance(module, { runtime: { memory } });
+    return callExport(instance, fnName, args);
+  }
+  return callExport(new WebAssembly.Instance(module), fnName, args);
+}
+
+export async function runMergedExport(
+  source: string,
+  fnName: string,
+  args: (number | bigint)[] = [],
+): Promise<unknown> {
+  const dir = mkdtempSync(join(tmpdir(), "maple-merged-run-"));
+  const entry = join(dir, "main.maple");
+  const output = join(dir, "out.wasm");
+  writeFileSync(entry, source);
+  try {
+    await compiler(entry, "main", dir, output);
+    const module = new WebAssembly.Module(readFileSync(output));
+    return callExport(new WebAssembly.Instance(module), fnName, args);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }

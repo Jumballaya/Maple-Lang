@@ -13,18 +13,14 @@ type Project = Record<string, string>;
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-function instantiate(
-  bytes: Uint8Array,
-  wat: string,
-): {
+function instantiate(bytes: Uint8Array): {
   instance: WebAssembly.Instance;
   module: WebAssembly.Module;
 } {
-  const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
   const wasmBytes = new Uint8Array(bytes.byteLength);
   wasmBytes.set(bytes);
   const module = new WebAssembly.Module(wasmBytes);
-  const instance = new WebAssembly.Instance(module, { runtime: { memory } });
+  const instance = new WebAssembly.Instance(module);
   return { instance, module };
 }
 
@@ -42,7 +38,7 @@ async function compileEntry(entry: string): Promise<{
       readFile(path.join(outputDir, "app.wat"), "utf8"),
       readFile(output),
     ]);
-    return { wat, ...instantiate(bytes, wat) };
+    return { wat, ...instantiate(bytes) };
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }
@@ -67,7 +63,7 @@ async function compileProject(files: Project): Promise<{
       readFile(path.join(dir, "app.wat"), "utf8"),
       readFile(output),
     ]);
-    return { wat, ...instantiate(bytes, wat) };
+    return { wat, ...instantiate(bytes) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -210,7 +206,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 65537);
   });
 
-  maybeTest("exports only entry-module API names", async () => {
+  maybeTest("exports owned memory and only entry-module API names", async () => {
     const { instance, module, wat } = await compileProject({
       "main.maple": `
         import add from "./math.maple"
@@ -222,7 +218,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 5);
     assert.deepEqual(
       WebAssembly.Module.exports(module).map((entry) => entry.name),
-      ["run"],
+      ["memory", "run"],
     );
     assert(!wat.includes('(export "add"'));
   });
@@ -290,7 +286,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(wat.match(/\(table \$__fn_table/g)?.length, 1);
   });
 
-  maybeTest("merges malloc and sqrt with only runtime memory imported", async () => {
+  maybeTest("merges malloc and sqrt with module-owned memory", async () => {
     const { instance, module } = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -303,9 +299,8 @@ describe("Compiler: merged whole-program emission", () => {
     });
 
     assert.equal(call(instance, "run"), 4);
-    assert.deepEqual(WebAssembly.Module.imports(module), [
-      { module: "runtime", name: "memory", kind: "memory" },
-    ]);
+    assert.deepEqual(WebAssembly.Module.imports(module), []);
+    assert(instance.exports.memory instanceof WebAssembly.Memory);
   });
 
   maybeTest("starts the merged heap above static data without corrupting literals", async () => {
@@ -598,11 +593,11 @@ describe("Compiler: merged-program acceptance", () => {
         },
       );
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      const [bytes, wat] = await Promise.all([
+      const [bytes, _wat] = await Promise.all([
         readFile(output),
         readFile(path.join(outputDir, "app.wat"), "utf8"),
       ]);
-      const { instance } = instantiate(bytes, wat);
+      const { instance } = instantiate(bytes);
       assert.equal(call(instance, "_start", 2, 3), 10);
     } finally {
       await rm(outputDir, { recursive: true, force: true });

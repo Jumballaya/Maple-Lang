@@ -21,18 +21,30 @@ export class MapleModule {
 
   public readonly name: string;
   private readonly memoryMinimumPages: number;
+  private readonly importMemory: boolean;
 
-  constructor(name: string, sections: ModuleSections, memoryMinimumPages = 2) {
+  constructor(
+    name: string,
+    sections: ModuleSections,
+    memoryMinimumPages = 2,
+    importMemory = false,
+  ) {
     this.sections = sections;
     this.name = name;
     this.memoryMinimumPages = memoryMinimumPages;
+    this.importMemory = importMemory;
   }
 
   public buildWat(): string {
     const out: string[] = ["(module"];
 
-    out.push(`  (import "runtime" "memory" (memory ${this.memoryMinimumPages}))`);
+    if (this.importMemory) {
+      out.push(`  (import "runtime" "memory" (memory ${this.memoryMinimumPages}))`);
+    }
     for (const s of this.sections.imports) out.push(`  ${s}`);
+    if (!this.importMemory) {
+      out.push(`  (memory (export "memory") ${this.memoryMinimumPages})`);
+    }
     for (const s of this.sections.tables) out.push(`  ${s}`);
     for (const s of this.sections.globals) out.push(`  ${s}`);
     for (const s of this.sections.signatures) out.push(`  ${s}`);

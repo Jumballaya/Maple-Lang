@@ -18,7 +18,7 @@ import {
   hasWat2Wasm,
   maybeTest,
   runExport,
-  runStdlibExport,
+  runMergedExport,
   validateWithWat2Wasm,
 } from "./helpers";
 
@@ -40,6 +40,11 @@ describe("wat2wasm test gating", () => {
   maybeTest("runExport accepts and returns BigInt for i64 exports", () => {
     const wat = compile("export fn echo(value: i64): i64 { return value; }");
     assert.equal(runExport(wat, "echo", [123n]), 123n);
+  });
+
+  maybeTest("runExport supports imported memory as an explicit option", () => {
+    const wat = compile("export fn answer(): i32 { return 42; }", { importMemory: true });
+    assert.equal(runExport(wat, "answer", [], { importMemory: true }), 42);
   });
 
   test("math tests skip when wat2wasm execution is disabled", () => {
@@ -93,9 +98,10 @@ describe("Integration: WAT structure", () => {
     );
   });
 
-  test("runtime memory import is always present", () => {
+  test("module-owned memory export is always present", () => {
     const wat = compile("fn noop(): void {}");
-    assert(wat.includes('(import "runtime" "memory" (memory 2))'));
+    assert(wat.includes('(memory (export "memory") 2)'));
+    assert(!wat.includes('(import "runtime" "memory"'));
   });
 
   test("all declared functions appear in WAT", () => {
@@ -3285,55 +3291,66 @@ describe("stress", () => {
   });
 });
 
-describe("stdlib execution", () => {
-  maybeTest("fn-reference calls compose inside binary expressions", () => {
-    const wat = compile(`
+describe("standalone allocator fallback", () => {
+  maybeTest("lazy initialization stays above the default two-page boundary", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(dir, "../src/compiler/stdlib/memory.maple"), "utf8");
+    const wat = compile(source);
+    const pointer = runExport(wat, "malloc", [8]) as number;
+    assert(pointer >= 131080);
+    assert.equal(pointer % 8, 0);
+  });
+});
+
+describe("stdlib execution through the merged pipeline", () => {
+  maybeTest("fn-reference calls compose inside binary expressions", async () => {
+    const source = `
       fn add(a: i32, b: i32): i32 { return a + b; }
       fn plus_one(value: i32): i32 { return value + 1; }
       export fn run(): i32 {
         let op: fn(i32,i32):i32 = add;
         return op(1, 2) + plus_one(4);
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 8);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 8);
   });
 
-  maybeTest("direct malloc fallback stays clear of structs and static data", () => {
-    const wat = compile(`
+  maybeTest("merged malloc stays clear of structs and static data", async () => {
+    const source = `
       import malloc from "memory"
       struct Cell { value: i32 }
-      let label: string = "fallback-safe";
-      let expected: string = "fallback-safe";
+      let label: string = "merged-safe";
+      let expected: string = "merged-safe";
 
       export fn run(): i32 {
         let local: Cell = { value = 5 };
         let ptr: i32 = malloc(8);
-        let heap: Cell = ptr;
+        let heap: Cell = ptr as Cell;
         heap.value = 36;
         if (local.value + heap.value + (label == expected) != 42) { return 0; }
         return ptr;
       }
-    `);
-    const pointer = runStdlibExport(wat, "run") as number;
-    assert(pointer >= 131080);
+    `;
+    const pointer = (await runMergedExport(source, "run")) as number;
+    assert(pointer >= 65536);
     assert.equal(pointer % 8, 0);
   });
 
-  maybeTest("malloc-backed vec2 addition preserves both fields", () => {
-    const wat = compile(`
+  maybeTest("malloc-backed vec2 addition preserves both fields", async () => {
+    const source = `
       import malloc from "memory"
       struct Vec2 { x: i32, y: i32 }
 
       fn addVec2(a: Vec2, b: Vec2): Vec2 {
-        let result: Vec2 = malloc(8);
+        let result: Vec2 = malloc(8) as Vec2;
         result.x = a.x + b.x;
         result.y = a.y + b.y;
         return result;
       }
 
       export fn run(): i32 {
-        let a: Vec2 = malloc(8);
-        let b: Vec2 = malloc(8);
+        let a: Vec2 = malloc(8) as Vec2;
+        let b: Vec2 = malloc(8) as Vec2;
         a.x = 1;
         a.y = 2;
         b.x = 3;
@@ -3341,12 +3358,12 @@ describe("stdlib execution", () => {
         let sum: Vec2 = addVec2(a, b);
         return sum.x * 100 + sum.y;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 406);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 406);
   });
 
-  maybeTest("free allows malloc to reuse the same block", () => {
-    const wat = compile(`
+  maybeTest("free allows malloc to reuse the same block", async () => {
+    const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
         let first: i32 = malloc(16);
@@ -3354,29 +3371,29 @@ describe("stdlib execution", () => {
         let second: i32 = malloc(16);
         return first == second;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("realloc preserves the existing payload", () => {
-    const wat = compile(`
+  maybeTest("realloc preserves the existing payload", async () => {
+    const source = `
       import malloc, realloc from "memory"
       struct Triple { a: i32, b: i32, c: i32 }
       export fn run(): i32 {
-        let values: Triple = malloc(12);
+        let values: Triple = malloc(12) as Triple;
         values.a = 1;
         values.b = 2;
         values.c = 3;
-        let grown: Triple = realloc(values, 12, 40);
+        let grown: Triple = realloc(values as i32, 12, 40) as Triple;
         return grown.a * 10000 + grown.b * 100 + grown.c;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 10203);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 10203);
   });
 
   // Double-free and use-after-free are undefined until the ownership design (O1).
-  maybeTest("malloc payloads are 8-byte aligned", () => {
-    const wat = compile(`
+  maybeTest("malloc payloads are 8-byte aligned", async () => {
+    const source = `
       import malloc from "memory"
       export fn run(): i32 {
         let a: i32 = malloc(1);
@@ -3389,12 +3406,12 @@ describe("stdlib execution", () => {
         if (d % 8 != 0) { return 0; }
         return 1;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("malloc splits a reused free block", () => {
-    const wat = compile(`
+  maybeTest("malloc splits a reused free block", async () => {
+    const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
         let prefix: i32 = malloc(8);
@@ -3408,12 +3425,12 @@ describe("stdlib execution", () => {
         if (second != first + 24) { return 0; }
         return second < guard;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("free coalesces adjacent blocks", () => {
-    const wat = compile(`
+  maybeTest("free coalesces adjacent blocks", async () => {
+    const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
         let prefix: i32 = malloc(8);
@@ -3427,12 +3444,12 @@ describe("stdlib execution", () => {
         if (c <= b) { return 0; }
         return combined == a;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("free reclaims the wilderness block", () => {
-    const wat = compile(`
+  maybeTest("free reclaims the wilderness block", async () => {
+    const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
         let prefix: i32 = malloc(8);
@@ -3442,12 +3459,12 @@ describe("stdlib execution", () => {
         if (prefix >= last) { return 0; }
         return reused == last;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("malloc grows memory when the wilderness exceeds capacity", () => {
-    const wat = compile(`
+  maybeTest("malloc grows memory when the wilderness exceeds capacity", async () => {
+    const source = `
       import malloc from "memory"
       export fn run(): i32 {
         let before: i32 = __memory_size();
@@ -3456,68 +3473,68 @@ describe("stdlib execution", () => {
         if (block == 0) { return 0; }
         return after > before;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("math sqrt executes through the stdlib instance", () => {
-    const wat = compile(`
+  maybeTest("math sqrt executes through the merged module", async () => {
+    const source = `
       import sqrt from "math"
       export fn run(): f32 { return sqrt(16.0); }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 4);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 4);
   });
 
-  maybeTest("math sin executes through the stdlib instance", () => {
-    const wat = compile(`
+  maybeTest("math sin executes through the merged module", async () => {
+    const source = `
       import sin from "math"
       export fn run(): f32 { return sin(0.0); }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 0);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 0);
   });
 
-  maybeTest("math abs_i32 executes through the stdlib instance", () => {
-    const wat = compile(`
+  maybeTest("math abs_i32 executes through the merged module", async () => {
+    const source = `
       import abs_i32 from "math"
       export fn run(): i32 { return abs_i32(-5); }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 5);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 5);
   });
 
-  maybeTest("math PI is available as an imported global", () => {
-    const wat = compile(`
+  maybeTest("math PI is available as an imported global", async () => {
+    const source = `
       import PI from "math"
       export fn run(): f32 { return PI; }
-    `);
-    const result = runStdlibExport(wat, "run") as number;
+    `;
+    const result = (await runMergedExport(source, "run")) as number;
     assert(Math.abs(result - Math.PI) < 1e-6);
   });
 
-  maybeTest("one program imports sin, sqrt, and PI from Maple math", () => {
-    const wat = compile(`
+  maybeTest("one program imports sin, sqrt, and PI from Maple math", async () => {
+    const source = `
       import sin, sqrt, PI from "math"
       export fn run(): f32 {
         return sin(PI / 2.0) + sqrt(16.0);
       }
-    `);
-    const result = runStdlibExport(wat, "run") as number;
+    `;
+    const result = (await runMergedExport(source, "run")) as number;
     assert(Math.abs(result - 5) < 1e-3);
   });
 
-  maybeTest("math sqrt matches the intrinsic across representative f32 values", () => {
-    const wat = compile(`
+  maybeTest("math sqrt matches the intrinsic across representative f32 values", async () => {
+    const source = `
       import sqrt from "math"
       export fn run(value: f32): f32 {
         return sqrt(value) - __sqrt_f32(value);
       }
-    `);
+    `;
     for (const value of [0, 2, 16, 1e30]) {
-      assert.equal(runStdlibExport(wat, "run", [value]), 0);
+      assert.equal(await runMergedExport(source, "run", [value]), 0);
     }
   });
 
-  maybeTest("string_copy keeps the longer destination length and tail", () => {
-    const wat = compile(`
+  maybeTest("string_copy keeps the longer destination length and tail", async () => {
+    const source = `
       import string_copy from "string"
       export fn run(): i32 {
         let source: string = "cat";
@@ -3527,12 +3544,12 @@ describe("stdlib execution", () => {
         if (destination.len != 6) { return 0; }
         return destination == expected;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("string_copy truncates to a shorter destination", () => {
-    const wat = compile(`
+  maybeTest("string_copy truncates to a shorter destination", async () => {
+    const source = `
       import string_copy from "string"
       export fn run(): i32 {
         let source: string = "abcdef";
@@ -3542,12 +3559,12 @@ describe("stdlib execution", () => {
         if (destination.len != 3) { return 0; }
         return destination == expected;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("string_copy with an empty source is a no-op", () => {
-    const wat = compile(`
+  maybeTest("string_copy with an empty source is a no-op", async () => {
+    const source = `
       import string_copy from "string"
       export fn run(): i32 {
         let source: string = "";
@@ -3558,30 +3575,30 @@ describe("stdlib execution", () => {
         if (destination.len != 3) { return 0; }
         return destination == expected;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 1);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("built-in string metadata works without importing string", () => {
-    const wat = compile(`
+  maybeTest("built-in string metadata works without importing string", async () => {
+    const source = `
       export fn run(): i32 {
         let value: string = "maple";
         return value.len;
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 5);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 5);
   });
 
-  maybeTest("one program can import memory and math together", () => {
-    const wat = compile(`
+  maybeTest("one program can import memory and math together", async () => {
+    const source = `
       import malloc from "memory"
       import sqrt from "math"
       export fn run(): i32 {
         let block: i32 = malloc(16);
         return (sqrt(16.0) as i32) + (block - block);
       }
-    `);
-    assert.equal(runStdlibExport(wat, "run"), 4);
+    `;
+    assert.equal(await runMergedExport(source, "run"), 4);
   });
 });
 
