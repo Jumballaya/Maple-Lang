@@ -117,16 +117,16 @@ describe("Merged program model", () => {
     );
   });
 
-  test("lays out module data contiguously in dependency post-order", () => {
+  test("lays out live module data with address alignment in dependency post-order", () => {
     const model = modelFor({
       "main.maple": `
         import dep_value from "./dep.maple"
         let main_text: string = "main";
-        export fn run(): i32 { return dep_value(); }
+        export fn run(): i32 { return main_text.len + dep_value(); }
       `,
       "dep.maple": `
         let dep_text: string = "dependency";
-        export fn dep_value(): i32 { return 1; }
+        export fn dep_value(): i32 { return dep_text.len; }
       `,
     });
 
@@ -134,7 +134,9 @@ describe("Merged program model", () => {
     assert.equal(model.data[0]?.address, 65536);
     for (let index = 1; index < model.data.length; index++) {
       const previous = model.data[index - 1]!;
-      assert.equal(model.data[index]?.address, previous.address + previous.size);
+      const current = model.data[index]!;
+      assert(current.address >= previous.address + previous.size);
+      assert.equal(current.address % current.alignment, 0);
     }
     const depEnd = Math.max(
       ...model.data
@@ -144,7 +146,7 @@ describe("Merged program model", () => {
     const mainStart = Math.min(
       ...model.data.filter((entry) => entry.moduleKey === "main").map((entry) => entry.address),
     );
-    assert.equal(depEnd, mainStart);
+    assert(depEnd <= mainStart);
     assert.equal(model.dataEnd, model.data.at(-1)!.address + model.data.at(-1)!.size);
   });
 

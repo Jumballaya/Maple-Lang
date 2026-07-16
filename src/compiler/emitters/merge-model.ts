@@ -23,7 +23,7 @@ import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
-import type { StructMember } from "../../shared/types";
+import { alignTo, type StructMember } from "../../shared/types";
 import { getIntrinsic } from "../intrinsics";
 import { minimumMemoryPages } from "../MapleModule";
 import type { ModuleGraph, ModuleRecord } from "../module-graph";
@@ -89,6 +89,7 @@ export type MergedDataSegment = {
   address: number;
   size: number;
   bytes: string;
+  alignment: number;
   pointerOffsets: number[];
 };
 
@@ -292,7 +293,6 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   const data: MergedDataSegment[] = [];
   const dataAddresses = new Map<string, Map<number, number>>();
   const dataByModule = new Map<string, MergedDataSegment[]>();
-  let dataCursor = 65536;
   for (const module of orderedModules) {
     const addresses = new Map<number, number>();
     const moduleData: MergedDataSegment[] = [];
@@ -304,15 +304,15 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         id: `${module.manglePrefix}$$data$${index}`,
         moduleKey: module.key,
         sourceAddress: source.addr,
-        address: dataCursor,
+        address: source.addr,
         size: segmentSize(source.bytes),
         bytes: source.bytes,
+        alignment: source.alignment ?? 1,
         pointerOffsets: source.pointerOffsets ?? [],
       };
       data.push(entry);
       moduleData.push(entry);
-      addresses.set(source.addr, dataCursor);
-      dataCursor += entry.size;
+      addresses.set(source.addr, source.addr);
     }
   }
 
@@ -442,11 +442,15 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     pushUnique(owner.edges.ownedData, id);
     if (dataAllocations.has(id)) return;
     const segments = dataByModule.get(module.key) ?? [];
-    const primary = segments.find((segment) => segment.sourceAddress === sourceAddress);
+    const primary = [...segments]
+      .reverse()
+      .find((segment) => segment.sourceAddress === sourceAddress);
     const segmentIds = primary ? [primary.id] : [];
     if (primary && (kind === "string" || kind === "array")) {
       const payloadAddress = bytesToI32(primary.bytes, 4);
-      const payload = segments.find((segment) => segment.sourceAddress === payloadAddress);
+      const payload = segments.find(
+        (segment) => segment.id !== primary.id && segment.sourceAddress === payloadAddress,
+      );
       if (payload) segmentIds.unshift(payload.id);
     }
     dataAllocations.set(id, {
@@ -750,7 +754,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       initializer: {
         kind: "call",
         name: mangledName(memoryModule, "heap_init"),
-        args: [{ type: "i32", value: Math.ceil(dataCursor / 8) * 8 }],
+        args: [{ type: "i32", value: 0 }],
       },
     });
   }
@@ -816,6 +820,45 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     fnTableEntries: fnEntries,
     runtimeHelpers,
   });
+
+  const ownedSegmentIds = new Set<string>();
+  const liveSegmentIds = new Set<string>();
+  for (const allocation of dataAllocations.values()) {
+    const ownerIsReachable =
+      reachability.reachable.functions.has(allocation.owner) ||
+      reachability.reachable.globals.has(allocation.owner);
+    for (const segmentId of allocation.segmentIds) {
+      ownedSegmentIds.add(segmentId);
+      if (ownerIsReachable) liveSegmentIds.add(segmentId);
+    }
+  }
+  const liveData = data.filter(
+    (segment) => !ownedSegmentIds.has(segment.id) || liveSegmentIds.has(segment.id),
+  );
+
+  for (const addresses of dataAddresses.values()) addresses.clear();
+  let dataCursor = 65536;
+  for (const segment of liveData) {
+    dataCursor = alignTo(dataCursor, segment.alignment);
+    segment.address = dataCursor;
+    dataAddresses.get(segment.moduleKey)?.set(segment.sourceAddress, segment.address);
+    dataCursor += segment.size;
+  }
+
+  for (const allocation of dataAllocations.values()) {
+    const address = dataAddresses.get(allocation.moduleKey)?.get(allocation.address);
+    if (address !== undefined) allocation.address = address;
+  }
+  for (const startup of startupInitializers) {
+    if (startup.initializer.kind === "call" && startup.id.endsWith("$$heap-init")) {
+      startup.initializer.args[0]!.value = alignTo(dataCursor, 8);
+    }
+    if (startup.initializer.kind === "memory") {
+      const targetAddress = dataAddresses.get(startup.moduleKey)?.get(startup.initializer.baseAddr);
+      if (targetAddress !== undefined) startup.targetAddress = targetAddress;
+    }
+  }
+
   const reachableSignatures = new Map<string, FnSignature>();
   for (const entry of reachability.fnTableEntries) {
     const signature = fnSignatures.get(entry.signatureKey);
@@ -833,7 +876,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     exports,
     imports,
     externalImports: [{ module: "runtime", name: "memory" }],
-    data,
+    data: liveData,
     dataEnd: dataCursor,
     memoryMinimumPages: minimumMemoryPages(dataCursor),
     dataAddresses,

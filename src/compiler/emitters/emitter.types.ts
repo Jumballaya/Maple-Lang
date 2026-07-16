@@ -82,6 +82,7 @@ export type ModuleDataMeta = {
   name?: string;
   addr: number;
   bytes: string;
+  alignment?: number;
   pointerOffsets?: number[];
 };
 

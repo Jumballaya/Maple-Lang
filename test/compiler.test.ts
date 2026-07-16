@@ -736,6 +736,14 @@ describe("Emission: Literals", () => {
     assert(wat.includes("(data (offset (i32.const"), `Missing data segment emit:\n${wat}`);
   });
 
+  test("string payload data has no trailing allocation padding", () => {
+    const { meta } = compile(`let text: string = "abc";`);
+    const payload = meta.data.find((entry) => entry.bytes.startsWith("\\61\\62\\63"));
+
+    assert(payload, "missing string payload segment");
+    assert.equal(payload.bytes, "\\61\\62\\63");
+  });
+
   test("char literal currently fails to parse as expression", () => {
     const p = new Parser("fn test(): i32 { return 'a'; }");
     p.parse("test");

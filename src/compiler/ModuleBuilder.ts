@@ -1,4 +1,4 @@
-import { alignup } from "./emitters/emit.data";
+import { alignTo } from "../shared/types";
 import type {
   DeferredGlobalInit,
   ExportMeta,
@@ -96,9 +96,8 @@ export class ModuleBuilder {
 
   // Reserve bytes in the data section, return the start address
   public dataAlloc(size: number, align = 4): number {
-    const addr = this.dataPtr;
-    const pad = alignup(size, align);
-    this.dataPtr += pad;
+    const addr = alignTo(this.dataPtr, align);
+    this.dataPtr = addr + size;
     return addr;
   }
 
@@ -106,7 +105,12 @@ export class ModuleBuilder {
   public addBytes(bytes: string, addr?: number, align = 8, pointerOffsets?: number[]): number {
     const size = Math.floor(bytes.length / 3); // \xx <-- 3 characters per byte
     const a = addr ?? this.dataAlloc(size, align);
-    this.data.push({ bytes, addr: a, ...(pointerOffsets ? { pointerOffsets } : {}) });
+    this.data.push({
+      bytes,
+      addr: a,
+      alignment: align,
+      ...(pointerOffsets ? { pointerOffsets } : {}),
+    });
     return a;
   }
 

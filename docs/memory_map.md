@@ -10,7 +10,7 @@
 |   Static data                |  array literals, global struct literals,
 |   (compiler data section)    |  string bytes + string header records
 |                              |  allocated upward from 0x1_0000 at compile time
-+------------------------------+  HEAP_BASE  (= 0x1_0000 + static_data_size, aligned to 8)
++------------------------------+  HEAP_BASE  (= final live-data end, aligned to 8)
 |                              |
 |   Heap                       |  malloc / free arena, grows upward at runtime
 |   (free/used blocks w/ hdr)  |  free-list allocator with 8-byte chunk headers
@@ -46,9 +46,14 @@ Each local struct variable gets a single `i32` pointer local that is set to `$__
 
 Compile-time-only. The compiler's `dataPtr` cursor starts at `65536` and allocates space upward for:
 
-- **Array literals** — element bytes packed contiguously, followed by an 8-byte `{ len: i32, data: *element }` header; the array value points to the header
-- **Global struct literals** — field bytes packed contiguously; the global variable holds the address as an `i32`
-- **String literals** — a padded UTF-8 byte run followed immediately by an 8-byte `{ len: i32, data: *u8 }` header; the `string` variable holds the header address
+- **Array literals** — an element block and an 8-byte `{ len: i32, data: *element }` header; the array value points to the header
+- **Global struct literals** — fields at their declared layout offsets; the global variable holds the address as an `i32`
+- **String literals** — an exact UTF-8 byte run and an 8-byte `{ len: i32, data: *u8 }` header; the `string` variable holds the header address
+
+Each allocation's start address is aligned for its contents. Alignment gaps may
+therefore appear between segments, but are not encoded as trailing zero bytes.
+Whole-program emission discards allocations owned only by unreachable declarations
+before assigning final addresses, so dead literal data does not consume static space.
 
 Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack.
 

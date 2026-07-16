@@ -103,6 +103,10 @@ function wiredHeapBase(wat: string): number {
   return generated;
 }
 
+function encodedData(value: string): string {
+  return [...Buffer.from(value)].map((byte) => `\\${byte.toString(16).padStart(2, "0")}`).join("");
+}
+
 describe("Compiler: merged whole-program emission", () => {
   maybeTest("runs a two-module program as one wasm module", async () => {
     const { instance } = await compileProject({
@@ -354,6 +358,10 @@ describe("Compiler: merged whole-program emission", () => {
       const contents = `${"x".repeat(1016)}-${index.toString().padStart(3, "0")}`;
       return `let static_${index}: string = "${contents}";`;
     }).join("\n");
+    const liveReads = Array.from(
+      { length: 72 },
+      (_, index) => `total += static_${index}.len;`,
+    ).join("\n");
     const { instance, wat } = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -361,6 +369,9 @@ describe("Compiler: merged whole-program emission", () => {
         let expected: string = "${"x".repeat(1016)}-071";
 
         export fn allocate(): i32 {
+          let total: i32 = 0;
+          ${liveReads}
+          if (total == 0) { return 0; }
           if (static_71 != expected) { return 0; }
           return malloc(8);
         }
@@ -551,6 +562,32 @@ describe("Compiler: tree-shaken emission", () => {
     assert(used.wat.includes("$$sqrt"));
     assert(!used.wat.includes("$$sin"));
     assert(Buffer.byteLength(used.wat) > Buffer.byteLength(unused.wat));
+  });
+
+  maybeTest("shakes dead literal data before laying out the heap", async () => {
+    const heavyLiteral = `dead-${"x".repeat(512)}`;
+    const liveLiteral = "live-data";
+    const source = (useHeavy: boolean) => `
+      import malloc from "memory"
+      fn heavy(): i32 {
+        let text: string = "${heavyLiteral}";
+        return text.len;
+      }
+      export fn run(): i32 {
+        let text: string = "${liveLiteral}";
+        let block: i32 = malloc(8);
+        return text.len + (block - block)${useHeavy ? " + heavy()" : ""};
+      }
+    `;
+    const shaken = await compileProject({ "main.maple": source(false) });
+    const retained = await compileProject({ "main.maple": source(true) });
+
+    assert(shaken.wat.includes(encodedData(liveLiteral)));
+    assert(!shaken.wat.includes(encodedData(heavyLiteral)));
+    assert(retained.wat.includes(encodedData(heavyLiteral)));
+    assert(wiredHeapBase(shaken.wat) < wiredHeapBase(retained.wat));
+    assert.equal(call(shaken.instance, "run"), liveLiteral.length);
+    assert.equal(call(retained.instance, "run"), liveLiteral.length + heavyLiteral.length);
   });
 
   maybeTest("type-checks unreachable code before shaking", async () => {

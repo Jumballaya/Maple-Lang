@@ -2209,6 +2209,32 @@ describe("array operations", () => {
   });
 });
 
+describe("static data alignment", () => {
+  maybeTest("aligns i64 array payloads and f64 global structs to 8 bytes", () => {
+    const arrayWat = compile(`
+      let prefix: u8[] = [1, 2, 3];
+      let values: i64[] = [11, 22];
+      export fn prefix_data(): i32 { return prefix.data; }
+      export fn values_data(): i32 { return values.data; }
+    `);
+    const prefixData = runExport(arrayWat, "prefix_data") as number;
+    const valuesData = runExport(arrayWat, "values_data") as number;
+
+    assert.equal(valuesData % 8, 0);
+    assert(valuesData > prefixData + 3, "expected an alignment gap after the u8 payload");
+
+    const structWat = compile(`
+      struct Wide { value: f64 }
+      let prefix: u8[] = [1, 2, 3];
+      let wide: Wide = { value = 1.5 };
+      export fn wide_address(): Wide { return wide; }
+    `);
+    const wideAddress = runExport(structWat, "wide_address") as number;
+
+    assert.equal(wideAddress % 8, 0);
+  });
+});
+
 // ─── multi-return + destructuring with non-trivial inputs ──────────────────
 
 describe("multi-return destructuring", () => {

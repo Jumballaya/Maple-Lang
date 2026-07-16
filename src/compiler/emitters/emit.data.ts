@@ -19,6 +19,7 @@ import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
+import { alignofType, alignTo } from "../../shared/types";
 import type { ModuleBuilder } from "../ModuleBuilder";
 import type { ModuleEmitter } from "../ModuleEmitter";
 import { baseScalar, sizeofType } from "./emit.types";
@@ -193,24 +194,13 @@ function extractArrayLiteral(
     throw new Error("array literal element must be a literal");
   });
   const dataAddr = builder.addBytes(
-    padBytesTo(numToLittleEndian(values, elemType), 4),
+    numToLittleEndian(values, elemType),
     undefined,
-    4,
+    alignofType(elemType),
     expr.memberType === "string" ? values.map((_, index) => index * 4) : undefined,
   );
   const header = numToLittleEndian([expr.elements.length, dataAddr], "i32");
   expr.location = builder.addBytes(header, undefined, 4, [4]);
-}
-
-// Pad an encoded "\xx" byte string with explicit zeros to a multiple of
-// `alignment` bytes, so data segments stay dense (see extractStringLiteral).
-function padBytesTo(bytes: string, alignment: number): string {
-  const size = Math.floor(bytes.length / 3);
-  let padded = bytes;
-  for (let i = size; i < alignup(size, alignment); i++) {
-    padded += "\\00";
-  }
-  return padded;
 }
 
 function extractStringLiteral(expr: StringLiteralExpression, builder: StaticDataBuilder) {
@@ -224,19 +214,13 @@ function extractStringLiteral(expr: StringLiteralExpression, builder: StaticData
   //      data: *u8,
   //    }
   //
-  // Pad raw bytes to a 4-byte boundary with explicit \00 bytes so the emitted
-  // data segment covers the full allocation stride and keeps headers aligned.
-  const paddedLen = alignup(len, 4);
-  let rawBytes = Array.from(utf8).reduce((acc, b) => {
+  const rawBytes = Array.from(utf8).reduce((acc, b) => {
     return `${acc}\\${b.toString(16).padStart(2, "0")}`;
   }, "");
-  for (let i = len; i < paddedLen; i++) {
-    rawBytes += "\\00";
-  }
 
-  const charPtr = builder.addBytes(rawBytes, undefined, 4); // paddedLen bytes, align 4
+  const charPtr = builder.addBytes(rawBytes, undefined, 4);
   const header = numToLittleEndian([len, charPtr], "i32"); // [len, ptr]
-  const hdrAddr = builder.addBytes(header, undefined, 4, [4]); // header immediately follows
+  const hdrAddr = builder.addBytes(header, undefined, 4, [4]);
   expr.location = hdrAddr; // string pointer points to header
 }
 
@@ -292,8 +276,7 @@ function extractStructLiteral(
     encoded += "\\00";
   }
 
-  // cover dataAlloc's full 8-byte stride so data segments stay dense
-  builder.addBytes(padBytesTo(encoded, 8), addr, 8, pointerOffsets);
+  builder.addBytes(encoded, addr, 8, pointerOffsets);
   expr.location = addr;
 }
 
@@ -302,14 +285,19 @@ export function extractLinkedStructGlobals(program: ASTProgram, meta: ModuleMeta
     deferredGlobalInits: meta.deferredGlobalInits,
     getStruct: (name) => meta.structs[name] ?? meta.imports[name]?.structMeta,
     dataAlloc: (size, alignment = 4) => {
-      const address = meta.dataPtr;
-      meta.dataPtr += alignup(size, alignment);
+      const address = alignTo(meta.dataPtr, alignment);
+      meta.dataPtr = address + size;
       return address;
     },
     addBytes: (bytes, address, alignment = 8, pointerOffsets) => {
       const size = Math.floor(bytes.length / 3);
       const target = address ?? builder.dataAlloc(size, alignment);
-      meta.data.push({ bytes, addr: target, ...(pointerOffsets ? { pointerOffsets } : {}) });
+      meta.data.push({
+        bytes,
+        addr: target,
+        alignment,
+        ...(pointerOffsets ? { pointerOffsets } : {}),
+      });
       return target;
     },
   };
@@ -361,16 +349,6 @@ function numToLittleEndian(ns: (number | bigint)[], type: string) {
   return Array.from(new Uint8Array(buffer)).reduce((str, b) => {
     return `${str}\\${b.toString(16).padStart(2, "0")}`;
   }, "");
-}
-
-export function alignup(value: number, alignment = 4) {
-  if (alignment <= 0) {
-    throw new Error(`Alignment must be a positive integer`);
-  }
-  if (value % alignment === 0) {
-    return value;
-  }
-  return value + (alignment - (value % alignment));
 }
 
 export function buildLocalStructFrame(
