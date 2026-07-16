@@ -12,6 +12,7 @@ Each folder contains a `main.maple` entrypoint showing one major language area.
 - `08_casting`: i32/f32 casts and **i32↔i64**, **f32↔f64** widening/narrowing
 - `12_math`: math stdlib (`"math"`): trig helpers, `sqrt`/`floor`/…, `pow`/`fmod`, imported globals `PI` / `HALF_PI` / …
 - `13_multi_return`: multi-return functions, destructuring `let (a, b) = call()`, `_` discards, and pass-through `return call();`
+- `14_function_references`: cross-module function references, fn-typed locals, and indirect calls
 - `99_everything`: combined example using most implemented compiler features (includes a **64-bit** snippet)
 
 ## Compile Example

@@ -1,0 +1,7 @@
+import add, multiply from "./ops.maple"
+
+export fn _start(a: i32, b: i32): i32 {
+  let sum: fn(i32,i32):i32 = add;
+  let product: fn(i32,i32):i32 = multiply;
+  return sum(a, b) + product(a, b);
+}
