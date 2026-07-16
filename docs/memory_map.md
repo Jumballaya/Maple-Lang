@@ -5,7 +5,7 @@
 |   (64 KB, one full page)     |  $__sp initialised to 0x1_0000 (65536)
 |                              |  used for local struct variables in functions
 |                              |
-+------------------------------+  0x0001_0000  (65536)  ← __global_base
++------------------------------+  0x0001_0000  (65536)  ← static-data base
 |                              |
 |   Static data                |  array literals, global struct literals,
 |   (compiler data section)    |  string bytes + string header records
@@ -72,8 +72,8 @@ Runtime-managed by the Maple stdlib module (`src/compiler/stdlib/memory.maple`).
 - `free(ptr)` — marks the block free, coalesces with the next block if it is also free, and reclaims the wilderness top if the freed block is at `heap_end`.
 - `realloc(old, old_size, new_size)` — `malloc` + `memory.copy` + `free`.
 - `memory.grow` is called automatically when `malloc` needs more capacity.
-- Merged programs call `heap_init(align8(finalDataEnd))` as the first one-time startup initializer, placing the heap above all static data.
-- `heap_init(data_end)` is exported for explicit resets. It discards the free list and resets the wilderness to `align8(data_end)`, invalidating every allocation returned before the call.
+- Merged programs place `heap_init(align8(finalDataEnd))` first in the guarded initialization prologue, placing the heap above all static data. The prologue runs lazily before the first entry-module exported function body, not at WebAssembly instantiation time.
+- `heap_init(data_end)` is Maple-exported from the `"memory"` module for explicit resets, but is not itself a host export. It discards the free list and resets the wilderness to `align8(data_end)`, invalidating every allocation returned before the call.
 - Unwired single-module and direct-harness instances initialize lazily at `131072` on their first `malloc` call.
 
 Programs that never call `malloc` never touch the heap region.

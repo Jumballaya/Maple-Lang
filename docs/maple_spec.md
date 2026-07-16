@@ -2,7 +2,41 @@
 
 ## Overview
 
-Maple is a statically-typed, compiled language that targets WebAssembly. The compiler merges the source dependency graph into one `.wat` (WebAssembly Text Format) module and assembles it directly into the final `.wasm` binary with the project-local `wat2wasm` tool.
+Maple is a statically-typed, compiled language that targets WebAssembly. The compiler merges the source dependency graph into one `.wat` (WebAssembly Text Format) module and assembles it directly into the final `.wasm` binary with the project-local `wat2wasm` installed by npm. No system WebAssembly toolchain is required.
+
+---
+
+## Compilation and CLI
+
+Compile exactly one entry module with `maple [options] <file>`, or through npm:
+
+```bash
+npm start -- src/main.maple
+npm start -- src/main.maple -o app.wasm
+npm start -- --import-memory src/main.maple
+```
+
+`-o <file>` and `--output <file>` select the output path and may appear at most once. `--import-memory` may be repeated and is idempotent. Options may appear before or after the input file. Unknown options, a missing input, multiple input files, or a missing output-path value are errors.
+
+### Memory ownership
+
+By default, the compiled module owns and exports its linear memory. It has no host imports and can be instantiated without an import object:
+
+```js
+const { instance } = await WebAssembly.instantiate(bytes);
+const memory = instance.exports.memory;
+```
+
+With `--import-memory`, the module instead imports `runtime.memory`; it does not export that memory:
+
+```js
+const memory = new WebAssembly.Memory({ initial: requiredInitialPages });
+const { instance } = await WebAssembly.instantiate(bytes, {
+  runtime: { memory },
+});
+```
+
+In both modes the declared initial minimum is `max(2, ceil(finalDataEnd / 65536) + 1)`, which covers all live static data plus at least one heap page. A host-provided memory must meet that minimum. See [the memory map](memory_map.md) for the complete layout.
 
 ---
 
@@ -114,7 +148,7 @@ let base: i32 = 10;
 let offset: i32 = base + 5;
 ```
 
-WebAssembly constant initializers are emitted directly. Initializers that require runtime work are placed in a guarded prologue. The prologue runs once, immediately before the body of the first exported function that is called; it does not run merely because the module was instantiated. Global struct fields with literal values remain compile-time data, while expression-valued fields are written by this prologue.
+WebAssembly constant initializers are emitted directly. Initializers that require runtime work are placed in a guarded prologue. The prologue runs once, immediately before the body of the first entry-module exported function that is called; it does not run merely because the module was instantiated. Global struct fields with literal values remain compile-time data, while expression-valued fields are written by this prologue.
 
 ---
 
@@ -181,7 +215,7 @@ Destructuring constraints:
 - Duplicate names in one pattern are rejected (`let (x, x) = ...`).
 - `const (x, y) = ...` is not supported.
 
-Exported functions are available to the WebAssembly host:
+Functions exported by the entry module are available to the WebAssembly host:
 
 ```maple
 export fn _start(): i32 {
@@ -456,19 +490,21 @@ import add from "./math.maple"
 import malloc, free from "memory"
 ```
 
-Imported names are usable as function calls. The type system uses a signature encoding to check arity at call sites; full type checking of imported functions is limited to argument count.
+Imported functions are checked against the exported Maple declaration, including argument count and parameter types. A function imported from another Maple source module may also be assigned to a compatible function-typed local and called indirectly.
 
-When a module links against known import metadata, function signatures are encoded as `params_return` where each letter is one lane:
+Exported structs may be imported and used in annotations, literals, member reads and writes, parameters, return values, and structural `==` comparisons:
 
-| Letter | Meaning |
-|--------|---------|
-| `i` | `i32` |
-| `I` | `i64` |
-| `f` | `f32` |
-| `F` | `f64` |
-| `v` | no parameter or no return (`void`) |
+```maple
+import Pair from "./types.maple"
+import keep_pair from "./consumer.maple"
 
-Example: `ii_i` is `(i32, i32) -> i32`; `I_I` is `(i64) -> i64`; `v_F` is `() -> f64`.
+let value: Pair = { left = 2, right = 3 };
+let returned: Pair = keep_pair(value);
+```
+
+Struct identity is nominal across modules. Two structs with the same name and field layout remain distinct when defined by different modules; type diagnostics qualify such names with their defining module.
+
+The bundled standard-library modules are Maple source files under `src/compiler/stdlib/` and pass through the same merged compilation pipeline as user modules.
 
 ### Math standard library (`"math"`)
 
@@ -484,11 +520,21 @@ export fn sample(t: f32): f32 {
 
 Tier 2 functions use range reduction and short polynomials; expect roughly **1e-3** accuracy on spot checks, not full IEEE semantics. Imported globals are immutable in Maple (`cannot assign to imported global`).
 
+### Memory standard library (`"memory"`)
+
+The bundled `"memory"` module exports `malloc`, `free`, `realloc`, and `heap_init` to other Maple modules. When the allocator is included, the compiler places `heap_init(align8(finalDataEnd))` first in the guarded initialization prologue. It runs once, immediately before the first entry-module exported function body executes, rather than when the WebAssembly module is instantiated.
+
+`heap_init` is a Maple export for cross-module use, but the standard-library function is not itself a WebAssembly host export because only entry-module exports are host-visible. Calling `heap_init(data_end)` explicitly resets the allocator to `align8(data_end)`, discards the free list, and invalidates all previously returned allocations.
+
+### String standard library (`"string"`)
+
+The provisional `string_copy(source, destination)` operation is exported by the bundled `"string"` module and imported with `import string_copy from "string"`. Its behavior is described in [Strings](#strings).
+
 ---
 
 ## Exports
 
-`export` on a function or variable makes it available to the WebAssembly host and to other modules that import it:
+`export` makes a declaration available to other Maple modules that import it. Only exports declared by the entry module are placed in the final WebAssembly export section and made available to the host; exports from dependency and standard-library modules remain internal to the merged program.
 
 ```maple
 export fn add(a: i32, b: i32): i32 {
@@ -497,6 +543,12 @@ export fn add(a: i32, b: i32): i32 {
 
 export let counter: i32 = 0;
 ```
+
+---
+
+## Whole-program tree shaking
+
+Maple parses and type-checks every module before whole-program reachability is computed, so an error in unreachable code is still reported. Emission then removes unreachable functions, globals, function-table entries, runtime helpers, and literal data. A dependency's unused export does not become reachable merely because it is marked `export`; only entry-module exports form host-visible roots.
 
 ---
 
