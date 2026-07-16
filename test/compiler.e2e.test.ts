@@ -470,7 +470,7 @@ describe("Compiler: tree-shaken emission", () => {
   });
 
   maybeTest("keeps cross-module functions reached only through fn-refs callable", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance, module, wat } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
         export fn run(): i32 {
@@ -485,6 +485,10 @@ describe("Compiler: tree-shaken emission", () => {
     assert(wat.includes("(func $ops$$add"));
     assert(wat.includes("(func $ops$$__indirect_add"));
     assert(wat.includes("(table $__fn_table 1 1 funcref)"));
+    assert(wat.includes("(elem (i32.const 0) func $ops$$__indirect_add)"));
+    assert(
+      WebAssembly.Module.exports(module).every((entry) => !entry.name.includes("__indirect_")),
+    );
   });
 
   maybeTest("does not slot fn-refs created only by unreachable code", async () => {

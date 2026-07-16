@@ -438,11 +438,8 @@ function emitFnTable(mod: ModuleMeta, emitter: ModuleEmitter): void {
   // so `call_indirect` validates against an existing table 0.
   emitter.addTableWat(`(table $__fn_table ${n} ${n} funcref)`);
   if (n === 0) return;
-  // Declarative elem marks the trampolines as address-takable so `ref.func`
-  // can reference them. Actual population happens at runtime inside
-  // __make_fnref (see emitMakeFnRefHelper) performs table initialization.
   const trampolines = entries.map((e) => `$${e.trampolineName}`).join(" ");
-  emitter.addElemWat(`(elem declare func ${trampolines})`);
+  emitter.addElemWat(`(elem (i32.const 0) func ${trampolines})`);
 }
 
 function emitTrampolines(mod: ModuleMeta, emitter: ModuleEmitter): void {
@@ -450,13 +447,8 @@ function emitTrampolines(mod: ModuleMeta, emitter: ModuleEmitter): void {
     const fnMeta = mod.functions[originalName];
     if (!fnMeta) continue;
 
-    // Exporting the trampoline serves two purposes:
-    //   1. It marks the function as address-takable (reference-types spec),
-    //      which is required for `ref.func $__indirect_*` inside __make_fnref.
-    //   2. It preserves the existing address-take hint for compatibility.
-    // The export name is internal (`__indirect_*`) and not part of the user
-    // API surface.
-    let wat = `(func $${entry.trampolineName} (export "${entry.trampolineName}") (param $__env i32)`;
+    // Named functions need trampolines to accept the indirect-call environment parameter.
+    let wat = `(func $${entry.trampolineName} (param $__env i32)`;
     for (const p of fnMeta.params) {
       wat += ` (param $${p.name} ${valueTypeToWasm(p.type)})`;
     }
@@ -474,27 +466,9 @@ function emitTrampolines(mod: ModuleMeta, emitter: ModuleEmitter): void {
 }
 
 function emitMakeFnRefHelper(mod: ModuleMeta, emitter: ModuleEmitter): void {
-  const entries = [...mod.fnTable.values()].sort((a, b) => a.slot - b.slot);
-
-  // Guard global: table population runs exactly once, on the first
-  // __make_fnref call.
-  emitter.addGlobalWat("(global $__fn_table_inited (mut i32) (i32.const 0))");
-
   const lines: string[] = [];
   lines.push("(func $__make_fnref (param $idx i32) (result i32)");
   lines.push("  (local $ptr i32)");
-  if (entries.length > 0) {
-    lines.push("  (if (i32.eqz (global.get $__fn_table_inited))");
-    lines.push("    (then");
-    lines.push("      (global.set $__fn_table_inited (i32.const 1))");
-    for (const e of entries) {
-      lines.push(
-        `      (table.set $__fn_table (i32.const ${e.slot}) (ref.func $${e.trampolineName}))`,
-      );
-    }
-    lines.push("    )");
-    lines.push("  )");
-  }
   lines.push(`  (local.set $ptr (call $${mod.closureAllocator ?? "alloc"} (i32.const 8)))`);
   lines.push("  (i32.store (local.get $ptr) (local.get $idx))");
   lines.push("  (i32.store offset=4 (local.get $ptr) (i32.const 0))");

@@ -3303,6 +3303,18 @@ describe("standalone allocator fallback", () => {
 });
 
 describe("stdlib execution through the merged pipeline", () => {
+  maybeTest("fn-reference works on the first exported call of a fresh instance", async () => {
+    const source = `
+      fn multiply(a: i32, b: i32): i32 { return a * b; }
+      export fn run(): i32 {
+        let op: fn(i32,i32):i32 = multiply;
+        return op(6, 7);
+      }
+    `;
+
+    assert.equal(await runMergedExport(source, "run"), 42);
+  });
+
   maybeTest("fn-reference calls compose inside binary expressions", async () => {
     const source = `
       fn add(a: i32, b: i32): i32 { return a + b; }

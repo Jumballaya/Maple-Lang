@@ -2646,17 +2646,34 @@ describe("Emission: named function references", () => {
     assert(wat.includes("(table $__fn_table 1 1 funcref)"), `Missing table: ${wat}`);
   });
 
-  test("elem segment declares trampoline as address-takable", () => {
+  test("active elem initializes private trampolines without runtime table writes", () => {
     const { wat } = compile(`
       fn add(a: i32, b: i32): i32 { return a + b; }
       fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
     `);
-    // Declarative elem preserves the existing runtime table initialization.
-    // The table is populated on demand inside __make_fnref.
-    assert(wat.includes("(elem declare func $__indirect_add)"), `Missing elem: ${wat}`);
     assert(
-      wat.includes("(table.set $__fn_table (i32.const 0) (ref.func $__indirect_add))"),
-      `Missing runtime table.set: ${wat}`,
+      wat.includes("(elem (i32.const 0) func $__indirect_add)"),
+      `Missing active elem: ${wat}`,
+    );
+    assert(!wat.includes("__fn_table_inited"), `Unexpected table guard: ${wat}`);
+    assert(!wat.includes("table.set"), `Unexpected runtime table write: ${wat}`);
+    assert(!wat.includes('(export "__indirect_'), `Unexpected trampoline export: ${wat}`);
+  });
+
+  test("active elem follows deterministic fn-table slot order", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn sub(a: i32, b: i32): i32 { return a - b; }
+      fn outer(): i32 {
+        let second: fn(i32,i32):i32 = sub;
+        let first: fn(i32,i32):i32 = add;
+        return first(3, 2) + second(3, 2);
+      }
+    `);
+
+    assert(
+      wat.includes("(elem (i32.const 0) func $__indirect_sub $__indirect_add)"),
+      `Wrong active elem order: ${wat}`,
     );
   });
 
