@@ -1,7 +1,7 @@
 import malloc, free from "memory"
 
 export fn _start(): i32 {
-  let ptr: i32 = malloc(8);
+  let ptr: i32 = malloc(4);
   free(ptr);
   return ptr;
 }
