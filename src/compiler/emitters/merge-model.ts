@@ -34,6 +34,7 @@ import type {
   StructData,
   VariableMeta,
 } from "./emitter.types";
+import { analyzeReachability, type ReachableSet } from "./reachability";
 
 export type DeclarationEdges = {
   calls: string[];
@@ -139,6 +140,7 @@ export type MergedProgram = {
   memoryMinimumPages: number;
   dataAddresses: Map<string, Map<number, number>>;
   dataAllocations: Map<string, MergedDataAllocation>;
+  dataOwners: Map<string, string>;
   startupInitializers: MergedStartupInitializer[];
   fnTable: {
     provisional: true;
@@ -147,6 +149,7 @@ export type MergedProgram = {
     signatures: Map<string, FnSignature>;
   };
   runtimeHelpers: Map<string, MergedRuntimeHelper>;
+  reachable: ReachableSet;
 };
 
 type ImportKind = "func" | "global" | "struct";
@@ -805,6 +808,20 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     }
   }
 
+  const reachability = analyzeReachability({
+    declarations,
+    exports,
+    dataAllocations,
+    startupInitializers,
+    fnTableEntries: fnEntries,
+    runtimeHelpers,
+  });
+  const reachableSignatures = new Map<string, FnSignature>();
+  for (const entry of reachability.fnTableEntries) {
+    const signature = fnSignatures.get(entry.signatureKey);
+    if (signature) reachableSignatures.set(entry.signatureKey, signature);
+  }
+
   return {
     entryKey: graph.entryKey,
     moduleOrder: orderedModules.map((module) => module.key),
@@ -821,13 +838,15 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     memoryMinimumPages: minimumMemoryPages(dataCursor),
     dataAddresses,
     dataAllocations,
+    dataOwners: reachability.dataOwners,
     startupInitializers,
     fnTable: {
       provisional: true,
-      required: orderedModules.some((module) => module.data.needsClosureRuntime),
-      entries: fnEntries,
-      signatures: fnSignatures,
+      required: reachability.fnTableEntries.length > 0,
+      entries: reachability.fnTableEntries,
+      signatures: reachableSignatures,
     },
     runtimeHelpers,
+    reachable: reachability.reachable,
   };
 }

@@ -267,6 +267,206 @@ describe("Merged program model", () => {
     });
   });
 
+  test("excludes unreachable private functions in imported modules", () => {
+    const model = modelFor({
+      "main.maple": `
+        import used from "./dep.maple"
+        export fn run(): i32 { return used(); }
+      `,
+      "dep.maple": `
+        fn unused(): i32 { return 1; }
+        export fn used(): i32 { return 2; }
+      `,
+    });
+
+    assert(model.reachable.functions.has("dep$$used"));
+    assert.equal(model.reachable.functions.has("dep$$unused"), false);
+  });
+
+  test("excludes unreachable exports from non-entry modules", () => {
+    const model = modelFor({
+      "main.maple": `
+        import unused from "./dep.maple"
+        export fn run(): i32 { return 1; }
+      `,
+      "dep.maple": "export fn unused(): i32 { return 2; }",
+    });
+
+    assert.equal(model.reachable.functions.has("dep$$unused"), false);
+  });
+
+  test("reaches and slots a function referenced only from reachable code", () => {
+    const model = modelFor({
+      "main.maple": `
+        fn target(value: i32): i32 { return value + 1; }
+        export fn run(): i32 {
+          let ref: fn(i32):i32 = target;
+          return ref(1);
+        }
+      `,
+    });
+
+    assert(model.reachable.functions.has("main$$target"));
+    assert(model.reachable.runtimeHelpers.has("__make_fnref"));
+    assert(
+      [...model.reachable.functions].some((name) => name.endsWith("$$malloc")),
+      JSON.stringify({
+        functions: [...model.reachable.functions],
+        helper: model.runtimeHelpers.get("__make_fnref"),
+      }),
+    );
+    assert.deepEqual(
+      model.fnTable.entries.map(({ functionName, slot }) => ({ functionName, slot })),
+      [{ functionName: "main$$target", slot: 0 }],
+    );
+  });
+
+  test("does not slot a function referenced only from unreachable code", () => {
+    const model = modelFor({
+      "main.maple": `
+        fn target(value: i32): i32 { return value + 1; }
+        fn unused(): i32 {
+          let ref: fn(i32):i32 = target;
+          return ref(1);
+        }
+        export fn run(): i32 { return 0; }
+      `,
+    });
+
+    assert.equal(model.reachable.functions.has("main$$unused"), false);
+    assert.equal(model.reachable.functions.has("main$$target"), false);
+    assert.equal(
+      model.fnTable.entries.some((entry) => entry.functionName === "main$$target"),
+      false,
+    );
+  });
+
+  test("roots functions used only by startup initializers", () => {
+    const model = modelFor({
+      "main.maple": `
+        fn seed(): i32 { return 42; }
+        let initialized: i32 = seed();
+        export fn run(): i32 { return 0; }
+      `,
+    });
+
+    assert(model.reachable.globals.has("main$$initialized"));
+    assert(model.reachable.functions.has("main$$seed"));
+  });
+
+  test("walks transitive calls and drops the chain when its root edge is removed", () => {
+    const withCall = modelFor({
+      "main.maple": `
+        fn c(): i32 { return 3; }
+        fn b(): i32 { return c(); }
+        fn a(): i32 { return b(); }
+        export fn run(): i32 { return a(); }
+      `,
+    });
+    const withoutCall = modelFor({
+      "main.maple": `
+        fn c(): i32 { return 3; }
+        fn b(): i32 { return c(); }
+        fn a(): i32 { return b(); }
+        export fn run(): i32 { return 0; }
+      `,
+    });
+
+    assert.deepEqual(
+      [...withCall.reachable.functions],
+      ["main$$run", "main$$a", "main$$b", "main$$c"],
+    );
+    assert.equal(withoutCall.reachable.functions.has("main$$a"), false);
+    assert.equal(withoutCall.reachable.functions.has("main$$b"), false);
+    assert.equal(withoutCall.reachable.functions.has("main$$c"), false);
+  });
+
+  test("tracks globals only when reachable code reads them", () => {
+    const unreachable = modelFor({
+      "main.maple": `
+        let value: i32 = 42;
+        fn unused(): i32 { return value; }
+        export fn run(): i32 { return 0; }
+      `,
+    });
+    const reachable = modelFor({
+      "main.maple": `
+        let value: i32 = 42;
+        export fn run(): i32 { return value; }
+      `,
+    });
+
+    assert.equal(unreachable.reachable.globals.has("main$$value"), false);
+    assert(reachable.reachable.globals.has("main$$value"));
+  });
+
+  test("tracks array helpers only for reachable array indexing", () => {
+    const withArray = modelFor({
+      "main.maple": `
+        let values: i32[] = [1, 2];
+        export fn run(): i32 { return values[0]; }
+      `,
+    });
+    const withoutArray = modelFor({
+      "main.maple": "export fn run(): i32 { return 0; }",
+    });
+
+    assert(withArray.reachable.runtimeHelpers.has("__elem_addr"));
+    assert.equal(withoutArray.reachable.runtimeHelpers.has("__elem_addr"), false);
+  });
+
+  test("assigns reachable fn-table slots deterministically", () => {
+    const files = {
+      "main.maple": `
+        fn first(value: i32): i32 { return value; }
+        fn second(value: i32): i32 { return value + 1; }
+        export fn run(): i32 {
+          let second_ref: fn(i32):i32 = second;
+          let first_ref: fn(i32):i32 = first;
+          return first_ref(second_ref(1));
+        }
+      `,
+    };
+
+    assert.deepEqual(modelFor(files).fnTable, modelFor(files).fnTable);
+    assert.deepEqual(
+      modelFor(files).fnTable.entries.map(({ functionName, slot }) => ({ functionName, slot })),
+      [
+        { functionName: "main$$second", slot: 0 },
+        { functionName: "main$$first", slot: 1 },
+      ],
+    );
+  });
+
+  test("maps static allocations to their declaring function or global", () => {
+    const model = modelFor({
+      "main.maple": `
+        struct Pair { left: i32, right: i32 }
+        let global_text: string = "global";
+        let global_values: i32[] = [1, 2];
+        let global_pair: Pair = { left = 3, right = 4 };
+        export fn run(): i32 {
+          let local_text: string = "local";
+          return 0;
+        }
+      `,
+    });
+    const global = model.globals.get("main$$global_text")!;
+    const run = model.functions.get("main$$run")!;
+
+    assert.deepEqual(
+      new Set([...model.dataAllocations.values()].map((allocation) => allocation.kind)),
+      new Set(["string", "array", "struct"]),
+    );
+    assert.equal(model.dataOwners.size, model.dataAllocations.size);
+    assert(run.edges.ownedData.length > 0);
+    for (const allocation of model.dataAllocations.values()) {
+      assert.equal(model.dataOwners.get(allocation.id), allocation.owner);
+    }
+    assert.equal(model.dataOwners.get(global.edges.ownedData[0]!), "main$$global_text");
+    assert.equal(model.dataOwners.get(run.edges.ownedData[0]!), "main$$run");
+  });
+
   test("is deeply deterministic", () => {
     withProgram(
       {
