@@ -31,7 +31,7 @@ import type { ModuleRecord } from "../module-graph";
 import { canonicalFnType, parseFnType } from "./emit.types";
 import type { DeferredGlobalInit, ModuleMeta, StructData } from "./emitter.types";
 import type { MergedProgram } from "./merge-model";
-import { collectFnReferences, emitModule } from "./module";
+import { emitModule } from "./module";
 
 type Scope = Set<string>[];
 
@@ -299,6 +299,19 @@ function buildMergedAst(model: MergedProgram): ASTProgram {
     if (!module) continue;
     for (const original of module.ast.statements) {
       if (original instanceof ImportStatement) continue;
+      if (
+        original instanceof FunctionStatement &&
+        !model.reachable.functions.has(localKey(module, original.name))
+      ) {
+        continue;
+      }
+      if (
+        original instanceof LetStatement &&
+        !(original.pattern instanceof TuplePattern) &&
+        !model.reachable.globals.has(localKey(module, original.pattern.tokenLiteral()))
+      ) {
+        continue;
+      }
       const statement = clone(original);
       if (statement instanceof StructStatement) {
         statement.name = structName(model, module, statement.name);
@@ -355,26 +368,28 @@ function buildMeta(model: MergedProgram): ModuleMeta {
   const meta: ModuleMeta = {
     name: "merged",
     globals: Object.fromEntries(
-      [...model.globals].map(([name, global]) => [
-        name,
-        { ...global.meta, name, type: global.resolvedType },
-      ]),
+      [...model.globals]
+        .filter(([name]) => model.reachable.globals.has(name))
+        .map(([name, global]) => [name, { ...global.meta, name, type: global.resolvedType }]),
     ),
     functions: Object.fromEntries(
-      [...model.functions].map(([name, fn]) => [
-        name,
-        {
-          ...fn.meta,
+      [...model.functions]
+        .filter(([name]) => model.reachable.functions.has(name))
+        .map(([name, fn]) => [
           name,
-          params: fn.resolvedParams,
-          mapleResults: fn.resolvedResults,
-          exported: [...model.exports.values()].includes(name),
-        },
-      ]),
+          {
+            ...fn.meta,
+            name,
+            params: fn.resolvedParams,
+            mapleResults: fn.resolvedResults,
+            exported: [...model.exports.values()].includes(name),
+          },
+        ]),
     ),
     imports: {},
     exports: {},
     structs: mergedStructs(model),
+    // data shaking: T24
     data: model.data.map((entry) => ({
       name: entry.id,
       addr: entry.address,
@@ -388,10 +403,21 @@ function buildMeta(model: MergedProgram): ModuleMeta {
     dataPtr: model.dataEnd,
     memoryMinimumPages: model.memoryMinimumPages,
     deferredGlobalInits,
-    fnTable: new Map(),
-    fnSignatures: new Map(),
+    fnTable: new Map(
+      model.fnTable.entries.map((entry) => [
+        entry.functionName,
+        {
+          slot: entry.slot,
+          trampolineName: entry.trampolineName,
+          originalName: entry.functionName,
+          signatureKey: entry.signatureKey,
+          isLambda: entry.isLambda,
+        },
+      ]),
+    ),
+    fnSignatures: new Map(model.fnTable.signatures),
     liftedLambdas: [],
-    needsClosureRuntime: false,
+    needsClosureRuntime: model.fnTable.required,
   };
   return meta;
 }
@@ -414,7 +440,6 @@ export function emitMergedProgram(
 ): string {
   const ast = buildMergedAst(model);
   const meta = buildMeta(model);
-  collectFnReferences(ast, meta);
   const allocator = [...model.imports].find(
     ([local, target]) => local.endsWith("$$alloc") && target.endsWith("$$malloc"),
   )?.[1];
@@ -422,7 +447,6 @@ export function emitMergedProgram(
     if (!allocator) throw new Error("function references require the merged memory allocator");
     meta.closureAllocator = allocator;
   }
-  if (meta.imports.alloc?.synthesized) delete meta.imports.alloc;
   const wat = emitModule(ast, meta, options).buildWat();
   return publicExports(wat, model);
 }

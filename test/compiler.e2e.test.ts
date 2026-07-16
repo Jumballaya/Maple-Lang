@@ -438,6 +438,150 @@ describe("Compiler: merged whole-program emission", () => {
   });
 });
 
+describe("Compiler: tree-shaken emission", () => {
+  maybeTest("removes unreachable private functions from imported modules", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        import used from "./dep.maple"
+        export fn run(): i32 { return used(); }
+      `,
+      "dep.maple": `
+        fn unused(): i32 { return 1; }
+        export fn used(): i32 { return 42; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 42);
+    assert(wat.includes("(func $dep$$used"));
+    assert(!wat.includes("(func $dep$$unused"));
+    assert(wat.indexOf("(func $dep$$used") < wat.indexOf("(func $main$$run"));
+  });
+
+  maybeTest("removes unreachable exports from non-entry modules", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        import unused from "./dep.maple"
+        export fn run(): i32 { return 1; }
+      `,
+      "dep.maple": "export fn unused(): i32 { return 2; }",
+    });
+
+    assert(!wat.includes("(func $dep$$unused"));
+  });
+
+  maybeTest("keeps cross-module functions reached only through fn-refs callable", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        import add from "./ops.maple"
+        export fn run(): i32 {
+          let op: fn(i32,i32):i32 = add;
+          return op(19, 23);
+        }
+      `,
+      "ops.maple": "export fn add(a: i32, b: i32): i32 { return a + b; }",
+    });
+
+    assert.equal(call(instance, "run"), 42);
+    assert(wat.includes("(func $ops$$add"));
+    assert(wat.includes("(func $ops$$__indirect_add"));
+    assert(wat.includes("(table $__fn_table 1 1 funcref)"));
+  });
+
+  maybeTest("does not slot fn-refs created only by unreachable code", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        fn target(value: i32): i32 { return value + 1; }
+        fn unused(): i32 {
+          let ref: fn(i32):i32 = target;
+          return ref(1);
+        }
+        export fn run(): i32 { return 42; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 42);
+    assert(!wat.includes("(func $main$$target"));
+    assert(!wat.includes("(func $main$$unused"));
+    assert(!wat.includes("(table $__fn_table"));
+  });
+
+  maybeTest("keeps functions reached only from startup initialization", async () => {
+    const { instance, wat } = await compileProject({
+      "main.maple": `
+        fn seed(): i32 { return 42; }
+        let initialized: i32 = seed();
+        export fn run(): i32 { return initialized; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 42);
+    assert(wat.includes("(func $main$$seed"));
+  });
+
+  maybeTest("emits only the used stdlib function chain", async () => {
+    const unused = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        import sqrt from "math"
+        export fn run(): i32 {
+          let block: i32 = malloc(8);
+          return block - block;
+        }
+      `,
+    });
+    const used = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        import sqrt from "math"
+        export fn run(): i32 {
+          let block: i32 = malloc(8);
+          return (sqrt(16.0) as i32) + (block - block);
+        }
+      `,
+    });
+
+    assert.equal(call(unused.instance, "run"), 0);
+    assert(!unused.wat.includes("$$sqrt"));
+    assert(!unused.wat.includes("$$sin"));
+    assert.equal(call(used.instance, "run"), 4);
+    assert(used.wat.includes("$$sqrt"));
+    assert(!used.wat.includes("$$sin"));
+    assert(Buffer.byteLength(used.wat) > Buffer.byteLength(unused.wat));
+  });
+
+  maybeTest("type-checks unreachable code before shaking", async () => {
+    const errors = await projectErrors({
+      "main.maple": `
+        fn invalid(): i32 {
+          let value: i32 = 1.5;
+          return value;
+        }
+        export fn run(): i32 { return 42; }
+      `,
+    });
+
+    assert(errors.some((error) => error.includes("cannot assign 'f32' to 'i32'")));
+  });
+
+  maybeTest("emits deterministic WAT after filtering", async () => {
+    const project = {
+      "main.maple": `
+        import used from "./dep.maple"
+        import unused from "./extra.maple"
+        export fn run(): i32 { return used(); }
+      `,
+      "dep.maple": "export fn used(): i32 { return 42; }",
+      "extra.maple": "export fn unused(): i32 { return 0; }",
+    };
+
+    const first = await compileProject(project);
+    const second = await compileProject(project);
+
+    assert.equal(first.wat, second.wat);
+    assert(!first.wat.includes("$$unused"));
+  });
+});
+
 describe("Compiler: merged-program acceptance", () => {
   maybeTest("uses an imported math struct", async () => {
     const { instance } = await compileProject({

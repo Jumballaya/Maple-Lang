@@ -1,3 +1,4 @@
+import { canonicalFnType, valueTypeToWasm } from "./emit.types";
 import type {
   MergedDataAllocation,
   MergedDeclaration,
@@ -81,7 +82,25 @@ export function analyzeReachability(input: ReachabilityInput): ReachabilityAnaly
     if (!reached) continue;
     for (const fnRef of declaration.edges.fnRefs) {
       if (!reachable.functions.has(fnRef) || slotted.has(fnRef)) continue;
-      const candidate = candidates.get(fnRef);
+      const functionDeclaration = input.declarations.get(fnRef);
+      const prefix =
+        functionDeclaration?.kind === "function"
+          ? fnRef.slice(0, -functionDeclaration.sourceName.length)
+          : "";
+      const candidate =
+        candidates.get(fnRef) ??
+        (functionDeclaration?.kind === "function"
+          ? {
+              functionName: fnRef,
+              trampolineName: `${prefix}__indirect_${functionDeclaration.sourceName}`,
+              signatureKey: canonicalFnType(
+                functionDeclaration.meta.params.map((parameter) => valueTypeToWasm(parameter.type)),
+                functionDeclaration.meta.results,
+              ),
+              slot: 0,
+              isLambda: false,
+            }
+          : undefined);
       if (!candidate) continue;
       slotted.add(fnRef);
       fnTableEntries.push({ ...candidate, slot: fnTableEntries.length });
