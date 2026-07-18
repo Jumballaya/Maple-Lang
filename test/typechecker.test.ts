@@ -314,25 +314,32 @@ describe("TypeChecker: mixed integer signedness", () => {
   test("same-signedness operands and explicit casts are accepted", () => {
     expectNoErrors(`
       fn f(a: u32, b: u32, c: i32, d: i32, e: u8, g: u8): void {
-        a + b; c - d; e | g; (c as u32) + b;
+        let r1: u32 = a + b;
+        let r2: i32 = c - d;
+        let r3: u32 = e | g;
+        let r4: u32 = (c as u32) + b;
       }
     `);
   });
 
   test("equality permits same-lane signed and unsigned operands", () => {
-    expectNoErrors("fn f(a: i32, b: u32): void { a == b; a != b; }");
+    expectNoErrors("fn f(a: i32, b: u32): void { let eq: bool = a == b; let ne: bool = a != b; }");
   });
 
   test("unsigned operands adopt bare literals recursively", () => {
     expectNoErrors(`
       fn f(x: u32, y: u32): void {
-        x + 1; 1 + x; x < 10; 1 + 2 + x; (1 + x) < y;
+        let a: u32 = x + 1;
+        let b: u32 = 1 + x;
+        let c: bool = x < 10;
+        let d: u32 = 1 + 2 + x;
+        let e: bool = (1 + x) < y;
       }
     `);
   });
 
   test("shift counts ignore signedness", () => {
-    expectNoErrors("fn f(x: u32, s: i32): void { x << s; x >> s; }");
+    expectNoErrors("fn f(x: u32, s: i32): void { let l: u32 = x << s; let r: u32 = x >> s; }");
   });
 
   test("unary minus on unsigned values is legal", () => {

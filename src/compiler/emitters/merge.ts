@@ -89,12 +89,44 @@ function rewriteType(model: MergedProgram, module: ModuleRecord, type: string): 
   return structName(model, module, type);
 }
 
+function rewriteAnnotations(
+  expression: ASTExpression,
+  model: MergedProgram,
+  module: ModuleRecord,
+): void {
+  if (expression.resolvedType !== undefined) {
+    expression.resolvedType = rewriteType(model, module, expression.resolvedType);
+  }
+  if (expression.resolvedResultTypes !== undefined) {
+    expression.resolvedResultTypes = expression.resolvedResultTypes.map((type) =>
+      rewriteType(model, module, type),
+    );
+  }
+  if (expression.resolvedDecl) {
+    const declaration = expression.resolvedDecl;
+    if (declaration.kind !== "local" && declaration.kind !== "param") {
+      const name = symbolName(model, module, declaration.name);
+      declaration.name = name;
+      if (declaration.kind === "import") {
+        if (model.functions.has(name)) declaration.kind = "function";
+        else if (model.globals.has(name)) declaration.kind = "global";
+      }
+    }
+  }
+  const target = expression.resolvedCallTarget;
+  if (target?.kind === "field") {
+    target.structIdentity = rewriteType(model, module, target.structIdentity);
+    target.fnType = rewriteType(model, module, target.fnType);
+  }
+}
+
 function rewriteExpression(
   expression: ASTExpression,
   model: MergedProgram,
   module: ModuleRecord,
   scopes: Scope,
 ): void {
+  rewriteAnnotations(expression, model, module);
   if (expression instanceof Identifier) {
     const name = expression.tokenLiteral();
     expression.typeAnnotation = rewriteType(model, module, expression.typeAnnotation);
@@ -292,7 +324,7 @@ function mergedStructs(model: MergedProgram): Record<string, StructData> {
   );
 }
 
-function buildMergedAst(model: MergedProgram): ASTProgram {
+export function buildMergedAst(model: MergedProgram): ASTProgram {
   const program = new ASTProgram("statement", "merged");
   for (const moduleKey of model.moduleOrder) {
     const module = model.modules.get(moduleKey);

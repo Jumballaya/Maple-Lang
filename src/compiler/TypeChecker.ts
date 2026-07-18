@@ -25,10 +25,17 @@ import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
 import { IfStatement } from "../parser/ast/statements/IfStatement";
 import { LetStatement } from "../parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
+import { StructStatement } from "../parser/ast/statements/StructStatement";
 import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
-import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
+import type {
+  ASTExpression,
+  ASTStatement,
+  ResolvedCallTarget,
+  ResolvedDecl,
+} from "../parser/ast/types/ast.type";
+import { stmtDefinitelyReturns } from "./emitters/analysis/flow";
 import {
   baseScalar,
   canonicalFnType,
@@ -48,11 +55,21 @@ const ORDERING_OPS = new Set(["<", "<=", ">", ">="]);
 const SIGN_MIXING_OPS = new Set([...ARITHMETIC_OPS, "&", "|", "^", ...ORDERING_OPS]);
 const SAME_LANE_OPS = new Set([...ARITHMETIC_OPS, ...cmpOps]);
 const LITERAL_ADOPTION_OPS = new Set([...ARITHMETIC_OPS, ...BITWISE_OPS]);
+const INTEGER_TYPES = new Set(["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"]);
+const NUMERIC_TYPES = new Set([...INTEGER_TYPES, "f32", "f64", "bool"]);
+const I32_LANE_INDEX_TYPES = new Set(["i8", "u8", "i16", "u16", "i32", "u32", "bool"]);
+const BUILTIN_TYPES = new Set([...NUMERIC_TYPES, "bool", "string"]);
 
 // ─── Scope ────────────────────────────────────────────────────────────────────
 
-type ScopeEntry = { type: string; mutable: boolean };
+type ScopeEntry = {
+  type: string;
+  mutable: boolean;
+  kind: Exclude<ResolvedDecl["kind"], "intrinsic">;
+};
 type Scope = Map<string, ScopeEntry>;
+
+type ExpressionPosition = "value" | "effect" | "multi";
 
 function resolveTypeIdentity(type: string, meta: ModuleMeta): string {
   if (type.startsWith("*")) return `*${resolveTypeIdentity(type.slice(1), meta)}`;
@@ -73,24 +90,77 @@ function structDefinition(type: string, meta: ModuleMeta): StructData | undefine
   return Object.values(meta.imports).find((entry) => entry.typeIdentity === type)?.structMeta;
 }
 
+function isKnownType(type: string, meta: ModuleMeta, allowVoid = false): boolean {
+  if (type === "void") return allowVoid;
+  if (BUILTIN_TYPES.has(type)) return true;
+  if (type.startsWith("*")) return isKnownType(type.slice(1), meta);
+  if (type.endsWith("[]")) return isKnownType(type.slice(0, -2), meta);
+  const fnType = parseFnType(type);
+  if (fnType) {
+    return (
+      fnType.params.every((entry) => isKnownType(entry, meta)) &&
+      fnType.results.every((entry) => isKnownType(entry, meta, true))
+    );
+  }
+  if (meta.structs[type]) return true;
+  const imported = meta.imports[type];
+  if (imported?.info?.kind === "struct") return true;
+  return Object.values(meta.imports).some((entry) => entry.typeIdentity === type);
+}
+
+function firstUnknownType(type: string, meta: ModuleMeta, allowVoid = false): string | null {
+  if (type === "void") return allowVoid ? null : type;
+  if (BUILTIN_TYPES.has(type)) return null;
+  if (type.startsWith("*")) return firstUnknownType(type.slice(1), meta);
+  if (type.endsWith("[]")) return firstUnknownType(type.slice(0, -2), meta);
+  const fnType = parseFnType(type);
+  if (fnType) {
+    for (const param of fnType.params) {
+      const unknown = firstUnknownType(param, meta);
+      if (unknown) return unknown;
+    }
+    for (const result of fnType.results) {
+      const unknown = firstUnknownType(result, meta, true);
+      if (unknown) return unknown;
+    }
+    return null;
+  }
+  return isKnownType(type, meta, allowVoid) ? null : type;
+}
+
+function checkKnownType(
+  type: string,
+  token: ASTExpression["token"],
+  meta: ModuleMeta,
+  errors: MapleError[],
+  allowVoid = false,
+): void {
+  const unknown = type === "" ? null : firstUnknownType(type, meta, allowVoid);
+  if (unknown) {
+    errors.push(new MapleError(`unknown type '${unknown}'`, token.line, token.col));
+  }
+}
+
+function fnTypeResults(type: string): string[] | null {
+  const parsed = parseFnType(type);
+  if (!parsed) return null;
+  if (parsed.results.length === 1 && parsed.results[0] === "void") return [];
+  return parsed.results;
+}
+
 function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): string[] | null {
   const intrinsic = getIntrinsic(fnName);
   if (intrinsic) return intrinsic.result === "void" ? [] : [intrinsic.result];
 
-  const fn = meta.functions[fnName];
-  if (fn) return fn.mapleResults;
-
   if (scope) {
     const entry = scope.get(fnName);
     if (entry && isFnType(entry.type)) {
-      const parsed = parseFnType(entry.type);
-      if (parsed) {
-        const r = parsed.results;
-        if (r.length === 1 && r[0] === "void") return [];
-        return r;
-      }
+      return fnTypeResults(entry.type);
     }
   }
+
+  const fn = meta.functions[fnName];
+  if (fn) return fn.mapleResults;
 
   const imp = meta.imports[fnName];
   if (imp?.info?.kind === "func") {
@@ -110,6 +180,139 @@ function getCallReturnTypes(meta: ModuleMeta, fnName: string, scope?: Scope): st
   return null;
 }
 
+type CallResolution = {
+  params: string[];
+  results: string[];
+  target: ResolvedCallTarget;
+  decl?: ResolvedDecl;
+  argumentOffset: 0 | 1;
+  kind: "function" | "indirect" | "intrinsic";
+};
+
+function resolveFieldCall(
+  expr: CallExpression,
+  scope: Scope,
+  meta: ModuleMeta,
+): CallResolution | null {
+  const receiver = expr.args[0];
+  if (!(receiver instanceof Identifier)) return null;
+  const receiverType = scope.get(receiver.tokenLiteral())?.type;
+  if (!receiverType) return null;
+  const sourceIdentity = receiverType.startsWith("*") ? receiverType.slice(1) : receiverType;
+  const expectedPrefix = `${sourceIdentity}_`;
+  if (!expr.func.startsWith(expectedPrefix)) return null;
+  const member = expr.func.slice(expectedPrefix.length);
+  const structIdentity = resolveTypeIdentity(sourceIdentity, meta);
+  const fieldType = structDefinition(structIdentity, meta)?.members[member]?.type;
+  if (!fieldType || !isFnType(fieldType)) return null;
+  const fnType = resolveTypeIdentity(fieldType, meta);
+  const parsed = parseFnType(fnType);
+  if (!parsed) return null;
+  return {
+    params: parsed.params,
+    results: fnTypeResults(fnType) ?? [],
+    target: {
+      kind: "field",
+      receiverArg: 0,
+      structIdentity,
+      member,
+      fnType,
+    },
+    argumentOffset: 1,
+    kind: "indirect",
+  };
+}
+
+function resolveCall(
+  expr: CallExpression,
+  scope: Scope,
+  meta: ModuleMeta,
+): CallResolution | "not-callable" | null {
+  const intrinsic = getIntrinsic(expr.func);
+  if (intrinsic) {
+    return {
+      params: [...intrinsic.params],
+      results: intrinsic.result === "void" ? [] : [intrinsic.result],
+      target: { kind: "decl" },
+      decl: { kind: "intrinsic", name: expr.func },
+      argumentOffset: 0,
+      kind: "intrinsic",
+    };
+  }
+
+  const lexical = scope.get(expr.func);
+  if (lexical && lexical.kind !== "function") {
+    if (!isFnType(lexical.type)) return "not-callable";
+    const parsed = parseFnType(resolveTypeIdentity(lexical.type, meta));
+    if (!parsed) return "not-callable";
+    return {
+      params: parsed.params,
+      results: fnTypeResults(lexical.type) ?? [],
+      target: { kind: "decl" },
+      decl: { kind: lexical.kind, name: expr.func },
+      argumentOffset: 0,
+      kind: "indirect",
+    };
+  }
+
+  const field = resolveFieldCall(expr, scope, meta);
+  if (field) return field;
+
+  const fn = meta.functions[expr.func];
+  if (fn) {
+    return {
+      params: fn.params.map((param) => resolveTypeIdentity(param.type, meta)),
+      results: fn.mapleResults.map((result) => resolveTypeIdentity(result, meta)),
+      target: { kind: "decl" },
+      decl: { kind: "function", name: expr.func },
+      argumentOffset: 0,
+      kind: "function",
+    };
+  }
+
+  if (lexical && isFnType(lexical.type)) {
+    const parsed = parseFnType(resolveTypeIdentity(lexical.type, meta));
+    if (parsed) {
+      return {
+        params: parsed.params,
+        results: fnTypeResults(lexical.type) ?? [],
+        target: { kind: "decl" },
+        decl: { kind: lexical.kind, name: expr.func },
+        argumentOffset: 0,
+        kind: lexical.kind === "function" ? "function" : "indirect",
+      };
+    }
+  }
+
+  const imported = meta.imports[expr.func];
+  if (imported?.info?.kind === "func") {
+    const params = imported.mapleParams ?? signatureTypes(imported.info.signature, 0);
+    const results = imported.mapleResults ?? signatureTypes(imported.info.signature, 1);
+    return {
+      params: params.map((type) => resolveTypeIdentity(type, meta)),
+      results: results.map((type) => resolveTypeIdentity(type, meta)),
+      target: { kind: "decl" },
+      decl: { kind: "import", name: expr.func },
+      argumentOffset: 0,
+      kind: "function",
+    };
+  }
+
+  return null;
+}
+
+function signatureTypes(signature: string, part: 0 | 1): string[] {
+  const chars = signature.split("_")[part] ?? "";
+  if (chars === "v") return [];
+  return Array.from(chars).flatMap((char) => {
+    if (char === "i") return ["i32"];
+    if (char === "I") return ["i64"];
+    if (char === "f") return ["f32"];
+    if (char === "F") return ["f64"];
+    return [];
+  });
+}
+
 // ─── Expression type resolver ─────────────────────────────────────────────────
 //
 // Returns the Maple-level type string (e.g. "i32", "f32", "bool", "Point",
@@ -120,8 +323,9 @@ function resolveExprType(
   expr: ASTExpression,
   scope: Scope,
   meta: ModuleMeta,
-  errors?: MapleError[],
+  _errors?: MapleError[],
 ): string | null {
+  if (expr.resolvedType !== undefined) return expr.resolvedType;
   if (expr instanceof IntegerLiteralExpression) {
     return expr.numericType === "i64" ? "i64" : "i32";
   }
@@ -142,7 +346,15 @@ function resolveExprType(
     }
     const imp = meta.imports[id];
     if (imp?.info?.kind === "global") {
-      return imp.mapleType ?? imp.info.type;
+      return resolveTypeIdentity(imp.mapleType ?? imp.info.type, meta);
+    }
+    if (imp?.info?.kind === "func" && imp.mergeable && imp.mapleParams && imp.mapleResults) {
+      return canonicalFnType(
+        imp.mapleParams.map((type) => resolveTypeIdentity(type, meta)),
+        (imp.mapleResults.length === 0 ? ["void"] : imp.mapleResults).map((type) =>
+          resolveTypeIdentity(type, meta),
+        ),
+      );
     }
     const scoped = scope.get(id)?.type;
     return scoped ? resolveTypeIdentity(scoped, meta) : null;
@@ -154,8 +366,8 @@ function resolveExprType(
 
   if (expr instanceof InfixExpression) {
     if (cmpOps.has(expr.operator)) return "bool";
-    const lt = resolveExprType(expr.left, scope, meta, errors);
-    const rt = resolveExprType(expr.right, scope, meta, errors);
+    const lt = resolveExprType(expr.left, scope, meta, _errors);
+    const rt = resolveExprType(expr.right, scope, meta, _errors);
     if (lt === null || rt === null) return null;
     if (expr.operator === "<<" || expr.operator === ">>") return lt;
     const wl = valueTypeToWasm(lt);
@@ -178,44 +390,39 @@ function resolveExprType(
   if (expr instanceof PrefixExpression) {
     if (expr.operator === "!") return "bool";
     if (expr.operator === "~") {
-      return expr.right ? resolveExprType(expr.right, scope, meta, errors) : "i32";
+      return expr.right ? resolveExprType(expr.right, scope, meta, _errors) : "i32";
     }
     if (expr.operator === "-") {
-      return expr.right ? resolveExprType(expr.right, scope, meta, errors) : "i32";
+      return expr.right ? resolveExprType(expr.right, scope, meta, _errors) : "i32";
     }
     return "i32";
   }
 
   if (expr instanceof PostfixExpression) {
-    return expr.left ? resolveExprType(expr.left, scope, meta, errors) : "i32";
+    return expr.left ? resolveExprType(expr.left, scope, meta, _errors) : "i32";
   }
 
   if (expr instanceof CallExpression) {
-    const returnTypes = getCallReturnTypes(meta, expr.func, scope);
+    const returnTypes =
+      (expr as ASTExpression).resolvedResultTypes ?? getCallReturnTypes(meta, expr.func, scope);
     if (!returnTypes) return null;
     if (returnTypes.length === 0) return "void";
     if (returnTypes.length === 1) {
       const result = returnTypes[0];
       return result ? resolveTypeIdentity(result, meta) : null;
     }
-    if (errors) {
-      const t = expr.token;
-      errors.push(
-        new MapleError("multi-return value cannot be used as a single value", t.line, t.col),
-      );
-    }
     return null;
   }
 
   if (expr instanceof IndexExpression) {
-    const containerType = resolveExprType(expr.left, scope, meta, errors);
+    const containerType = resolveExprType(expr.left, scope, meta, _errors);
     if (!containerType) return null;
     if (!(containerType.endsWith("[]") || containerType.startsWith("*"))) return null;
     return baseScalar(containerType);
   }
 
   if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
-    const parentType = resolveExprType(expr.parent, scope, meta, errors);
+    const parentType = resolveExprType(expr.parent, scope, meta, _errors);
     if (!parentType) return null;
     // Arrays expose the same {len, data} header members as strings.
     if (parentType.endsWith("[]")) {
@@ -223,11 +430,11 @@ function resolveExprType(
     }
     const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
     const memberData = structDefinition(structName, meta)?.members[expr.member];
-    return memberData?.type ?? null;
+    return memberData ? resolveTypeIdentity(memberData.type, meta) : null;
   }
 
   if (expr instanceof AssignmentExpression) {
-    return resolveExprType(expr.left, scope, meta, errors);
+    return resolveExprType(expr.left, scope, meta, _errors);
   }
   if (expr instanceof StructLiteralExpression) {
     return resolveTypeIdentity(expr.name, meta);
@@ -350,6 +557,121 @@ function checkMixedSignedness(
   );
 }
 
+function resolveIdentifier(
+  expr: Identifier,
+  scope: Scope,
+  meta: ModuleMeta,
+): { type: string; decl: ResolvedDecl } | null {
+  const name = expr.tokenLiteral();
+  const imported = meta.imports[name];
+  if (imported?.info?.kind === "global") {
+    return {
+      type: resolveTypeIdentity(imported.mapleType ?? imported.info.type, meta),
+      decl: { kind: "import", name },
+    };
+  }
+  if (
+    imported?.info?.kind === "func" &&
+    imported.mergeable &&
+    imported.mapleParams &&
+    imported.mapleResults
+  ) {
+    return {
+      type: canonicalFnType(
+        imported.mapleParams.map((type) => resolveTypeIdentity(type, meta)),
+        (imported.mapleResults.length === 0 ? ["void"] : imported.mapleResults).map((type) =>
+          resolveTypeIdentity(type, meta),
+        ),
+      ),
+      decl: { kind: "import", name },
+    };
+  }
+  const entry = scope.get(name);
+  if (!entry) return null;
+  return {
+    type: resolveTypeIdentity(entry.type, meta),
+    decl: { kind: entry.kind, name },
+  };
+}
+
+function stampExpression(
+  expr: ASTExpression,
+  scope: Scope,
+  meta: ModuleMeta,
+  expectedType: string | undefined,
+  position: ExpressionPosition,
+): void {
+  if (expr instanceof AssignmentExpression) {
+    delete (expr as ASTExpression).resolvedType;
+    return;
+  }
+  if (expr instanceof PostfixExpression && position === "effect") {
+    delete (expr as ASTExpression).resolvedType;
+    return;
+  }
+  if (expr instanceof CallExpression) return;
+
+  let resolved: string | null;
+  const contextualType = expectedType ? resolveTypeIdentity(expectedType, meta) : undefined;
+  if (expr instanceof IntegerLiteralExpression && integerRange(contextualType)) {
+    resolved = contextualType ?? null;
+  } else if (
+    expr instanceof FloatLiteralExpression &&
+    (contextualType === "f32" || contextualType === "f64")
+  ) {
+    resolved = contextualType;
+  } else {
+    resolved = resolveExprType(expr, scope, meta);
+  }
+  if (resolved !== null && resolved !== "void") {
+    expr.resolvedType = resolveTypeIdentity(resolved, meta);
+  }
+}
+
+function isLvalue(expr: ASTExpression): boolean {
+  return (
+    expr instanceof Identifier ||
+    expr instanceof MemberExpression ||
+    expr instanceof PointerMemberExpression ||
+    expr instanceof IndexExpression
+  );
+}
+
+function requireOperatorDomain(
+  operator: string,
+  types: Array<string | null>,
+  token: ASTExpression["token"],
+  errors: MapleError[],
+): void {
+  const domain = BITWISE_OPS.has(operator) || operator === "~" ? "integer" : "numeric";
+  const allowed = domain === "integer" ? INTEGER_TYPES : NUMERIC_TYPES;
+  if (types.some((type) => type !== null && !allowed.has(type))) {
+    errors.push(
+      new MapleError(`operator '${operator}' requires ${domain} operands`, token.line, token.col),
+    );
+  }
+}
+
+function checkMutationBinding(
+  target: ASTExpression,
+  token: ASTExpression["token"],
+  scope: Scope,
+  meta: ModuleMeta,
+  errors: MapleError[],
+): void {
+  const name = getMutatedBindingName(target);
+  if (name === null) return;
+  const imported = meta.imports[name];
+  if (imported?.info?.kind === "global") {
+    errors.push(new MapleError("cannot assign to imported global", token.line, token.col));
+    return;
+  }
+  const entry = scope.get(name);
+  if (entry && !entry.mutable) {
+    errors.push(new MapleError(`Cannot assign to constant '${name}'`, token.line, token.col));
+  }
+}
+
 // ─── AST walkers ──────────────────────────────────────────────────────────────
 
 function walkExpression(
@@ -358,442 +680,505 @@ function walkExpression(
   meta: ModuleMeta,
   errors: MapleError[],
   expectedType?: string,
+  position: ExpressionPosition = "value",
+  allowStructInitializer = false,
 ): void {
   if (!expr) return;
 
-  if (expr instanceof IntegerLiteralExpression) {
-    const literalType =
-      expectedType !== undefined && integerRange(expectedType) ? expectedType : "i32";
-    checkIntegerLiteralRange(expr, literalType, errors);
-    return;
-  }
+  try {
+    if (expr instanceof IntegerLiteralExpression) {
+      const literalType =
+        expectedType !== undefined && integerRange(expectedType) ? expectedType : "i32";
+      checkIntegerLiteralRange(expr, literalType, errors);
+      return;
+    }
 
-  // Identifier checks
-  if (expr instanceof Identifier) {
-    const id = expr.tokenLiteral();
-    const t = expr.token;
-    if (getIntrinsic(id)) {
-      errors.push(new MapleError(`cannot take a reference to intrinsic '${id}'`, t.line, t.col));
-      return;
-    }
-    if (id === "_start") {
-      errors.push(new MapleError("cannot take a reference to '_start'", t.line, t.col));
-      return;
-    }
-    const imp = meta.imports[id];
-    if (imp?.info?.kind === "func") {
-      if (!imp.mergeable) {
-        errors.push(
-          new MapleError(`cannot take a reference to imported function '${id}'`, t.line, t.col),
-        );
+    // Identifier checks
+    if (expr instanceof Identifier) {
+      const id = expr.tokenLiteral();
+      const t = expr.token;
+      if (getIntrinsic(id)) {
+        errors.push(new MapleError(`cannot take a reference to intrinsic '${id}'`, t.line, t.col));
+        return;
       }
-      return;
-    }
-    if (!scope.has(id)) {
-      errors.push(new MapleError(`Undefined identifier '${id}'`, t.line, t.col));
-    }
-    return;
-  }
-
-  // Check 3 — mixed arithmetic / bitwise on float
-  if (expr instanceof InfixExpression) {
-    const contextualType = integerRange(expectedType) ? expectedType : undefined;
-    const leftSiblingType =
-      expr.right instanceof IntegerLiteralExpression
-        ? contextualType
-        : resolveExprType(expr.right, scope, meta, errors);
-    const rightSiblingType =
-      expr.left instanceof IntegerLiteralExpression
-        ? contextualType
-        : resolveExprType(expr.left, scope, meta, errors);
-    const leftExpected = integerRange(leftSiblingType ?? undefined)
-      ? (leftSiblingType ?? undefined)
-      : contextualType;
-    const rightExpected = integerRange(rightSiblingType ?? undefined)
-      ? (rightSiblingType ?? undefined)
-      : contextualType;
-    walkExpression(expr.left, scope, meta, errors, leftExpected);
-    walkExpression(expr.right, scope, meta, errors, rightExpected);
-
-    const resolvedLeftType = resolveExprType(expr.left, scope, meta, errors);
-    const resolvedRightType = resolveExprType(expr.right, scope, meta, errors);
-    if (resolvedLeftType !== null && resolvedRightType !== null) {
-      const [leftType, rightType] = adoptedOperandTypes(
-        expr.left,
-        expr.right,
-        resolvedLeftType,
-        resolvedRightType,
-      );
-      if (SAME_LANE_OPS.has(expr.operator)) {
-        if (valueTypeToWasm(leftType) !== valueTypeToWasm(rightType)) {
-          const t = expr.token;
+      if (id === "_start") {
+        errors.push(new MapleError("cannot take a reference to '_start'", t.line, t.col));
+        return;
+      }
+      const imp = meta.imports[id];
+      if (imp?.info?.kind === "func") {
+        if (!imp.mergeable) {
           errors.push(
-            new MapleError(
-              `Mixed types in arithmetic: '${leftType}' and '${rightType}' — use explicit cast`,
-              t.line,
-              t.col,
-            ),
+            new MapleError(`cannot take a reference to imported function '${id}'`, t.line, t.col),
           );
+          return;
         }
+        const resolution = resolveIdentifier(expr, scope, meta);
+        if (resolution) {
+          (expr as ASTExpression).resolvedType = resolution.type;
+          (expr as ASTExpression).resolvedDecl = resolution.decl;
+        }
+        return;
       }
-      if (SIGN_MIXING_OPS.has(expr.operator)) {
-        checkMixedSignedness(leftType, rightType, expr.token, errors);
+      const resolution = resolveIdentifier(expr, scope, meta);
+      if (!resolution) {
+        errors.push(new MapleError(`Undefined identifier '${id}'`, t.line, t.col));
+        return;
       }
+      (expr as ASTExpression).resolvedType = resolution.type;
+      (expr as ASTExpression).resolvedDecl = resolution.decl;
+      return;
     }
-    if (BITWISE_OPS.has(expr.operator)) {
-      const bad = (x: string | null) =>
-        x !== null && (valueTypeToWasm(x) === "f32" || valueTypeToWasm(x) === "f64");
-      if (bad(resolvedLeftType) || bad(resolvedRightType)) {
-        const t = expr.token;
-        errors.push(
-          new MapleError(
-            `Bitwise operator '${expr.operator}' is only valid for integer types`,
-            t.line,
-            t.col,
-          ),
-        );
-      }
-    }
-    return;
-  }
 
-  // Check 4 — call argument count and types
-  if (expr instanceof CallExpression) {
-    const intrinsic = getIntrinsic(expr.func);
-    const fn = meta.functions[expr.func];
-    const localFnType = scope.get(expr.func)?.type;
-    const localParams =
-      localFnType && isFnType(localFnType) ? parseFnType(localFnType)?.params : null;
-    const importedFunction = meta.imports[expr.func];
-    const importSignature = importedFunction?.info;
-    const importedParamChars =
-      importSignature?.kind === "func" ? (importSignature.signature.split("_")[0] ?? "") : null;
-    const importedParams =
-      importedFunction?.mapleParams ??
-      (importedParamChars !== null
-        ? Array.from(importedParamChars === "v" ? "" : importedParamChars).map((char) => {
-            if (char === "I") return "i64";
-            if (char === "f") return "f32";
-            if (char === "F") return "f64";
-            return "i32";
-          })
-        : null);
-    const parameterTypes =
-      intrinsic?.params ?? fn?.params.map((param) => param.type) ?? localParams ?? importedParams;
-    for (let i = 0; i < expr.args.length; i++) {
-      walkExpression(expr.args[i]!, scope, meta, errors, parameterTypes?.[i]);
-    }
-    if (intrinsic) {
-      if (expr.args.length !== intrinsic.params.length) {
-        const t = expr.token;
-        errors.push(
-          new MapleError(
-            `Intrinsic '${expr.func}' expects ${intrinsic.params.length} arguments, got ${expr.args.length}`,
-            t.line,
-            t.col,
-          ),
+    // Check 3 — mixed arithmetic / bitwise on float
+    if (expr instanceof InfixExpression) {
+      const contextualType = integerRange(expectedType) ? expectedType : undefined;
+      const leftSiblingType =
+        expr.right instanceof IntegerLiteralExpression
+          ? contextualType
+          : resolveExprType(expr.right, scope, meta, errors);
+      const rightSiblingType =
+        expr.left instanceof IntegerLiteralExpression
+          ? contextualType
+          : resolveExprType(expr.left, scope, meta, errors);
+      const leftExpected = integerRange(leftSiblingType ?? undefined)
+        ? (leftSiblingType ?? undefined)
+        : contextualType;
+      const rightExpected = integerRange(rightSiblingType ?? undefined)
+        ? (rightSiblingType ?? undefined)
+        : contextualType;
+      walkExpression(expr.left, scope, meta, errors, leftExpected);
+      walkExpression(expr.right, scope, meta, errors, rightExpected);
+
+      const resolvedLeftType = resolveExprType(expr.left, scope, meta, errors);
+      const resolvedRightType = resolveExprType(expr.right, scope, meta, errors);
+      if (resolvedLeftType !== null && resolvedRightType !== null) {
+        const [leftType, rightType] = adoptedOperandTypes(
+          expr.left,
+          expr.right,
+          resolvedLeftType,
+          resolvedRightType,
         );
-      } else {
-        for (let i = 0; i < expr.args.length; i++) {
-          const argType = resolveExprType(expr.args[i]!, scope, meta, errors);
-          const paramType = intrinsic.params[i]!;
-          if (argType !== null && !typesCompatible(paramType, argType, meta)) {
-            const t = expr.args[i]!.token;
-            errors.push(
-              new MapleError(
-                `Type mismatch in argument ${i + 1} of '${expr.func}': expected '${paramType}', got '${argType}'`,
-                t.line,
-                t.col,
-              ),
-            );
-          }
-        }
-      }
-    } else if (fn) {
-      if (expr.args.length !== fn.params.length) {
-        const t = expr.token;
-        errors.push(
-          new MapleError(
-            `Function '${expr.func}' expects ${fn.params.length} arguments, got ${expr.args.length}`,
-            t.line,
-            t.col,
-          ),
-        );
-      } else {
-        for (let i = 0; i < expr.args.length; i++) {
-          const argType = resolveExprType(expr.args[i]!, scope, meta, errors);
-          const paramType = fn.params[i]!.type;
-          if (argType !== null && !typesCompatible(paramType, argType, meta)) {
-            const t = expr.args[i]!.token;
-            errors.push(
-              new MapleError(
-                `Type mismatch in argument ${i + 1} of '${expr.func}': expected '${paramType}', got '${argType}'`,
-                t.line,
-                t.col,
-              ),
-            );
-          }
-        }
-      }
-    } else {
-      const localEntry = scope.get(expr.func);
-      if (localEntry && isFnType(localEntry.type)) {
-        // Indirect call through fn-typed variable
-        const parsed = parseFnType(localEntry.type);
-        if (parsed && expr.args.length !== parsed.params.length) {
-          const t = expr.token;
-          errors.push(
-            new MapleError(
-              `Indirect call to '${expr.func}' expects ${parsed.params.length} arguments, got ${expr.args.length}`,
-              t.line,
-              t.col,
-            ),
-          );
-        }
-      } else if (localEntry) {
-        // Variable exists but is not callable
-        const t = expr.token;
-        errors.push(new MapleError(`'${expr.func}' is not callable`, t.line, t.col));
-      } else {
-        // imported function — check count only (no Maple-level param types available)
-        const imp = meta.imports[expr.func];
-        if (imp?.info?.kind === "func") {
-          const paramChars = imp.info.signature.split("_")[0] ?? "";
-          const expectedCount =
-            imp.mapleParams?.length ?? (paramChars === "v" ? 0 : paramChars.length);
-          if (expr.args.length !== expectedCount) {
+        if (SAME_LANE_OPS.has(expr.operator)) {
+          if (valueTypeToWasm(leftType) !== valueTypeToWasm(rightType)) {
             const t = expr.token;
             errors.push(
               new MapleError(
-                `Function '${expr.func}' expects ${expectedCount} arguments, got ${expr.args.length}`,
+                `Mixed types in arithmetic: '${leftType}' and '${rightType}' — use explicit cast`,
                 t.line,
                 t.col,
               ),
             );
-          } else if (imp.mapleParams) {
-            for (let index = 0; index < expr.args.length; index++) {
-              const argType = resolveExprType(expr.args[index]!, scope, meta, errors);
-              const paramType = imp.mapleParams[index]!;
-              if (argType !== null && !typesCompatible(paramType, argType, meta)) {
-                const token = expr.args[index]!.token;
-                errors.push(
-                  new MapleError(
-                    `Type mismatch in argument ${index + 1} of '${expr.func}': expected '${paramType}', got '${argType}'`,
-                    token.line,
-                    token.col,
-                  ),
-                );
-              }
-            }
+          }
+        }
+        if (SIGN_MIXING_OPS.has(expr.operator)) {
+          checkMixedSignedness(leftType, rightType, expr.token, errors);
+        }
+      }
+      if (BITWISE_OPS.has(expr.operator) || ARITHMETIC_OPS.has(expr.operator)) {
+        requireOperatorDomain(
+          expr.operator,
+          [resolvedLeftType, resolvedRightType],
+          expr.token,
+          errors,
+        );
+      }
+      return;
+    }
+
+    // Check 4 — call argument count and types
+    if (expr instanceof CallExpression) {
+      const resolution = resolveCall(expr, scope, meta);
+      if (resolution === null) {
+        errors.push(
+          new MapleError(`Undefined function '${expr.func}'`, expr.token.line, expr.token.col),
+        );
+        for (const argument of expr.args) walkExpression(argument, scope, meta, errors);
+        return;
+      }
+      if (resolution === "not-callable") {
+        errors.push(
+          new MapleError(`'${expr.func}' is not callable`, expr.token.line, expr.token.col),
+        );
+        for (const argument of expr.args) walkExpression(argument, scope, meta, errors);
+        return;
+      }
+
+      (expr as ASTExpression).resolvedCallTarget = resolution.target;
+      if (resolution.decl) (expr as ASTExpression).resolvedDecl = resolution.decl;
+      else delete (expr as ASTExpression).resolvedDecl;
+      (expr as ASTExpression).resolvedResultTypes = resolution.results;
+      if (resolution.results.length === 1) {
+        (expr as ASTExpression).resolvedType = resolution.results[0]!;
+      } else {
+        delete (expr as ASTExpression).resolvedType;
+      }
+
+      for (let index = 0; index < expr.args.length; index++) {
+        const parameterIndex = index - resolution.argumentOffset;
+        const expected = parameterIndex >= 0 ? resolution.params[parameterIndex] : undefined;
+        walkExpression(expr.args[index]!, scope, meta, errors, expected);
+      }
+
+      const actualCount = expr.args.length - resolution.argumentOffset;
+      if (actualCount !== resolution.params.length) {
+        const prefix =
+          resolution.kind === "intrinsic"
+            ? `Intrinsic '${expr.func}'`
+            : resolution.kind === "indirect"
+              ? `Indirect call to '${expr.func}'`
+              : `Function '${expr.func}'`;
+        errors.push(
+          new MapleError(
+            `${prefix} expects ${resolution.params.length} arguments, got ${actualCount}`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      } else {
+        for (let index = 0; index < resolution.params.length; index++) {
+          const argument = expr.args[index + resolution.argumentOffset]!;
+          const argumentType = resolveExprType(argument, scope, meta, errors);
+          const parameterType = resolution.params[index]!;
+          if (argumentType !== null && !typesCompatible(parameterType, argumentType, meta)) {
+            errors.push(
+              new MapleError(
+                `Type mismatch in argument ${index + 1} of '${expr.func}': expected '${parameterType}', got '${argumentType}'`,
+                argument.token.line,
+                argument.token.col,
+              ),
+            );
           }
         }
       }
-    }
-    return;
-  }
 
-  // Check 5 — struct member existence (arrays only expose len/data)
-  if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
-    const parentType = resolveExprType(expr.parent, scope, meta, errors);
-    if (parentType) {
-      if (parentType.endsWith("[]")) {
-        if (expr.member !== "len" && expr.member !== "data") {
-          const t = expr.token;
-          errors.push(new MapleError(`Array type has no member '${expr.member}'`, t.line, t.col));
-        }
-      } else {
-        const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
-        const structDef = structDefinition(structName, meta);
-        if (structDef && !(expr.member in structDef.members)) {
-          const t = expr.token;
-          errors.push(
-            new MapleError(`Struct '${structName}' has no member '${expr.member}'`, t.line, t.col),
-          );
-        }
-      }
-    }
-    walkExpression(expr.parent, scope, meta, errors);
-    return;
-  }
-
-  // Check 6 — const mutation (via AssignmentExpression)
-  if (expr instanceof AssignmentExpression) {
-    const name = getMutatedBindingName(expr.left);
-    if (name !== null) {
-      const imp = meta.imports[name];
-      if (imp?.info?.kind === "global") {
-        const t = expr.token;
-        errors.push(new MapleError("cannot assign to imported global", t.line, t.col));
-      } else {
-        const entry = scope.get(name);
-        if (entry && !entry.mutable) {
-          const t = expr.token;
-          errors.push(new MapleError(`Cannot assign to constant '${name}'`, t.line, t.col));
-        }
-      }
-    }
-    const targetType = resolveExprType(expr.left, scope, meta, errors);
-    const assignedValue = expr.value;
-    walkExpression(expr.left, scope, meta, errors);
-    walkExpression(assignedValue, scope, meta, errors, targetType ?? undefined);
-    const valueType = assignedValue ? resolveExprType(assignedValue, scope, meta, errors) : null;
-    const compoundOperator = expr.operator.endsWith("=") ? expr.operator.slice(0, -1) : null;
-    if (
-      targetType !== null &&
-      assignedValue !== null &&
-      valueType !== null &&
-      compoundOperator !== null &&
-      SIGN_MIXING_OPS.has(compoundOperator)
-    ) {
-      const [leftType, rightType] = adoptedOperandTypes(
-        expr.left,
-        assignedValue,
-        targetType,
-        valueType,
-      );
-      checkMixedSignedness(leftType, rightType, expr.token, errors);
-    }
-    return;
-  }
-
-  if (expr instanceof StructLiteralExpression) {
-    const identity = resolveTypeIdentity(expr.name, meta);
-    const sd = structDefinition(identity, meta);
-    if (!sd) return;
-
-    for (const fieldName of Object.keys(expr.members)) {
-      if (!(fieldName in sd.members)) {
-        const t = expr.token;
-        errors.push(
-          new MapleError(`Struct '${identity}' has no field '${fieldName}'`, t.line, t.col),
-        );
-      }
-    }
-
-    for (const fieldName of Object.keys(sd.members)) {
-      if (!(fieldName in expr.members)) {
-        const t = expr.token;
+      if (position === "value" && resolution.results.length === 0) {
+        errors.push(new MapleError("void call used as a value", expr.token.line, expr.token.col));
+      } else if (position === "value" && resolution.results.length > 1) {
         errors.push(
           new MapleError(
-            `Struct '${identity}' field '${fieldName}' is not initialized`,
-            t.line,
-            t.col,
+            "multi-return value cannot be used as a single value",
+            expr.token.line,
+            expr.token.col,
           ),
         );
       }
-    }
-
-    for (const [fieldName, fieldExpr] of Object.entries(expr.members)) {
-      const memberMeta = sd.members[fieldName];
-      if (!memberMeta) continue;
-      walkExpression(fieldExpr, scope, meta, errors, memberMeta.type);
-      const fieldType = resolveExprType(fieldExpr, scope, meta, errors);
-      if (fieldType !== null && !typesCompatible(memberMeta.type, fieldType, meta)) {
-        const t = fieldExpr.token;
-        errors.push(
-          new MapleError(
-            `Struct '${identity}' field '${fieldName}': expected '${memberMeta.type}', got '${fieldType}'`,
-            t.line,
-            t.col,
-          ),
-        );
-      }
-    }
-    return;
-  }
-
-  if (expr instanceof ArrayLiteralExpression) {
-    const nested = expr.elements.find((element) => element instanceof ArrayLiteralExpression);
-    if (nested) {
-      errors.push(
-        new MapleError(
-          "nested array literals are not supported yet",
-          nested.token.line,
-          nested.token.col,
-        ),
-      );
       return;
     }
 
-    const elementTypes: string[] = [];
-    for (const element of expr.elements) {
-      let elementType: string;
-      if (element instanceof IntegerLiteralExpression) elementType = "i32";
-      else if (element instanceof FloatLiteralExpression) elementType = "f32";
-      else if (element instanceof BooleanLiteralExpression) elementType = "bool";
-      else if (element instanceof StringLiteralExpression) elementType = "string";
-      else {
-        errors.push(
-          new MapleError(
-            "array literal elements must be literals (expressions are not supported yet)",
-            element.token.line,
-            element.token.col,
-          ),
-        );
-        continue;
+    // Check 5 — struct member existence (arrays only expose len/data)
+    if (expr instanceof MemberExpression || expr instanceof PointerMemberExpression) {
+      walkExpression(expr.parent, scope, meta, errors);
+      const parentType = resolveExprType(expr.parent, scope, meta, errors);
+      if (parentType) {
+        if (parentType.endsWith("[]")) {
+          if (expr.member !== "len" && expr.member !== "data") {
+            const t = expr.token;
+            errors.push(new MapleError(`Array type has no member '${expr.member}'`, t.line, t.col));
+          }
+        } else {
+          const structName = parentType.startsWith("*") ? parentType.slice(1) : parentType;
+          const structDef = structDefinition(structName, meta);
+          if (!structDef) {
+            const t = expr.token;
+            errors.push(new MapleError(`type '${parentType}' has no members`, t.line, t.col));
+          } else if (!(expr.member in structDef.members)) {
+            const t = expr.token;
+            errors.push(
+              new MapleError(
+                `Struct '${structName}' has no member '${expr.member}'`,
+                t.line,
+                t.col,
+              ),
+            );
+          }
+        }
       }
-      elementTypes.push(elementType);
-    }
-
-    if (elementTypes.length !== expr.elements.length) return;
-    const firstType = elementTypes[0];
-    const mixedType = elementTypes.find((elementType) => elementType !== firstType);
-    if (firstType !== undefined && mixedType !== undefined) {
-      errors.push(
-        new MapleError(
-          `array literal has mixed element types: '${firstType}' and '${mixedType}'`,
-          expr.token.line,
-          expr.token.col,
-        ),
-      );
       return;
     }
 
-    if (firstType !== undefined) {
-      const integerAdoption = firstType === "i32" && integerRange(expr.memberType) !== null;
-      const floatAdoption =
-        firstType === "f32" && (expr.memberType === "f32" || expr.memberType === "f64");
+    // Check 6 — const mutation (via AssignmentExpression)
+    if (expr instanceof AssignmentExpression) {
+      if (position !== "effect") {
+        errors.push(new MapleError("assignment is a statement", expr.token.line, expr.token.col));
+      }
+      if (!isLvalue(expr.left)) {
+        errors.push(new MapleError("invalid assignment target", expr.token.line, expr.token.col));
+      }
+      checkMutationBinding(expr.left, expr.token, scope, meta, errors);
+      walkExpression(expr.left, scope, meta, errors);
+      const targetType = resolveExprType(expr.left, scope, meta, errors);
+      const assignedValue = expr.value;
+      walkExpression(assignedValue, scope, meta, errors, targetType ?? undefined);
+      const valueType = assignedValue ? resolveExprType(assignedValue, scope, meta, errors) : null;
       if (
-        !integerAdoption &&
-        !floatAdoption &&
-        !typesCompatible(expr.memberType, firstType, meta)
+        targetType !== null &&
+        valueType !== null &&
+        !typesCompatible(targetType, valueType, meta)
       ) {
         errors.push(
           new MapleError(
-            `array literal of '${firstType}' elements cannot initialize '${expr.memberType}[]'`,
+            `Type mismatch: cannot assign '${valueType}' to '${targetType}'`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      }
+      const compoundOperator = expr.operator === "=" ? null : expr.operator.slice(0, -1);
+      if (
+        targetType !== null &&
+        assignedValue !== null &&
+        valueType !== null &&
+        compoundOperator !== null &&
+        SIGN_MIXING_OPS.has(compoundOperator)
+      ) {
+        const [leftType, rightType] = adoptedOperandTypes(
+          expr.left,
+          assignedValue,
+          targetType,
+          valueType,
+        );
+        checkMixedSignedness(leftType, rightType, expr.token, errors);
+      }
+      if (compoundOperator !== null) {
+        requireOperatorDomain(compoundOperator, [targetType, valueType], expr.token, errors);
+      }
+      return;
+    }
+
+    if (expr instanceof StructLiteralExpression) {
+      if (!allowStructInitializer) {
+        errors.push(
+          new MapleError(
+            "struct literals are only supported as initializers",
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      }
+      const identity = resolveTypeIdentity(expr.name, meta);
+      const sd = structDefinition(identity, meta);
+      if (!sd) return;
+
+      for (const fieldName of Object.keys(expr.members)) {
+        if (!(fieldName in sd.members)) {
+          const t = expr.token;
+          errors.push(
+            new MapleError(`Struct '${identity}' has no field '${fieldName}'`, t.line, t.col),
+          );
+        }
+      }
+
+      for (const fieldName of Object.keys(sd.members)) {
+        if (!(fieldName in expr.members)) {
+          const t = expr.token;
+          errors.push(
+            new MapleError(
+              `Struct '${identity}' field '${fieldName}' is not initialized`,
+              t.line,
+              t.col,
+            ),
+          );
+        }
+      }
+
+      for (const [fieldName, fieldExpr] of Object.entries(expr.members)) {
+        const memberMeta = sd.members[fieldName];
+        if (!memberMeta) continue;
+        walkExpression(fieldExpr, scope, meta, errors, memberMeta.type);
+        const fieldType = resolveExprType(fieldExpr, scope, meta, errors);
+        if (fieldType !== null && !typesCompatible(memberMeta.type, fieldType, meta)) {
+          const t = fieldExpr.token;
+          errors.push(
+            new MapleError(
+              `Struct '${identity}' field '${fieldName}': expected '${memberMeta.type}', got '${fieldType}'`,
+              t.line,
+              t.col,
+            ),
+          );
+        }
+      }
+      return;
+    }
+
+    if (expr instanceof ArrayLiteralExpression) {
+      const nested = expr.elements.find((element) => element instanceof ArrayLiteralExpression);
+      if (nested) {
+        errors.push(
+          new MapleError(
+            "nested array literals are not supported yet",
+            nested.token.line,
+            nested.token.col,
+          ),
+        );
+        return;
+      }
+
+      const elementTypes: string[] = [];
+      for (const element of expr.elements) {
+        let elementType: string;
+        if (element instanceof IntegerLiteralExpression) elementType = "i32";
+        else if (element instanceof FloatLiteralExpression) elementType = "f32";
+        else if (element instanceof BooleanLiteralExpression) elementType = "bool";
+        else if (element instanceof StringLiteralExpression) elementType = "string";
+        else {
+          errors.push(
+            new MapleError(
+              "array literal elements must be literals (expressions are not supported yet)",
+              element.token.line,
+              element.token.col,
+            ),
+          );
+          continue;
+        }
+        elementTypes.push(elementType);
+      }
+
+      if (elementTypes.length !== expr.elements.length) return;
+      const firstType = elementTypes[0];
+      const mixedType = elementTypes.find((elementType) => elementType !== firstType);
+      if (firstType !== undefined && mixedType !== undefined) {
+        errors.push(
+          new MapleError(
+            `array literal has mixed element types: '${firstType}' and '${mixedType}'`,
             expr.token.line,
             expr.token.col,
           ),
         );
         return;
       }
+
+      if (firstType !== undefined) {
+        const integerAdoption = firstType === "i32" && integerRange(expr.memberType) !== null;
+        const floatAdoption =
+          firstType === "f32" && (expr.memberType === "f32" || expr.memberType === "f64");
+        if (
+          !integerAdoption &&
+          !floatAdoption &&
+          !typesCompatible(expr.memberType, firstType, meta)
+        ) {
+          errors.push(
+            new MapleError(
+              `array literal of '${firstType}' elements cannot initialize '${expr.memberType}[]'`,
+              expr.token.line,
+              expr.token.col,
+            ),
+          );
+          return;
+        }
+      }
+
+      for (const element of expr.elements) {
+        if (element instanceof FloatLiteralExpression && expr.memberType === "f64") {
+          element.numericType = "f64";
+        }
+        walkExpression(element, scope, meta, errors, expr.memberType);
+      }
+      return;
     }
 
-    for (const element of expr.elements) {
-      if (element instanceof FloatLiteralExpression && expr.memberType === "f64") {
-        element.numericType = "f64";
+    if (expr instanceof PrefixExpression) {
+      walkExpression(expr.right, scope, meta, errors, expectedType);
+      const operandType = expr.right ? resolveExprType(expr.right, scope, meta, errors) : null;
+      if (expr.operator === "~" || expr.operator === "-") {
+        requireOperatorDomain(expr.operator, [operandType], expr.token, errors);
       }
-      walkExpression(element, scope, meta, errors, expr.memberType);
+      return;
     }
-    return;
-  }
 
-  // Recurse into sub-expressions
-  if (expr instanceof PrefixExpression) {
-    walkExpression(expr.right, scope, meta, errors, expectedType);
-  } else if (expr instanceof PostfixExpression) {
-    walkExpression(expr.left, scope, meta, errors);
-  } else if (expr instanceof CastExpression) {
-    if (expr.expr instanceof IntegerLiteralExpression) {
-      if (integerRange(expr.targetType)) {
-        expr.expr.numericType = expr.targetType.endsWith("64") ? "i64" : "i32";
+    if (expr instanceof PostfixExpression) {
+      walkExpression(expr.left, scope, meta, errors);
+      if (!expr.left || !isLvalue(expr.left)) {
+        errors.push(new MapleError("invalid assignment target", expr.token.line, expr.token.col));
+        return;
       }
-    } else {
-      walkExpression(expr.expr, scope, meta, errors);
+      if (position === "value" && !(expr.left instanceof Identifier)) {
+        errors.push(
+          new MapleError(
+            "value-position increment requires a plain variable",
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      }
+      checkMutationBinding(expr.left, expr.token, scope, meta, errors);
+      const operandType = resolveExprType(expr.left, scope, meta, errors);
+      requireOperatorDomain(expr.operator, [operandType], expr.token, errors);
+      return;
     }
-  } else if (expr instanceof IndexExpression) {
-    walkExpression(expr.left, scope, meta, errors);
-    walkExpression(expr.index, scope, meta, errors, "i32");
+
+    if (expr instanceof CastExpression) {
+      checkKnownType(expr.targetType, expr.token, meta, errors);
+      if (expr.expr instanceof IntegerLiteralExpression) {
+        if (integerRange(expr.targetType)) {
+          expr.expr.numericType = expr.targetType.endsWith("64") ? "i64" : "i32";
+          (expr.expr as ASTExpression).resolvedType = resolveTypeIdentity(expr.targetType, meta);
+        } else {
+          walkExpression(expr.expr, scope, meta, errors);
+        }
+      } else {
+        walkExpression(expr.expr, scope, meta, errors);
+      }
+      const sourceType = resolveExprType(expr.expr, scope, meta, errors);
+      const targetType = resolveTypeIdentity(expr.targetType, meta);
+      const sourceAggregate =
+        sourceType !== null &&
+        (sourceType === "string" || sourceType.endsWith("[]") || isFnType(sourceType));
+      const targetAggregate =
+        targetType === "string" || targetType.endsWith("[]") || isFnType(targetType);
+      if (
+        sourceType !== null &&
+        ((sourceAggregate && NUMERIC_TYPES.has(targetType)) ||
+          (NUMERIC_TYPES.has(sourceType) && targetAggregate))
+      ) {
+        errors.push(
+          new MapleError(
+            `cannot cast '${sourceType}' to '${targetType}'`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (expr instanceof IndexExpression) {
+      walkExpression(expr.left, scope, meta, errors);
+      walkExpression(expr.index, scope, meta, errors, "i32");
+      const containerType = resolveExprType(expr.left, scope, meta, errors);
+      const indexType = resolveExprType(expr.index, scope, meta, errors);
+      if (
+        containerType !== null &&
+        !(containerType.endsWith("[]") || containerType.startsWith("*"))
+      ) {
+        errors.push(
+          new MapleError(
+            `type '${containerType}' is not indexable`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      }
+      if (indexType !== null && !I32_LANE_INDEX_TYPES.has(indexType)) {
+        errors.push(
+          new MapleError(
+            "array index must be an i32-lane value",
+            expr.index.token.line,
+            expr.index.token.col,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (expr instanceof FunctionLiteralExpression) {
+      errors.push(
+        new MapleError("function literals are not supported yet", expr.token.line, expr.token.col),
+      );
+      return;
+    }
+  } finally {
+    stampExpression(expr, scope, meta, expectedType, position);
   }
 }
 
@@ -814,8 +1199,9 @@ function checkLetInitializer(
   meta: ModuleMeta,
   errors: MapleError[],
 ): void {
+  checkKnownType(stmt.typeAnnotation, stmt.token, meta, errors);
   if (stmt.expression === null) return;
-  walkExpression(stmt.expression, scope, meta, errors, stmt.typeAnnotation);
+  walkExpression(stmt.expression, scope, meta, errors, stmt.typeAnnotation, "value", true);
   const actualType = resolveExprType(stmt.expression, scope, meta, errors);
   if (actualType !== null && !typesCompatible(stmt.typeAnnotation, actualType, meta)) {
     const t = stmt.token;
@@ -859,6 +1245,25 @@ function walkBlock(
   }
 }
 
+function walkEffectExpression(
+  expr: ASTExpression | null,
+  scope: Scope,
+  meta: ModuleMeta,
+  errors: MapleError[],
+): void {
+  if (!expr) return;
+  if (
+    !(expr instanceof CallExpression) &&
+    !(expr instanceof AssignmentExpression) &&
+    !(expr instanceof PostfixExpression)
+  ) {
+    errors.push(
+      new MapleError("expression statement has no effect", expr.token.line, expr.token.col),
+    );
+  }
+  walkExpression(expr, scope, meta, errors, undefined, "effect");
+}
+
 function walkStatement(
   stmt: ASTStatement,
   scope: Scope,
@@ -875,8 +1280,9 @@ function walkStatement(
         errors.push(new MapleError("destructure RHS must be a function call", t.line, t.col));
         return;
       }
-      walkExpression(rhs, scope, meta, errors);
-      const returnTypes = getCallReturnTypes(meta, rhs.func, scope);
+      walkExpression(rhs, scope, meta, errors, undefined, "multi");
+      const returnTypes =
+        (rhs as ASTExpression).resolvedResultTypes ?? getCallReturnTypes(meta, rhs.func, scope);
       if (!returnTypes || returnTypes.length < 2) {
         const t = stmt.token;
         errors.push(new MapleError("destructure RHS must be a multi-return call", t.line, t.col));
@@ -896,19 +1302,22 @@ function walkStatement(
       for (let i = 0; i < stmt.pattern.names.length; i++) {
         const name = stmt.pattern.names[i]!;
         if (name.kind !== "name") continue;
-        scope.set(name.value, { type: returnTypes[i] ?? "i32", mutable: stmt.mutable });
+        scope.set(name.value, {
+          type: returnTypes[i] ?? "i32",
+          mutable: stmt.mutable,
+          kind: "local",
+        });
       }
       return;
     }
 
-    // Add to scope before checking the initializer so later statements in the
-    // same block can reference this name as soon as it is declared.
+    // Check 1 — assignment type compatibility
+    checkLetInitializer(stmt, scope, meta, errors);
     scope.set(stmt.identifier.tokenLiteral(), {
       type: stmt.typeAnnotation,
       mutable: stmt.mutable,
+      kind: "local",
     });
-    // Check 1 — assignment type compatibility
-    checkLetInitializer(stmt, scope, meta, errors);
     return;
   }
 
@@ -944,7 +1353,10 @@ function walkStatement(
       returnValues.length === 1 &&
       returnValues[0] instanceof CallExpression
     ) {
-      const passTypes = getCallReturnTypes(meta, returnValues[0].func, scope);
+      walkExpression(returnValues[0], scope, meta, errors, undefined, "multi");
+      const passTypes =
+        (returnValues[0] as ASTExpression).resolvedResultTypes ??
+        getCallReturnTypes(meta, returnValues[0].func, scope);
       if (passTypes && passTypes.length >= 2) {
         if (passTypes.length !== fnReturnTypes.length) {
           const t = stmt.token;
@@ -960,7 +1372,6 @@ function walkStatement(
             return;
           }
         }
-        walkExpression(returnValues[0], scope, meta, errors);
         return;
       }
     }
@@ -1002,7 +1413,7 @@ function walkStatement(
   }
 
   if (stmt instanceof ExpressionStatement) {
-    walkExpression(stmt.expression, scope, meta, errors);
+    walkEffectExpression(stmt.expression, scope, meta, errors);
     return;
   }
 
@@ -1071,15 +1482,16 @@ function walkStatement(
   if (stmt instanceof ForStatement) {
     // Create an isolated child scope so the init variable doesn't leak after the loop
     const loopScope = new Map(scope);
+    const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
+    // Check 1 for for-loop initializer
+    checkLetInitializer(stmt.initBlock, loopScope, meta, errors);
     if (!(stmt.initBlock.pattern instanceof TuplePattern)) {
       loopScope.set(stmt.initBlock.identifier.tokenLiteral(), {
         type: stmt.initBlock.typeAnnotation,
         mutable: stmt.initBlock.mutable,
+        kind: "local",
       });
     }
-    const loopCtx: FlowContext = { loopDepth: ctx.loopDepth + 1, switchDepth: ctx.switchDepth };
-    // Check 1 for for-loop initializer
-    checkLetInitializer(stmt.initBlock, loopScope, meta, errors);
     const forCondEx = stmt.conditionExpr.expression;
     if (forCondEx) {
       walkExpression(forCondEx, loopScope, meta, errors);
@@ -1099,7 +1511,7 @@ function walkStatement(
         }
       }
     }
-    walkExpression(stmt.updateExpr.expression, loopScope, meta, errors);
+    walkEffectExpression(stmt.updateExpr.expression, loopScope, meta, errors);
     walkBlock(stmt.loopBody, loopScope, meta, fnReturnTypes, errors, loopCtx);
     return;
   }
@@ -1144,7 +1556,7 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const globals: Scope = new Map();
   for (const [id, imp] of Object.entries(meta.imports)) {
     if (imp.info?.kind === "global") {
-      globals.set(id, { type: imp.mapleType ?? imp.info.type, mutable: false });
+      globals.set(id, { type: imp.mapleType ?? imp.info.type, mutable: false, kind: "import" });
     }
   }
   for (const stmt of program.statements) {
@@ -1162,6 +1574,7 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
       globals.set(stmt.identifier.tokenLiteral(), {
         type: stmt.typeAnnotation,
         mutable: stmt.mutable,
+        kind: "global",
       });
     }
   }
@@ -1170,12 +1583,19 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
     const paramTypes = fnMeta.params.map((p) => p.type);
     const results = fnMeta.mapleResults;
     const key = canonicalFnType(paramTypes, results);
-    globals.set(fnName, { type: key, mutable: false });
+    globals.set(fnName, { type: key, mutable: false, kind: "function" });
+  }
+
+  for (const stmt of program.statements) {
+    if (!(stmt instanceof StructStatement)) continue;
+    for (const member of Object.values(stmt.members)) {
+      checkKnownType(member.type, stmt.token, meta, errors);
+    }
   }
 
   // Check top-level globals (Check 1)
   for (const stmt of program.statements) {
-    if (stmt instanceof LetStatement && stmt.expression !== null) {
+    if (stmt instanceof LetStatement) {
       if (stmt.pattern instanceof TuplePattern) continue;
       checkLetInitializer(stmt, globals, meta, errors);
     }
@@ -1184,6 +1604,12 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   // Check each function body
   for (const stmt of program.statements) {
     if (!(stmt instanceof FunctionStatement)) continue;
+    for (const param of stmt.fnExpr.params) {
+      checkKnownType(param.type, param.identifier.token, meta, errors);
+    }
+    for (const returnType of stmt.fnExpr.returnTypes) {
+      checkKnownType(returnType, stmt.token, meta, errors);
+    }
     if (stmt.receiverType && !(stmt.receiverType in meta.structs)) {
       errors.push(
         new MapleError(
@@ -1200,11 +1626,23 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
       scope.set(param.identifier.tokenLiteral(), {
         type: param.type,
         mutable: false,
+        kind: "param",
       });
     }
 
     const fnReturnTypes = stmt.fnExpr.returnTypes;
     walkBlock(stmt.fnExpr.body, scope, meta, fnReturnTypes, errors);
+    if (fnReturnTypes.length > 0 && !stmtDefinitelyReturns(stmt.fnExpr.body)) {
+      const returnType =
+        fnReturnTypes.length === 1 ? fnReturnTypes[0]! : `(${fnReturnTypes.join(", ")})`;
+      errors.push(
+        new MapleError(
+          `function '${stmt.name}' must return '${returnType}' on all paths`,
+          stmt.token.line,
+          stmt.token.col,
+        ),
+      );
+    }
   }
 
   return errors;

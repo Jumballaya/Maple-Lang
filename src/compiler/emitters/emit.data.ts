@@ -30,6 +30,20 @@ type StaticDataBuilder = Pick<
   "addBytes" | "dataAlloc" | "deferredGlobalInits" | "getStruct"
 >;
 
+const ENCODABLE_STATIC_ARRAY_TYPES = new Set([
+  "i8",
+  "u8",
+  "i16",
+  "u16",
+  "i32",
+  "u32",
+  "i64",
+  "u64",
+  "f32",
+  "f64",
+  "bool",
+]);
+
 export function extractGlobalData(
   stmt: ASTStatement,
   builder: ModuleBuilder,
@@ -164,6 +178,8 @@ function extractArrayLiteral(
   builder: ModuleBuilder,
   deferElementErrors: boolean,
 ) {
+  const elemType = expr.memberType === "string" ? "i32" : baseScalar(expr.memberType);
+  if (deferElementErrors && !ENCODABLE_STATIC_ARRAY_TYPES.has(elemType)) return;
   const hasUnsupportedElement = expr.elements.some(
     (el) =>
       !(el instanceof IntegerLiteralExpression) &&
@@ -176,7 +192,6 @@ function extractArrayLiteral(
     throw new Error("array literal element must be a literal");
   }
 
-  const elemType = expr.memberType === "string" ? "i32" : baseScalar(expr.memberType);
   const values = expr.elements.map((el) => {
     if (el instanceof IntegerLiteralExpression) {
       return elemType === "i64" || elemType === "u64" ? el.bigValue : el.value;
