@@ -6,6 +6,7 @@ import {
 } from "../compiler/emitters/emit.types";
 import type { ModuleMeta } from "../compiler/emitters/emitter.types";
 import type { EmitOptions } from "../compiler/emitters/module";
+import { extractFunctionSignature } from "../compiler/emitters/statement/function";
 import { getIntrinsic } from "../compiler/intrinsics";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { ArrayLiteralExpression } from "../parser/ast/expressions/ArrayLiteralExpression";
@@ -15,6 +16,7 @@ import { CallExpression } from "../parser/ast/expressions/CallExpression";
 import { CastExpression } from "../parser/ast/expressions/CastExpression";
 import { CharLiteralExpression } from "../parser/ast/expressions/CharLiteralExpression";
 import { FloatLiteralExpression } from "../parser/ast/expressions/FloatLiteralExpression";
+import { FunctionLiteralExpression } from "../parser/ast/expressions/FunctionLiteralExpression";
 import { Identifier } from "../parser/ast/expressions/Identifier";
 import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
 import { InfixExpression } from "../parser/ast/expressions/InfixExpression";
@@ -39,7 +41,12 @@ import { StructStatement } from "../parser/ast/statements/StructStatement";
 import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
-import type { ASTExpression, ASTStatement, ResolvedDecl } from "../parser/ast/types/ast.type";
+import type {
+  ASTExpression,
+  ASTStatement,
+  ResolvedCallTarget,
+  ResolvedDecl,
+} from "../parser/ast/types/ast.type";
 import { alignTo, sizeofType } from "../shared/types";
 import { type FuncBuilder, IrBuilder } from "./build";
 import type {
@@ -52,12 +59,19 @@ import type {
   IrType,
   LabelId,
   LocalId,
+  MultiCallCallee,
+  SigId,
   Stmt,
   StructLayout,
   StructLayoutMember,
 } from "./ir";
 import { structLayout } from "./layout";
-import { elemAddr, stringEq, structEqBatch } from "./runtime";
+import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "./runtime";
+
+export type LoweringOptions = EmitOptions & {
+  exportMap?: Map<string, string>;
+  allocator?: string;
+};
 
 export type PendingInitializer = {
   initializerId: string;
@@ -104,6 +118,17 @@ type IrLvalue = {
   mapleType: string;
   load: () => Expr;
   store: (value: Expr) => void;
+};
+
+type FnrefLowering = {
+  makeFnrefId?: FuncId;
+  slots: Map<string, number>;
+  signatures: Map<string, SigId>;
+};
+
+type LoweredCall = {
+  callee: MultiCallCallee;
+  args: Expr[];
 };
 
 const COMPOUND_OPERATORS: Record<string, string> = {
@@ -645,6 +670,7 @@ class FunctionLowerer {
     private readonly frame: FramePlan = { size: 0, offsets: new Map() },
     private readonly stackPointer?: GlobalId,
     private readonly fragmentLocals?: IrType[],
+    private readonly fnrefs?: FnrefLowering,
   ) {
     const paramScope = new Map<string, Binding>();
     for (let index = 0; index < params.length; index += 1) {
@@ -682,6 +708,10 @@ class FunctionLowerer {
       0,
       widthOf(mapleType),
     );
+  }
+
+  lowerInitializer(expression: ASTExpression): Expr {
+    return this.lowerExpression(expression);
   }
 
   private local(type: IrType, name?: string): LocalId {
@@ -853,11 +883,8 @@ class FunctionLowerer {
         });
       }
     }
-    this.fn.multiCall(
-      { kind: "func", fn: this.directCallee(statement.expression, call.decl) },
-      statement.expression.args.map((argument) => this.lowerExpression(argument)),
-      targets,
-    );
+    const lowered = this.lowerCall(statement.expression, call);
+    this.fn.multiCall(lowered.callee, lowered.args, targets);
     for (const { name, binding } of bindings) this.scopes.at(-1)!.set(name, binding);
   }
 
@@ -872,11 +899,8 @@ class FunctionLowerer {
         const targets = call.results.map((type, index) =>
           this.local(lane(type), `__return_${index}`),
         );
-        this.fn.multiCall(
-          { kind: "func", fn: this.directCallee(callExpression, call.decl) },
-          callExpression.args.map((argument) => this.lowerExpression(argument)),
-          targets,
-        );
+        const lowered = this.lowerCall(callExpression, call);
+        this.fn.multiCall(lowered.callee, lowered.args, targets);
         this.restoreFrame();
         this.fn.ret(targets.map((target) => this.fn.localGet(target)));
         return;
@@ -907,17 +931,25 @@ class FunctionLowerer {
     }
     if (expression instanceof CallExpression) {
       const call = this.callAnnotations(expression);
-      if (call.decl.kind === "intrinsic") {
+      if (call.decl?.kind === "intrinsic") {
         if (call.results.length === 0) this.lowerVoidIntrinsic(expression);
         else if (call.results.length === 1) this.fn.drop(this.lowerIntrinsic(expression));
         else unsupported(expression);
         return;
       }
-      const callee = this.directCallee(expression, call.decl);
-      const args = expression.args.map((argument) => this.lowerExpression(argument));
-      if (call.results.length === 0) this.fn.callVoid(callee, args);
-      else if (call.results.length === 1) this.fn.drop(this.fn.call(callee, args));
-      else this.fn.multiCall({ kind: "func", fn: callee }, args, null);
+      const lowered = this.lowerCall(expression, call);
+      if (call.results.length === 0) {
+        if (lowered.callee.kind === "func") this.fn.callVoid(lowered.callee.fn, lowered.args);
+        else this.fn.callIndirectVoid(lowered.callee.sig, lowered.callee.index, lowered.args);
+      } else if (call.results.length === 1) {
+        const value =
+          lowered.callee.kind === "func"
+            ? this.fn.call(lowered.callee.fn, lowered.args)
+            : this.fn.callIndirect(lowered.callee.sig, lowered.callee.index, lowered.args);
+        this.fn.drop(value);
+      } else {
+        this.fn.multiCall(lowered.callee, lowered.args, null);
+      }
       return;
     }
     unsupported(expression);
@@ -1070,12 +1102,13 @@ class FunctionLowerer {
       const call = this.callAnnotations(expression);
       if (call.results.length !== 1) return unsupported(expression);
       resolvedType(expression);
-      if (call.decl.kind === "intrinsic") return this.lowerIntrinsic(expression);
-      return this.fn.call(
-        this.directCallee(expression, call.decl),
-        expression.args.map((argument) => this.lowerExpression(argument)),
-      );
+      if (call.decl?.kind === "intrinsic") return this.lowerIntrinsic(expression);
+      const lowered = this.lowerCall(expression, call);
+      return lowered.callee.kind === "func"
+        ? this.fn.call(lowered.callee.fn, lowered.args)
+        : this.fn.callIndirect(lowered.callee.sig, lowered.callee.index, lowered.args);
     }
+    if (expression instanceof FunctionLiteralExpression) return unsupported(expression);
     return unsupported(expression);
   }
 
@@ -1093,6 +1126,17 @@ class FunctionLowerer {
       const binding = this.globals.get(declaration.name);
       if (!binding) return unsupported(expression);
       return this.fn.globalGet(binding.id);
+    }
+    if (declaration.kind === "import") {
+      const binding = this.globals.get(declaration.name);
+      if (!binding) return unsupported(expression);
+      return this.fn.globalGet(binding.id);
+    }
+    if (declaration.kind === "function") {
+      const slot = this.fnrefs?.slots.get(declaration.name);
+      const makeFnrefId = this.fnrefs?.makeFnrefId;
+      if (slot === undefined || makeFnrefId === undefined) return unsupported(expression);
+      return this.fn.call(makeFnrefId, [this.fn.constant("i32", slot)]);
     }
     return unsupported(expression);
   }
@@ -1406,23 +1450,91 @@ class FunctionLowerer {
 
   private callAnnotations(expression: CallExpression): {
     results: string[];
-    decl: ResolvedDecl;
+    target: ResolvedCallTarget;
+    decl?: ResolvedDecl;
   } {
     const annotated = expression as ASTExpression;
     if (!annotated.resolvedCallTarget || annotated.resolvedResultTypes === undefined) {
       return missingAnnotation(expression);
     }
-    if (annotated.resolvedCallTarget.kind !== "decl" || !annotated.resolvedDecl) {
-      return unsupported(expression);
-    }
-    return { results: annotated.resolvedResultTypes, decl: annotated.resolvedDecl };
+    const result = {
+      results: annotated.resolvedResultTypes,
+      target: annotated.resolvedCallTarget,
+    } as {
+      results: string[];
+      target: ResolvedCallTarget;
+      decl?: ResolvedDecl;
+    };
+    if (annotated.resolvedDecl) result.decl = annotated.resolvedDecl;
+    return result;
   }
 
-  private directCallee(expression: CallExpression, declaration: ResolvedDecl): FuncId {
-    if (declaration.kind !== "function") return unsupported(expression);
+  private directCallee(expression: CallExpression, declaration?: ResolvedDecl): FuncId {
+    if (declaration?.kind !== "function" && declaration?.kind !== "import") {
+      return unsupported(expression);
+    }
     const id = this.functions.get(declaration.name);
     if (id === undefined) return unsupported(expression);
     return id;
+  }
+
+  private lowerCall(
+    expression: CallExpression,
+    annotations = this.callAnnotations(expression),
+  ): LoweredCall {
+    const indirect =
+      annotations.target.kind === "field" ||
+      annotations.decl?.kind === "local" ||
+      annotations.decl?.kind === "param" ||
+      annotations.decl?.kind === "global";
+    if (!indirect) {
+      return {
+        callee: { kind: "func", fn: this.directCallee(expression, annotations.decl) },
+        args: expression.args.map((argument) => this.lowerExpression(argument)),
+      };
+    }
+
+    let fnType: string;
+    let pointerValue: Expr;
+    let argumentOffset = 0;
+    if (annotations.target.kind === "field") {
+      const target = annotations.target;
+      const receiver = expression.args[target.receiverArg];
+      if (!receiver) return unsupported(expression);
+      const layout = this.layouts.get(target.structIdentity);
+      const member = layout?.members.find((entry) => entry.name === target.member);
+      if (!member) return unsupported(expression);
+      fnType = target.fnType;
+      pointerValue = this.fn.load("i32", this.lowerExpression(receiver), member.offset);
+      argumentOffset = 1;
+    } else {
+      const declaration = annotations.decl;
+      if (!declaration) return unsupported(expression);
+      const binding =
+        declaration.kind === "global"
+          ? this.globals.get(declaration.name)
+          : this.findLocal(declaration.name);
+      if (!binding) return unsupported(expression);
+      fnType = binding.mapleType;
+      pointerValue = this.bindingGet(binding);
+    }
+
+    const sig = this.fnrefs?.signatures.get(fnType);
+    if (sig === undefined) throw new Error(`lowering: missing fn signature '${fnType}'`);
+    const pointer = this.local("i32", "__fnref");
+    this.fn.localSet(pointer, pointerValue);
+    const args = [
+      this.fn.load("i32", this.fn.localGet(pointer), 4),
+      ...expression.args.slice(argumentOffset).map((argument) => this.lowerExpression(argument)),
+    ];
+    return {
+      callee: {
+        kind: "indirect",
+        sig,
+        index: this.fn.load("i32", this.fn.localGet(pointer)),
+      },
+      args,
+    };
   }
 
   private resolveWritable(identifier: Identifier): Binding | GlobalBinding {
@@ -1555,10 +1667,145 @@ class FunctionLowerer {
   }
 }
 
+function remapExpressionLocals(
+  expression: Expr,
+  locals: Map<LocalId, LocalId>,
+  seen: Set<Expr>,
+): void {
+  if (seen.has(expression)) return;
+  seen.add(expression);
+  switch (expression.k) {
+    case "local.get": {
+      const replacement = locals.get(expression.id);
+      if (replacement === undefined)
+        throw new Error(`lowering: unknown fragment local ${expression.id}`);
+      expression.id = replacement;
+      return;
+    }
+    case "binop":
+      remapExpressionLocals(expression.l, locals, seen);
+      remapExpressionLocals(expression.r, locals, seen);
+      return;
+    case "unop":
+    case "convert":
+      remapExpressionLocals(expression.e, locals, seen);
+      return;
+    case "load":
+      remapExpressionLocals(expression.addr, locals, seen);
+      return;
+    case "call":
+      for (const argument of expression.args) remapExpressionLocals(argument, locals, seen);
+      return;
+    case "call_indirect":
+      remapExpressionLocals(expression.index, locals, seen);
+      for (const argument of expression.args) remapExpressionLocals(argument, locals, seen);
+      return;
+    case "if_val":
+      remapExpressionLocals(expression.cond, locals, seen);
+      remapExpressionLocals(expression.then, locals, seen);
+      remapExpressionLocals(expression.else, locals, seen);
+      return;
+    case "seq":
+      for (const statement of expression.stmts) remapStatementLocals(statement, locals, seen);
+      remapExpressionLocals(expression.value, locals, seen);
+      return;
+    case "memory.grow":
+      remapExpressionLocals(expression.pages, locals, seen);
+      return;
+    case "const":
+    case "global.get":
+    case "memory.size":
+      return;
+  }
+}
+
+function remapStatementLocals(
+  statement: Stmt,
+  locals: Map<LocalId, LocalId>,
+  seen: Set<Expr>,
+): void {
+  switch (statement.k) {
+    case "local.set": {
+      const replacement = locals.get(statement.id);
+      if (replacement === undefined)
+        throw new Error(`lowering: unknown fragment local ${statement.id}`);
+      statement.id = replacement;
+      remapExpressionLocals(statement.e, locals, seen);
+      return;
+    }
+    case "global.set":
+      remapExpressionLocals(statement.e, locals, seen);
+      return;
+    case "store":
+      remapExpressionLocals(statement.addr, locals, seen);
+      remapExpressionLocals(statement.value, locals, seen);
+      return;
+    case "call":
+      for (const argument of statement.args) remapExpressionLocals(argument, locals, seen);
+      return;
+    case "drop":
+      remapExpressionLocals(statement.e, locals, seen);
+      return;
+    case "multi_call":
+      if (statement.callee.kind === "indirect") {
+        remapExpressionLocals(statement.callee.index, locals, seen);
+      }
+      for (const argument of statement.args) remapExpressionLocals(argument, locals, seen);
+      if (statement.targets) {
+        statement.targets = statement.targets.map((target) => {
+          const replacement = locals.get(target);
+          if (replacement === undefined)
+            throw new Error(`lowering: unknown fragment local ${target}`);
+          return replacement;
+        });
+      }
+      return;
+    case "call_indirect":
+      remapExpressionLocals(statement.index, locals, seen);
+      for (const argument of statement.args) remapExpressionLocals(argument, locals, seen);
+      return;
+    case "if":
+      remapExpressionLocals(statement.cond, locals, seen);
+      for (const child of statement.then) remapStatementLocals(child, locals, seen);
+      if (statement.else) {
+        for (const child of statement.else) remapStatementLocals(child, locals, seen);
+      }
+      return;
+    case "block":
+    case "loop":
+      for (const child of statement.body) remapStatementLocals(child, locals, seen);
+      return;
+    case "br_if":
+      remapExpressionLocals(statement.cond, locals, seen);
+      return;
+    case "return":
+      for (const value of statement.values) remapExpressionLocals(value, locals, seen);
+      return;
+    case "memory.copy":
+      remapExpressionLocals(statement.dest, locals, seen);
+      remapExpressionLocals(statement.src, locals, seen);
+      remapExpressionLocals(statement.len, locals, seen);
+      return;
+    case "br":
+    case "unreachable":
+      return;
+  }
+}
+
+function importedSignature(meta: ModuleMeta["imports"][string]): [IrType[], IrType[]] {
+  if (meta.mapleParams || meta.mapleResults) {
+    return [(meta.mapleParams ?? []).map(lane), (meta.mapleResults ?? []).map(lane)];
+  }
+  if (meta.info?.kind !== "func")
+    throw new Error(`lowering: import '${meta.name}' is not a function`);
+  const [params, results] = extractFunctionSignature(meta.info.signature);
+  return [params === "void" ? [] : params, results === "void" ? [] : results];
+}
+
 export function lowerModule(
   ast: ASTProgram,
   meta: ModuleMeta,
-  options: EmitOptions = { importMemory: false },
+  options: LoweringOptions = { importMemory: false },
 ): LoweringResult {
   const builder = new IrBuilder();
   const layouts = new Map<string, StructLayout>();
@@ -1582,6 +1829,31 @@ export function lowerModule(
   const staticData = new StaticDataPlanner(builder, layouts);
   staticData.scan(ast);
 
+  const functions = new Map<string, FuncId>();
+  const functionSignatures = new Map<string, SigId>();
+  const globals = new Map<string, GlobalBinding>();
+  for (const [localName, imported] of Object.entries(meta.imports)) {
+    if (!imported.resolved || (imported.mergeable && !imported.synthesized)) continue;
+    if (imported.info?.kind === "func") {
+      const [params, results] = importedSignature(imported);
+      const signature = builder.signature(params, results);
+      const id = builder.funcImport(imported.module, imported.name, signature);
+      functions.set(localName, id);
+      functionSignatures.set(localName, signature);
+    } else if (imported.info?.kind === "global") {
+      const mapleType = imported.mapleType ?? imported.info.type;
+      const id = builder.globalImport(imported.module, imported.name, lane(mapleType));
+      globals.set(localName, { id, mapleType });
+    }
+  }
+
+  const exportsByInternal = new Map<string, string>();
+  for (const [publicName, internalName] of options.exportMap ?? []) {
+    exportsByInternal.set(internalName, publicName);
+  }
+  const exportedName = (internalName: string, exported: boolean): string | undefined =>
+    options.exportMap ? exportsByInternal.get(internalName) : exported ? internalName : undefined;
+
   const framePlans = new Map<FunctionStatement, FramePlan>();
   for (const statement of ast.statements) {
     if (statement instanceof FunctionStatement) {
@@ -1591,7 +1863,6 @@ export function lowerModule(
   const needsStack = [...framePlans.values()].some((frame) => frame.size > 0);
   const stackPointer = needsStack ? builder.global("__sp", "i32", true, 65_536) : undefined;
 
-  const globals = new Map<string, GlobalBinding>();
   for (const statement of ast.statements) {
     if (!(statement instanceof LetStatement)) continue;
     if (statement.pattern instanceof TuplePattern) unsupported(statement);
@@ -1608,7 +1879,8 @@ export function lowerModule(
       : constant
         ? constantInitializer(expression, statement.typeAnnotation)
         : zero(type);
-    const globalOptions = statement.exported ? { export: name } : {};
+    const exportName = exportedName(name, statement.exported);
+    const globalOptions = exportName === undefined ? {} : { export: exportName };
     const id = builder.global(
       name,
       type,
@@ -1621,18 +1893,63 @@ export function lowerModule(
 
   const runtime = new RuntimeHelpers(builder, layouts);
 
-  const functions = new Map<string, FuncId>();
   const functionBuilders = new Map<FunctionStatement, FuncBuilder>();
   for (const statement of ast.statements) {
     if (!(statement instanceof FunctionStatement)) continue;
     const params = statement.fnExpr.params.map((param) => lane(param.type));
     const results = statement.fnExpr.returnTypes.map(lane);
     const signature = builder.signature(params, results);
-    const functionOptions = statement.exported ? { export: statement.name } : {};
+    const exportName = exportedName(statement.name, statement.exported);
+    const functionOptions = exportName === undefined ? {} : { export: exportName };
     const fn = builder.func(statement.name, signature, functionOptions);
     functions.set(statement.name, fn.id);
+    functionSignatures.set(statement.name, signature);
     functionBuilders.set(statement, fn);
   }
+
+  const indirectSignatures = new Map<string, SigId>();
+  for (const [key, signature] of meta.fnSignatures) {
+    indirectSignatures.set(
+      key,
+      builder.signature(
+        ["i32", ...signature.params.map((type) => type as IrType)],
+        [...signature.results.map((type) => type as IrType)],
+      ),
+    );
+  }
+
+  if (meta.hasFnTypedSurface) builder.ensureTable();
+  const slots = new Map<string, number>();
+  const tableEntries = [...meta.fnTable].sort((left, right) => left[1].slot - right[1].slot);
+  for (const [name, entry] of tableEntries) {
+    const target = functions.get(entry.originalName) ?? functions.get(name);
+    const targetSig = functionSignatures.get(entry.originalName) ?? functionSignatures.get(name);
+    if (target === undefined || targetSig === undefined) {
+      throw new Error(`lowering: missing fn-table target '${entry.originalName}'`);
+    }
+    const trampolineId = trampoline(builder, target, targetSig, entry.trampolineName);
+    const slot = builder.tableEntry(trampolineId);
+    if (slot !== entry.slot)
+      throw new Error(`lowering: non-contiguous fn-table slot ${entry.slot}`);
+    slots.set(name, slot);
+    slots.set(entry.originalName, slot);
+  }
+
+  let makeFnrefId: FuncId | undefined;
+  if (meta.needsFnrefCreation) {
+    const allocator =
+      options.allocator === undefined
+        ? meta.imports.alloc?.synthesized
+          ? functions.get("alloc")
+          : undefined
+        : functions.get(options.allocator);
+    if (allocator === undefined) {
+      throw new Error("function references require the merged memory allocator");
+    }
+    makeFnrefId = makeFnref(builder, allocator);
+  }
+  const fnrefs: FnrefLowering = { slots, signatures: indirectSignatures };
+  if (makeFnrefId !== undefined) fnrefs.makeFnrefId = makeFnrefId;
 
   for (const statement of ast.statements) {
     if (
@@ -1661,6 +1978,8 @@ export function lowerModule(
       runtime,
       framePlans.get(statement),
       stackPointer,
+      undefined,
+      fnrefs,
     ).lowerBody(statement.fnExpr.body);
   }
 
@@ -1706,6 +2025,7 @@ export function lowerModule(
       undefined,
       undefined,
       locals,
+      fnrefs,
     );
     lowerer.lowerPendingStore(
       site.baseAddr + site.member.offset,
@@ -1719,9 +2039,71 @@ export function lowerModule(
     });
   }
 
+  if (meta.deferredGlobalInits.length > 0) {
+    const start = builder.func("__start", builder.signature([], []));
+    const startLowerer = new FunctionLowerer(
+      start,
+      functions,
+      globals,
+      [],
+      layouts,
+      staticData,
+      runtime,
+      undefined,
+      undefined,
+      undefined,
+      fnrefs,
+    );
+    const fragments = new Map(pendingInits.map((fragment) => [fragment.initializerId, fragment]));
+    for (const initializer of meta.deferredGlobalInits) {
+      if (initializer.kind === "global") {
+        const target = globals.get(initializer.name);
+        if (!target) throw new Error(`lowering: missing initializer global '${initializer.name}'`);
+        start.globalSet(target.id, startLowerer.lowerInitializer(initializer.expr));
+        continue;
+      }
+      if (initializer.kind === "call") {
+        const target = functions.get(initializer.name);
+        if (target === undefined) {
+          throw new Error(`lowering: missing initializer function '${initializer.name}'`);
+        }
+        start.callVoid(
+          target,
+          initializer.args.map((argument, index) =>
+            start.constant(
+              argument.type,
+              index === 0 ? alignTo(staticData.dataEnd, 8) : argument.value,
+            ),
+          ),
+        );
+        continue;
+      }
+      if (initializer.id === undefined) {
+        throw new Error("lowering: pending initializer is missing identity");
+      }
+      const fragment = fragments.get(initializer.id);
+      if (!fragment) {
+        throw new Error(`lowering: missing pending initializer '${initializer.id}'`);
+      }
+      const localMap = new Map<LocalId, LocalId>();
+      for (let index = 0; index < fragment.locals.length; index += 1) {
+        localMap.set(index, start.local(fragment.locals[index]!, `__init_${index}`));
+      }
+      const seenExpressions = new Set<Expr>();
+      for (const statement of fragment.statements) {
+        remapStatementLocals(statement, localMap, seenExpressions);
+        start.emit(statement);
+      }
+      fragments.delete(initializer.id);
+    }
+    if (fragments.size > 0) {
+      throw new Error(`lowering: orphan pending initializer '${fragments.keys().next().value}'`);
+    }
+    builder.start(start.id);
+  }
+
   runtime.finish();
   const requiredPages = Math.max(2, Math.ceil(staticData.dataEnd / 65_536) + 1);
-  const pages = Math.max(meta.memoryMinimumPages ?? 0, requiredPages);
-  builder.memory(options.importMemory ? "imported" : "owned", pages);
-  return { module: builder.finish(), pendingInits };
+  builder.memory(options.importMemory ? "imported" : "owned", requiredPages);
+  return { module: builder.finish(), pendingInits: [] };
 }

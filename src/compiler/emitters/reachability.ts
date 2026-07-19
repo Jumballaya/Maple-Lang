@@ -26,6 +26,8 @@ export type ReachabilityAnalysis = {
   reachable: ReachableSet;
   fnTableEntries: MergedFnTableEntry[];
   dataOwners: Map<string, string>;
+  hasFnTypedSurface: boolean;
+  needsFnrefCreation: boolean;
 };
 
 export function analyzeReachability(input: ReachabilityInput): ReachabilityAnalysis {
@@ -110,6 +112,20 @@ export function analyzeReachability(input: ReachabilityInput): ReachabilityAnaly
   return {
     reachable,
     fnTableEntries,
+    hasFnTypedSurface: [...input.declarations.values()].some((declaration) => {
+      const reached =
+        declaration.kind === "function"
+          ? reachable.functions.has(declaration.name)
+          : reachable.globals.has(declaration.name);
+      return reached && declaration.hasFnTypedSurface;
+    }),
+    needsFnrefCreation: [...input.declarations.values()].some((declaration) => {
+      const reached =
+        declaration.kind === "function"
+          ? reachable.functions.has(declaration.name)
+          : reachable.globals.has(declaration.name);
+      return reached && declaration.needsFnrefCreation;
+    }),
     dataOwners: new Map(
       [...input.dataAllocations].map(([allocation, data]) => [allocation, data.owner]),
     ),

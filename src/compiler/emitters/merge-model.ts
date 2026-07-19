@@ -27,6 +27,7 @@ import { alignTo, type StructMember } from "../../shared/types";
 import { getIntrinsic } from "../intrinsics";
 import { minimumMemoryPages } from "../MapleModule";
 import type { ModuleGraph, ModuleRecord } from "../module-graph";
+import { canonicalFnType, isFnType, parseFnType, valueTypeToWasm } from "./emit.types";
 import type {
   DeferredGlobalInit,
   FnSignature,
@@ -50,6 +51,9 @@ type DeclarationBase = {
   sourceName: string;
   moduleKey: string;
   edges: DeclarationEdges;
+  fnTypes: string[];
+  hasFnTypedSurface: boolean;
+  needsFnrefCreation: boolean;
 };
 
 export type MergedFunction = DeclarationBase & {
@@ -146,6 +150,8 @@ export type MergedProgram = {
   fnTable: {
     provisional: true;
     required: boolean;
+    hasFnTypedSurface: boolean;
+    needsFnrefCreation: boolean;
     entries: MergedFnTableEntry[];
     signatures: Map<string, FnSignature>;
   };
@@ -269,6 +275,13 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   function resolveType(module: ModuleRecord, type: string): string {
     if (type.startsWith("*")) return `*${resolveType(module, type.slice(1))}`;
     if (type.endsWith("[]")) return `${resolveType(module, type.slice(0, -2))}[]`;
+    const fnType = parseFnType(type);
+    if (fnType) {
+      return canonicalFnType(
+        fnType.params.map((entry) => resolveType(module, entry)),
+        fnType.results.map((entry) => resolveType(module, entry)),
+      );
+    }
     if (type === "string") return "string";
     if (module.data.structs[type]) return mangledName(module, type);
     if (importKinds.get(module.key)?.get(type) === "struct") {
@@ -480,6 +493,13 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   function walkDeclaration(module: ModuleRecord, owner: MergedDeclaration): void {
     const scopes: Scope = [new Map()];
 
+    function registerFnType(type: string): void {
+      const resolved = resolveType(module, type);
+      if (!isFnType(resolved)) return;
+      owner.hasFnTypedSurface = true;
+      pushUnique(owner.fnTypes, resolved);
+    }
+
     function walkBlock(block: BlockStatement, parentScopes: Scope): void {
       const blockScopes = [...parentScopes, new Map<string, string>()];
       for (const statement of block.statements) walkStatement(statement, blockScopes);
@@ -496,6 +516,8 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         const fn = functionTarget(module, name);
         if (fn) {
           pushUnique(owner.edges.fnRefs, fn);
+          owner.hasFnTypedSurface = true;
+          owner.needsFnrefCreation = true;
           addHelperEdge(owner, "__make_fnref");
           const alloc = importedTarget(module, "alloc", "func");
           ensureHelper({
@@ -545,6 +567,38 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         return;
       }
       if (expression instanceof CallExpression) {
+        const lexicalType = localType(currentScopes, expression.func);
+        if (lexicalType && isFnType(resolveType(module, lexicalType))) {
+          registerFnType(lexicalType);
+        } else if ((expression as ASTExpression).resolvedCallTarget?.kind === "field") {
+          registerFnType(
+            (
+              (expression as ASTExpression).resolvedCallTarget as Extract<
+                NonNullable<ASTExpression["resolvedCallTarget"]>,
+                { kind: "field" }
+              >
+            ).fnType,
+          );
+        } else {
+          const receiver = expression.args[0];
+          if (receiver instanceof Identifier) {
+            const sourceType = localType(currentScopes, receiver.tokenLiteral())?.replace(
+              /^\*/,
+              "",
+            );
+            const identity = sourceType ? resolveType(module, sourceType) : undefined;
+            const prefix = sourceType ? `${sourceType}_` : "";
+            const memberName =
+              prefix && expression.func.startsWith(prefix)
+                ? expression.func.slice(prefix.length)
+                : undefined;
+            const fieldType =
+              identity && memberName
+                ? structs.get(identity)?.members[memberName]?.resolvedType
+                : undefined;
+            if (fieldType) registerFnType(fieldType);
+          }
+        }
         if (
           localType(currentScopes, expression.func) === undefined &&
           !getIntrinsic(expression.func)
@@ -628,6 +682,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     function walkStatement(statement: ASTStatement, currentScopes: Scope): void {
       if (statement instanceof LetStatement) {
         if (statement.expression) walkExpression(statement.expression, currentScopes);
+        registerFnType(statement.typeAnnotation);
         bindLet(currentScopes.at(-1)!, statement);
         return;
       }
@@ -676,7 +731,9 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     if (owner.kind === "function") {
       for (const parameter of owner.statement.fnExpr.params) {
         scopes[0]!.set(parameter.identifier.tokenLiteral(), parameter.type);
+        registerFnType(parameter.type);
       }
+      for (const result of owner.statement.fnExpr.returnTypes) registerFnType(result);
       walkBlock(owner.statement.fnExpr.body, scopes);
     } else if (owner.statement.expression) {
       walkExpression(owner.statement.expression, scopes);
@@ -702,6 +759,9 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
           })),
           resolvedResults: meta.mapleResults.map((result) => resolveType(module, result)),
           edges: emptyEdges(),
+          fnTypes: [],
+          hasFnTypedSurface: false,
+          needsFnrefCreation: false,
         };
         declarations.set(name, declaration);
         functions.set(name, declaration);
@@ -723,6 +783,9 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
           meta,
           resolvedType: resolveType(module, meta.type),
           edges: emptyEdges(),
+          fnTypes: [],
+          hasFnTypedSurface: false,
+          needsFnrefCreation: false,
         };
         declarations.set(name, declaration);
         globals.set(name, declaration);
@@ -746,18 +809,18 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   const memoryModule = orderedModules.find(
     (module) => module.bundledStdlib === "memory" && module.data.exports.heap_init?.kind === "func",
   );
-  if (memoryModule) {
-    startupInitializers.push({
-      id: `${memoryModule.manglePrefix}$$heap-init`,
-      moduleKey: memoryModule.key,
-      owner: mangledName(memoryModule, "heap_init"),
-      initializer: {
-        kind: "call",
-        name: mangledName(memoryModule, "heap_init"),
-        args: [{ type: "i32", value: 0 }],
-      },
-    });
-  }
+  const heapInitializer: MergedStartupInitializer | undefined = memoryModule
+    ? {
+        id: `${memoryModule.manglePrefix}$$heap-init`,
+        moduleKey: memoryModule.key,
+        owner: mangledName(memoryModule, "heap_init"),
+        initializer: {
+          kind: "call",
+          name: mangledName(memoryModule, "heap_init"),
+          args: [{ type: "i32", value: 0 }],
+        },
+      }
+    : undefined;
   for (const module of orderedModules) {
     for (let index = 0; index < module.data.deferredGlobalInits.length; index++) {
       const initializer = module.data.deferredGlobalInits[index]!;
@@ -812,14 +875,20 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     }
   }
 
-  const reachability = analyzeReachability({
+  const reachabilityInput = {
     declarations,
     exports,
     dataAllocations,
     startupInitializers,
     fnTableEntries: fnEntries,
     runtimeHelpers,
-  });
+  };
+  let reachability = analyzeReachability(reachabilityInput);
+  const allocatorName = memoryModule ? mangledName(memoryModule, "malloc") : undefined;
+  if (heapInitializer && allocatorName && reachability.reachable.functions.has(allocatorName)) {
+    startupInitializers.unshift(heapInitializer);
+    reachability = analyzeReachability(reachabilityInput);
+  }
 
   const ownedSegmentIds = new Set<string>();
   const liveSegmentIds = new Set<string>();
@@ -860,6 +929,24 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   }
 
   const reachableSignatures = new Map<string, FnSignature>();
+  for (const declaration of declarations.values()) {
+    const reached =
+      declaration.kind === "function"
+        ? reachability.reachable.functions.has(declaration.name)
+        : reachability.reachable.globals.has(declaration.name);
+    if (!reached) continue;
+    for (const key of declaration.fnTypes) {
+      const parsed = parseFnType(key);
+      if (!parsed || reachableSignatures.has(key)) continue;
+      const results = parsed.results.filter((result) => result !== "void").map(valueTypeToWasm);
+      reachableSignatures.set(key, {
+        key,
+        params: parsed.params.map(valueTypeToWasm),
+        results,
+        isVoid: results.length === 0,
+      });
+    }
+  }
   for (const entry of reachability.fnTableEntries) {
     const signature = fnSignatures.get(entry.signatureKey);
     if (signature) reachableSignatures.set(entry.signatureKey, signature);
@@ -886,6 +973,8 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     fnTable: {
       provisional: true,
       required: reachability.fnTableEntries.length > 0,
+      hasFnTypedSurface: reachability.hasFnTypedSurface,
+      needsFnrefCreation: reachability.needsFnrefCreation,
       entries: reachability.fnTableEntries,
       signatures: reachableSignatures,
     },

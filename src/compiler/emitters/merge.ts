@@ -381,20 +381,20 @@ export function buildMergedAst(model: MergedProgram): ASTProgram {
   return program;
 }
 
-function buildMeta(model: MergedProgram): ModuleMeta {
+function buildMeta(model: MergedProgram, includeLegacyData = true): ModuleMeta {
   const deferredGlobalInits: DeferredGlobalInit[] = model.startupInitializers.map((entry) => {
     const module = model.modules.get(entry.moduleKey)!;
     const initializer = clone(entry.initializer);
-    if (initializer.kind === "call") return initializer;
+    if (initializer.kind === "call") return { ...initializer, id: entry.id, owner: entry.owner };
     rewriteExpression(initializer.expr, model, module, []);
     if (initializer.kind === "global") {
       initializer.name = symbolName(model, module, initializer.name);
       initializer.type = rewriteType(model, module, initializer.type);
     } else {
-      initializer.baseAddr = entry.targetAddress ?? initializer.baseAddr;
+      if (includeLegacyData) initializer.baseAddr = entry.targetAddress ?? initializer.baseAddr;
       initializer.fieldType = rewriteType(model, module, initializer.fieldType);
     }
-    return initializer;
+    return { ...initializer, id: entry.id, owner: entry.owner };
   });
 
   const meta: ModuleMeta = {
@@ -422,17 +422,19 @@ function buildMeta(model: MergedProgram): ModuleMeta {
     exports: {},
     structs: mergedStructs(model),
     // data shaking: T24
-    data: model.data.map((entry) => ({
-      name: entry.id,
-      addr: entry.address,
-      bytes: rewriteData(
-        entry.bytes,
-        model.dataAddresses.get(entry.moduleKey) ?? new Map(),
-        entry.pointerOffsets,
-      ),
-    })),
+    data: includeLegacyData
+      ? model.data.map((entry) => ({
+          name: entry.id,
+          addr: entry.address,
+          bytes: rewriteData(
+            entry.bytes,
+            model.dataAddresses.get(entry.moduleKey) ?? new Map(),
+            entry.pointerOffsets,
+          ),
+        }))
+      : [],
     stringPool: {},
-    dataPtr: model.dataEnd,
+    dataPtr: includeLegacyData ? model.dataEnd : 65_536,
     memoryMinimumPages: model.memoryMinimumPages,
     deferredGlobalInits,
     fnTable: new Map(
@@ -449,9 +451,35 @@ function buildMeta(model: MergedProgram): ModuleMeta {
     ),
     fnSignatures: new Map(model.fnTable.signatures),
     liftedLambdas: [],
-    needsClosureRuntime: model.fnTable.required,
+    hasFnTypedSurface: model.fnTable.hasFnTypedSurface,
+    needsFnrefCreation: model.fnTable.needsFnrefCreation,
   };
   return meta;
+}
+
+function resolvedAllocator(model: MergedProgram): string | undefined {
+  const allocator = [...model.imports].find(
+    ([local, target]) => local.endsWith("$$alloc") && target.endsWith("$$malloc"),
+  )?.[1];
+  return allocator && model.reachable.functions.has(allocator) ? allocator : undefined;
+}
+
+export type MergedLoweringInput = {
+  ast: ASTProgram;
+  meta: ModuleMeta;
+  exportMap: Map<string, string>;
+  allocator?: string;
+};
+
+export function buildMergedLoweringInput(model: MergedProgram): MergedLoweringInput {
+  const input: MergedLoweringInput = {
+    ast: buildMergedAst(model),
+    meta: buildMeta(model, false),
+    exportMap: new Map(model.exports),
+  };
+  const allocator = resolvedAllocator(model);
+  if (allocator !== undefined) input.allocator = allocator;
+  return input;
 }
 
 function publicExports(wat: string, model: MergedProgram): string {
@@ -472,10 +500,8 @@ export function emitMergedProgram(
 ): string {
   const ast = buildMergedAst(model);
   const meta = buildMeta(model);
-  const allocator = [...model.imports].find(
-    ([local, target]) => local.endsWith("$$alloc") && target.endsWith("$$malloc"),
-  )?.[1];
-  if (meta.needsClosureRuntime) {
+  const allocator = resolvedAllocator(model);
+  if (meta.needsFnrefCreation) {
     if (!allocator) throw new Error("function references require the merged memory allocator");
     meta.closureAllocator = allocator;
   }

@@ -2463,7 +2463,8 @@ describe("Emission: struct literal expression defense", () => {
       fnTable: new Map(),
       fnSignatures: new Map(),
       liftedLambdas: [],
-      needsClosureRuntime: false,
+      hasFnTypedSurface: false,
+      needsFnrefCreation: false,
     });
     assert.throws(
       () => emitExpression(expr, emitter),

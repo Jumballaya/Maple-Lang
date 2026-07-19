@@ -144,10 +144,15 @@ export function makeFnref(builder: IrBuilder, allocFuncId: FuncId): FuncId {
   return fn.id;
 }
 
-export function trampoline(builder: IrBuilder, target: FuncId, targetSig: SigId | Sig): FuncId {
+export function trampoline(
+  builder: IrBuilder,
+  target: FuncId,
+  targetSig: SigId | Sig,
+  name = `__indirect_${target}`,
+): FuncId {
   const targetShape = typeof targetSig === "number" ? builder.getSignature(targetSig) : targetSig;
   const sig = builder.signature(["i32", ...targetShape.params], targetShape.results);
-  const fn = builder.func(`__indirect_${target}`, sig);
+  const fn = builder.func(name, sig);
   fn.nameLocal(0, "env");
   const args = targetShape.params.map((_, index) => fn.localGet(index + 1));
   if (targetShape.results.length === 0) {

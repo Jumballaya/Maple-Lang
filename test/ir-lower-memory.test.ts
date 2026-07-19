@@ -357,8 +357,8 @@ describe("IR memory lowering: structs", () => {
   });
 });
 
-describe("IR memory lowering: pending initializers and helper demand", () => {
-  test("pairs global struct stores by owner and ordinal", () => {
+describe("IR memory lowering: startup initializers and helper demand", () => {
+  test("splices global struct stores by owner and ordinal", () => {
     const { ast, meta } = checked(`
       struct Pair { left: i32, right: i32 }
       fn one(): i32 { return 1; }
@@ -368,19 +368,16 @@ describe("IR memory lowering: pending initializers and helper demand", () => {
       let after: i32 = two();
     `);
     const result = lowerModule(ast, meta);
-    assert.deepEqual(
-      result.pendingInits.map((entry) => entry.initializerId),
-      ["pair:0", "pair:1"],
-    );
+    assert.deepEqual(result.pendingInits, []);
+    const start = result.module.funcs[result.module.start! - result.module.funcImports.length]!;
+    const stores = start.body.filter((statement) => statement.k === "store");
     const pairAddress = Number(
       result.module.globals.find((_, index) => result.module.names.globals.get(index) === "pair")
         ?.init.value,
     );
     const offsets = result.module.structLayouts.get("Pair")!.members.map((member) => member.offset);
     assert.deepEqual(
-      result.pendingInits.map((entry) => {
-        const store = entry.statements[0];
-        assert(store?.k === "store");
+      stores.map((store) => {
         assert(store.addr.k === "const");
         return Number(store.addr.value) - pairAddress;
       }),
@@ -388,7 +385,7 @@ describe("IR memory lowering: pending initializers and helper demand", () => {
     );
   });
 
-  test("keeps pending temporaries fragment-local and rejects a kind mismatch", () => {
+  test("remaps fragment temporaries into start and rejects a kind mismatch", () => {
     const source = `
       struct Box { value: f32 }
       fn left(): f32 { return 7.5; }
@@ -400,8 +397,10 @@ describe("IR memory lowering: pending initializers and helper demand", () => {
     assert(memory?.kind === "memory");
     memory.baseAddr = 7;
     const result = lowerModule(ast, meta);
-    assert.deepEqual(result.pendingInits[0]?.locals, ["f32", "f32"]);
-    const store = result.pendingInits[0]?.statements[0];
+    assert.deepEqual(result.pendingInits, []);
+    const start = result.module.funcs[result.module.start! - result.module.funcImports.length]!;
+    assert.deepEqual(start.locals, ["f32", "f32"]);
+    const store = start.body.find((statement) => statement.k === "store");
     assert(store?.k === "store");
     assert(store.addr.k === "const");
     assert(Number(store.addr.value) >= 65_536);

@@ -46,7 +46,8 @@ export class ModuleBuilder {
       fnTable: new Map(),
       fnSignatures: new Map(),
       liftedLambdas: [],
-      needsClosureRuntime: false,
+      hasFnTypedSurface: false,
+      needsFnrefCreation: false,
     };
   }
 

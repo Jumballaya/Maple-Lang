@@ -227,19 +227,22 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
       results: wasmResults,
       isVoid: wasmResults.length === 0,
     });
-    // Any fn-type in scope requires the indirect-call runtime (table + helpers),
-    // even if no named function in this module is taken by-value: the table must
-    // exist for `call_indirect` to validate.
-    mod.needsClosureRuntime = true;
+    mod.hasFnTypedSurface = true;
   }
 
   // Register a named function into the fn-table for indirect call support.
   // Skipped if `name` is shadowed by a local variable in the current scope.
-  function registerFnRef(name: string, scope: Set<string>): void {
+  function registerFnRef(name: string, scope: Set<string>, importedFnValue = false): void {
     if (scope.has(name)) return;
     if (mod.fnTable.has(name)) return;
     const fnMeta = mod.functions[name];
-    if (!fnMeta) return;
+    if (!fnMeta) {
+      if (importedFnValue && mod.imports[name]) {
+        mod.hasFnTypedSurface = true;
+        mod.needsFnrefCreation = true;
+      }
+      return;
+    }
 
     const wasmParams = fnMeta.params.map((p) => valueTypeToWasm(p.type));
     const wasmResults = fnMeta.results;
@@ -263,16 +266,21 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
       });
     }
 
-    mod.needsClosureRuntime = true;
+    mod.hasFnTypedSurface = true;
+    mod.needsFnrefCreation = true;
   }
 
-  function walkExpr(expr: ASTExpression, scope: Set<string>): void {
+  function walkExpr(expr: ASTExpression, scope: Set<string>, importedFnValue = false): void {
     if (expr instanceof Identifier) {
-      registerFnRef(expr.tokenLiteral(), scope);
+      registerFnRef(expr.tokenLiteral(), scope, importedFnValue);
       return;
     }
     if (expr instanceof CallExpression) {
-      for (const arg of expr.args) walkExpr(arg, scope);
+      const params = mod.functions[expr.func]?.params;
+      for (let index = 0; index < expr.args.length; index += 1) {
+        const parameterType = params?.[index]?.type;
+        walkExpr(expr.args[index]!, scope, parameterType ? isFnType(parameterType) : false);
+      }
       return;
     }
     if (expr instanceof InfixExpression) {
@@ -299,7 +307,10 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
       return;
     }
     if (expr instanceof StructLiteralExpression) {
-      for (const v of Object.values(expr.members)) walkExpr(v, scope);
+      const definition = mod.structs[expr.name];
+      for (const [name, value] of Object.entries(expr.members)) {
+        walkExpr(value, scope, isFnType(definition?.members[name]?.type ?? ""));
+      }
       return;
     }
     if (expr instanceof CastExpression) {
@@ -327,8 +338,8 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
 
   function walkStmt(stmt: ASTStatement, scope: Set<string>): void {
     if (stmt instanceof LetStatement) {
-      if (stmt.expression) walkExpr(stmt.expression, scope);
       registerFnTypeSig(stmt.typeAnnotation);
+      if (stmt.expression) walkExpr(stmt.expression, scope, isFnType(stmt.typeAnnotation));
       // Add binding AFTER walking RHS so the name doesn't shadow itself.
       if (stmt.pattern instanceof TuplePattern) {
         for (const n of stmt.pattern.names) {
@@ -379,6 +390,10 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
       walkBlock(stmt.fnExpr.body, fnScope);
       return;
     }
+    if (stmt instanceof StructStatement) {
+      for (const member of Object.values(stmt.members)) registerFnTypeSig(member.type);
+      return;
+    }
     if (stmt instanceof SwitchStatement) {
       walkExpr(stmt.switchExpr, scope);
       for (const c of stmt.cases) walkBlock(c.body, scope);
@@ -392,7 +407,7 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
     walkStmt(stmt, topScope);
   }
 
-  if (mod.needsClosureRuntime && !mod.imports.alloc) {
+  if (mod.needsFnrefCreation && !mod.imports.alloc) {
     mod.imports.alloc = {
       module: "memory",
       name: "malloc",
@@ -535,10 +550,16 @@ export function emitModule(
   if (data.fnSignatures.size > 0) {
     emitFnTypeDecls(data, emitter);
   }
-  if (data.needsClosureRuntime) {
+  if (data.needsFnrefCreation) {
     emitSynthesizedImports(emitter);
+  }
+  if (data.hasFnTypedSurface) {
     emitFnTable(data, emitter);
+  }
+  if (data.fnTable.size > 0) {
     emitTrampolines(data, emitter);
+  }
+  if (data.needsFnrefCreation) {
     emitMakeFnRefHelper(data, emitter);
   }
   emitRuntimeHelpers(emitter);

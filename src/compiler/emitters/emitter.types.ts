@@ -86,7 +86,7 @@ export type ModuleDataMeta = {
   pointerOffsets?: number[];
 };
 
-// Initializer that runs once at startup (guarded by $__globals_inited):
+// Initializer that runs once at startup.
 // "memory" writes a struct-literal field, "global" assigns a non-const global.
 export type DeferredGlobalInitPayload =
   | {
@@ -143,7 +143,8 @@ export type ModuleMeta = {
   fnTable: Map<string, FnTableEntry>;
   fnSignatures: Map<FnTypeKey, FnSignature>;
   liftedLambdas: LambdaLiftedFn[];
-  needsClosureRuntime: boolean;
+  hasFnTypedSurface: boolean;
+  needsFnrefCreation: boolean;
 };
 
 export type { StructMember };
