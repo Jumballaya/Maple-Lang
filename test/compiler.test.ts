@@ -14,6 +14,7 @@ import {
 } from "../src/compiler/emitters/module";
 import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
+import { typeCheck } from "../src/compiler/TypeChecker";
 import type { Token } from "../src/lexer/token.types";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
@@ -21,6 +22,7 @@ import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
+import { maybeTest, runExport } from "./helpers";
 
 function compile(src: string) {
   const p = new Parser(src);
@@ -32,6 +34,38 @@ function compile(src: string) {
   const mod = emitModule(ast, meta);
   const wat = mod.buildWat();
   return { ast, meta, mod, wat };
+}
+
+function checkedCompile(src: string) {
+  const parser = new Parser(src, "behavioralization.maple");
+  const ast = parser.parse("behavioralization");
+  assert.deepEqual(
+    parser.errors.map((error) => error.message),
+    [],
+  );
+  const meta = extractModuleMeta(ast, true);
+  collectFnReferences(ast, meta);
+  linkStdlibImports(meta);
+  assert.deepEqual(
+    typeCheck(ast, meta).map((error) => error.message),
+    [],
+  );
+  const mod = emitModule(ast, meta);
+  const wat = mod.buildWat();
+  return { ast, meta, mod, wat };
+}
+
+function checkerMessages(src: string): string[] {
+  const parser = new Parser(src, "behavioralization.maple");
+  const ast = parser.parse("behavioralization");
+  assert.deepEqual(
+    parser.errors.map((error) => error.message),
+    [],
+  );
+  const meta = extractModuleMeta(ast, true);
+  collectFnReferences(ast, meta);
+  linkStdlibImports(meta);
+  return typeCheck(ast, meta).map((error) => error.message);
 }
 
 function assertContainsInOrder(wat: string, fragments: string[]): void {
@@ -268,261 +302,276 @@ describe("Emission: Structs", () => {
 });
 
 describe("Emission: Control Flow", () => {
-  test("if without else emits if/then", () => {
-    const { wat } = compile("fn test(x: i32): i32 { if (x > 0) { return 1; } return 0; }");
-    assert(wat.includes("(if"));
-    assert(wat.includes("(then"));
+  maybeTest("if without else selects the matching path", () => {
+    const { wat } = checkedCompile(
+      "export fn run(x: i32): i32 { if (x > 0) { return 1; } return 0; }",
+    );
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), 0);
   });
 
-  test("if with else emits else block", () => {
-    const { wat } = compile("fn test(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }");
-    assert(wat.includes("(else"));
+  maybeTest("if with else selects both branches", () => {
+    const { wat } = checkedCompile(
+      "export fn run(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }",
+    );
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), 2);
   });
 
-  test("for loop emits loop and branch instructions", () => {
-    const { wat } = compile("fn test(): void { for (let i: i32 = 0; i < 3; i = i + 1) { } }");
-    assert(wat.includes("(loop"));
-    assert(wat.includes("br_if"));
-    assert(wat.includes("br $"));
+  maybeTest("for loop executes its body and update", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
+        for (let i: i32 = 0; i < 3; i = i + 1) { count++; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("while loop emits loop and branch instructions", () => {
-    const { wat } = compile("fn test(): void { let i: i32 = 0; while (i < 3) { i = i + 1; } }");
-    assert(wat.includes("(loop"));
-    assert(wat.includes("br_if"));
+  maybeTest("while loop rechecks its condition", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let i: i32 = 0;
+        while (i < 3) { i = i + 1; }
+        return i;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("break in loop emits branch", () => {
-    const { wat } = compile("fn test(): void { while (true) { break; } }");
-    assert(wat.includes("br $"));
+  maybeTest("break exits its loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
+        while (true) { count++; break; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
   });
 });
 
 describe("Emission: Arithmetic", () => {
-  test("i32 + emits i32.add", () => {
-    const { wat } = compile("fn test(): i32 { return 1 + 2; }");
-    assert(wat.includes("i32.add"));
+  maybeTest("i32 addition returns the sum", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { return 1 + 2; }");
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("f32 + emits f32.add", () => {
-    const { wat } = compile("fn test(): f32 { return 1.0 + 2.0; }");
-    assert(wat.includes("f32.add"));
+  maybeTest("f32 addition returns the sum", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { return 1.0 + 2.0; }");
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("i32 -, *, / emit expected opcodes", () => {
-    const { wat } = compile("fn test(a: i32, b: i32): i32 { return (a - b) * (a / b); }");
-    assert(wat.includes("i32.sub"));
-    assert(wat.includes("i32.mul"));
-    assert(wat.includes("i32.div_s"));
+  maybeTest("i32 subtraction, multiplication, and division compose", () => {
+    const { wat } = checkedCompile(
+      "export fn run(a: i32, b: i32): i32 { return (a - b) * (a / b); }",
+    );
+    assert.equal(runExport(wat, "run", [9, 3]), 18);
   });
 
-  test("f32 -, *, / emit expected opcodes", () => {
-    const { wat } = compile("fn test(a: f32, b: f32): f32 { return (a - b) * (a / b); }");
-    assert(wat.includes("f32.sub"));
-    assert(wat.includes("f32.mul"));
-    assert(wat.includes("f32.div"));
+  maybeTest("f32 subtraction, multiplication, and division compose", () => {
+    const { wat } = checkedCompile(
+      "export fn run(a: f32, b: f32): f32 { return (a - b) * (a / b); }",
+    );
+    assert.equal(runExport(wat, "run", [9, 3]), 18);
   });
 
-  test("i32 % emits i32.rem_s", () => {
-    const { wat } = compile("fn test(a: i32, b: i32): i32 { return a % b; }");
-    assert(wat.includes("i32.rem_s"));
+  maybeTest("i32 remainder preserves the dividend sign", () => {
+    const { wat } = checkedCompile("export fn run(a: i32, b: i32): i32 { return a % b; }");
+    assert.equal(runExport(wat, "run", [-7, 3]), -1);
   });
 });
 
 describe("Emission: Comparisons", () => {
-  test("i32 > and < emit signed i32 comparison opcodes", () => {
-    const { wat } = compile(`
-      fn gt(a: i32, b: i32): i32 { return a > b; }
-      fn lt(a: i32, b: i32): i32 { return a < b; }
+  maybeTest("i32 greater-than and less-than are signed", () => {
+    const { wat } = checkedCompile(`
+      export fn gt(a: i32, b: i32): i32 { return a > b; }
+      export fn lt(a: i32, b: i32): i32 { return a < b; }
     `);
-    assert(wat.includes("i32.gt_s"));
-    assert(wat.includes("i32.lt_s"));
+    assert.equal(runExport(wat, "gt", [-1, 1]), 0);
+    assert.equal(runExport(wat, "lt", [-1, 1]), 1);
   });
 
-  test("f32 > and < emit f32 comparison opcodes", () => {
-    const { wat } = compile(`
-      fn gt(a: f32, b: f32): i32 { return a > b; }
-      fn lt(a: f32, b: f32): i32 { return a < b; }
+  maybeTest("f32 greater-than and less-than compare values", () => {
+    const { wat } = checkedCompile(`
+      export fn gt(a: f32, b: f32): i32 { return a > b; }
+      export fn lt(a: f32, b: f32): i32 { return a < b; }
     `);
-    assert(wat.includes("f32.gt"));
-    assert(wat.includes("f32.lt"));
+    assert.equal(runExport(wat, "gt", [2.5, 1.5]), 1);
+    assert.equal(runExport(wat, "lt", [2.5, 1.5]), 0);
   });
 
-  test("i32 >= and <= emit signed ge/le opcodes", () => {
-    const { wat } = compile(`
-      fn gte(a: i32, b: i32): i32 { return a >= b; }
-      fn lte(a: i32, b: i32): i32 { return a <= b; }
+  maybeTest("i32 inclusive comparisons include equality", () => {
+    const { wat } = checkedCompile(`
+      export fn gte(a: i32, b: i32): i32 { return a >= b; }
+      export fn lte(a: i32, b: i32): i32 { return a <= b; }
     `);
-    assert(wat.includes("i32.ge_s"));
-    assert(wat.includes("i32.le_s"));
+    assert.equal(runExport(wat, "gte", [2, 2]), 1);
+    assert.equal(runExport(wat, "lte", [2, 2]), 1);
   });
 
-  test("f32 >= and <= emit f32 ge/le opcodes", () => {
-    const { wat } = compile(`
-      fn gte(a: f32, b: f32): i32 { return a >= b; }
-      fn lte(a: f32, b: f32): i32 { return a <= b; }
+  maybeTest("f32 inclusive comparisons include equality", () => {
+    const { wat } = checkedCompile(`
+      export fn gte(a: f32, b: f32): i32 { return a >= b; }
+      export fn lte(a: f32, b: f32): i32 { return a <= b; }
     `);
-    assert(wat.includes("f32.ge"));
-    assert(wat.includes("f32.le"));
+    assert.equal(runExport(wat, "gte", [2.5, 2.5]), 1);
+    assert.equal(runExport(wat, "lte", [2.5, 2.5]), 1);
   });
 
-  test("== and != emit eq/ne opcodes", () => {
-    const { wat } = compile(`
-      fn eqi(a: i32, b: i32): i32 { return a == b; }
-      fn nei(a: i32, b: i32): i32 { return a != b; }
-      fn eqf(a: f32, b: f32): i32 { return a == b; }
-      fn nef(a: f32, b: f32): i32 { return a != b; }
+  maybeTest("integer and float equality and inequality are observable", () => {
+    const { wat } = checkedCompile(`
+      export fn eqi(a: i32, b: i32): i32 { return a == b; }
+      export fn nei(a: i32, b: i32): i32 { return a != b; }
+      export fn eqf(a: f32, b: f32): i32 { return a == b; }
+      export fn nef(a: f32, b: f32): i32 { return a != b; }
     `);
-    assert(wat.includes("i32.eq"));
-    assert(wat.includes("i32.ne"));
-    assert(wat.includes("f32.eq"));
-    assert(wat.includes("f32.ne"));
+    assert.equal(runExport(wat, "eqi", [3, 3]), 1);
+    assert.equal(runExport(wat, "nei", [3, 4]), 1);
+    assert.equal(runExport(wat, "eqf", [1.5, 1.5]), 1);
+    assert.equal(runExport(wat, "nef", [1.5, 2.5]), 1);
   });
 });
 
 describe("Emission: Bitwise / Logical / Shift Ops", () => {
-  test("&& and || emit short-circuiting if blocks", () => {
-    const { wat } = compile(`
-      fn test(a: i32, b: i32): i32 {
-        return (a && b) || (a && 1);
+  maybeTest("&& and || short-circuit their right operands", () => {
+    const { wat } = checkedCompile(`
+      let calls: i32 = 0;
+      fn tick(value: i32): i32 { calls++; return value; }
+      export fn and_false(): i32 {
+        let result: i32 = 0 && tick(1);
+        return calls * 10 + result;
+      }
+      export fn or_true(): i32 {
+        let result: i32 = 1 || tick(0);
+        return calls * 10 + result;
       }
     `);
-    // && short-circuits to 0 when the left side is false.
-    assert.match(wat, /\(if \(result i32\)[^\n]*\(then[^\n]*\)\s*\(else \(i32\.const 0\)\)\)/);
-    // || short-circuits to 1 when the left side is true.
-    assert.match(wat, /\(if \(result i32\)[^\n]*\(then \(i32\.const 1\)\)\s*\(else[^\n]*\)\)/);
+    assert.equal(runExport(wat, "and_false"), 0);
+    assert.equal(runExport(wat, "or_true"), 1);
   });
 
-  test("& | ^ emit bitwise opcodes", () => {
-    const { wat } = compile("fn test(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }");
-    assert(wat.includes("i32.and"));
-    assert(wat.includes("i32.or"));
-    assert(wat.includes("i32.xor"));
+  maybeTest("bitwise and, or, and xor compose", () => {
+    const { wat } = checkedCompile(
+      "export fn run(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }",
+    );
+    assert.equal(runExport(wat, "run", [12, 10]), 14);
   });
 
-  test("<< and >> emit shift opcodes", () => {
-    const { wat } = compile("fn test(a: i32): i32 { return (a << 1) >> 1; }");
-    assert(wat.includes("i32.shl"));
-    assert(wat.includes("i32.shr_s"));
+  maybeTest("left and signed-right shifts compose", () => {
+    const { wat } = checkedCompile("export fn run(a: i32): i32 { return (a << 1) >> 1; }");
+    assert.equal(runExport(wat, "run", [-8]), -8);
   });
 });
 
 describe("Emission: Prefix/Postfix", () => {
-  test("logical not emits i32.eqz", () => {
-    const { wat } = compile("fn test(x: i32): i32 { return !x; }");
-    assert(wat.includes("i32.eqz"));
+  maybeTest("logical not flips integer truthiness", () => {
+    const { wat } = checkedCompile("export fn run(x: i32): i32 { return !x; }");
+    assert.equal(runExport(wat, "run", [0]), 1);
+    assert.equal(runExport(wat, "run", [3]), 0);
   });
 
-  test("prefix minus emits arithmetic negation", () => {
-    const { wat } = compile("fn test(x: i32): i32 { return -x; }");
-    assert(wat.includes("(i32.sub (i32.const 0)"));
+  maybeTest("prefix minus negates integers", () => {
+    const { wat } = checkedCompile("export fn run(x: i32): i32 { return -x; }");
+    assert.equal(runExport(wat, "run", [7]), -7);
   });
 
-  test("prefix minus emits f32.neg for floats", () => {
-    const { wat } = compile("fn test(x: f32): f32 { return -x; }");
-    assert(wat.includes("f32.neg"));
+  maybeTest("prefix minus negates floats", () => {
+    const { wat } = checkedCompile("export fn run(x: f32): f32 { return -x; }");
+    assert.equal(runExport(wat, "run", [2.5]), -2.5);
   });
 
-  test("bitwise not emits xor -1", () => {
-    const { wat } = compile("fn test(x: i32): i32 { return ~x; }");
-    assert(wat.includes("i32.xor"));
-    assert(wat.includes("(i32.const -1)"));
+  maybeTest("bitwise not flips every bit", () => {
+    const { wat } = checkedCompile("export fn run(x: i32): i32 { return ~x; }");
+    assert.equal(runExport(wat, "run", [5]), -6);
   });
 
-  test("postfix increment/decrement emit updates", () => {
-    const { wat } = compile(`
-      fn test(): i32 {
+  maybeTest("postfix increment and decrement update their local", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
         let x: i32 = 3;
         x++;
         x--;
         return x;
       }
     `);
-    assert(wat.includes("local.set $x"));
-    // x++ → (local.set $x (i32.add (local.get $x) (i32.const 1)))
-    assert(wat.includes("(i32.const 1)"));
-    // x-- → (local.set $x (i32.add (local.get $x) (i32.const -1)))
-    assert(wat.includes("(i32.const -1)"));
+    assert.equal(runExport(wat, "run"), 3);
   });
 });
 
 describe("Emission: Cast", () => {
-  test("i32 as f32 emits f32.convert_i32_s", () => {
-    const { wat } = compile("fn test(x: i32): f32 { return x as f32; }");
-    assert(wat.includes("f32.convert_i32_s"));
+  maybeTest("i32 as f32 preserves signed values", () => {
+    const { wat } = checkedCompile("export fn run(x: i32): f32 { return x as f32; }");
+    assert.equal(runExport(wat, "run", [-7]), -7);
   });
 
-  test("f32 as i32 emits i32.trunc_f32_s", () => {
-    const { wat } = compile("fn test(x: f32): i32 { return x as i32; }");
-    assert(wat.includes("i32.trunc_f32_s"));
+  maybeTest("f32 as i32 truncates toward zero", () => {
+    const { wat } = checkedCompile("export fn run(x: f32): i32 { return x as i32; }");
+    assert.equal(runExport(wat, "run", [3.9]), 3);
   });
 
-  test("i32 as u8 emits no conversion opcode (same WASM type)", () => {
-    const { wat } = compile("fn test(n: i32): i32 { return n as u8; }");
-    assert(!wat.includes("convert"));
-    assert(!wat.includes("trunc"));
-    assert(wat.includes("local.get $n"));
+  maybeTest("i32 as u8 truncates to the low byte", () => {
+    const { wat } = checkedCompile("export fn run(n: i32): i32 { return n as u8; }");
+    assert.equal(runExport(wat, "run", [300]), 44);
   });
 
-  test("cast inside binary expression resolves correct type", () => {
-    const { wat } = compile("fn test(x: i32): f32 { return x as f32 + 1.0; }");
-    assert(wat.includes("f32.add"));
-    assert(wat.includes("f32.convert_i32_s"));
+  maybeTest("cast inside a binary expression adopts the float type", () => {
+    const { wat } = checkedCompile("export fn run(x: i32): f32 { return x as f32 + 1.0; }");
+    assert.equal(runExport(wat, "run", [3]), 4);
   });
 });
 
 describe("Emission: 64-bit widths and unsigned ops", () => {
-  test("i64 addition uses i64.add and result i64", () => {
-    const { wat, meta } = compile(`fn add64(a: i64, b: i64): i64 { return a + b; }`);
-    assert(wat.includes("(result i64)"), wat);
-    assert(wat.includes("i64.add"), wat);
+  maybeTest("i64 addition preserves values above the i32 range", () => {
+    const { wat, meta } = checkedCompile(`export fn add64(a: i64, b: i64): i64 { return a + b; }`);
+    assert.equal(runExport(wat, "add64", [4_000_000_000n, 5n]), 4_000_000_005n);
     assert.equal(meta.functions.add64?.signature, "II_I");
   });
 
-  test("u32 division uses unsigned i32.div_u", () => {
-    const { wat } = compile(`fn udiv(a: u32, b: u32): u32 { return a / b; }`);
-    assert(wat.includes("i32.div_u"), wat);
+  maybeTest("u32 division treats the lane as unsigned", () => {
+    const { wat } = checkedCompile(`export fn udiv(a: u32, b: u32): u32 { return a / b; }`);
+    assert.equal(runExport(wat, "udiv", [-1, 2]), 2_147_483_647);
   });
 
-  test("i32 division uses signed i32.div_s", () => {
-    const { wat } = compile(`fn sdiv(a: i32, b: i32): i32 { return a / b; }`);
-    assert(wat.includes("i32.div_s"), wat);
+  maybeTest("i32 division treats the lane as signed", () => {
+    const { wat } = checkedCompile(`export fn sdiv(a: i32, b: i32): i32 { return a / b; }`);
+    assert.equal(runExport(wat, "sdiv", [-9, 2]), -4);
   });
 
-  test("u64 division uses i64.div_u", () => {
-    const { wat } = compile(`fn udiv(a: u64, b: u64): u64 { return a / b; }`);
-    assert(wat.includes("i64.div_u"), wat);
+  maybeTest("u64 division treats the lane as unsigned", () => {
+    const { wat } = checkedCompile(`export fn udiv(a: u64, b: u64): u64 { return a / b; }`);
+    assert.equal(runExport(wat, "udiv", [-1n, 2n]), 9_223_372_036_854_775_807n);
   });
 
-  test("u64 right shift uses i64.shr_u", () => {
-    const { wat } = compile(`fn shr(a: u64, b: u64): u64 { return a >> b; }`);
-    assert(wat.includes("i64.shr_u"), wat);
+  maybeTest("u64 right shift fills with zeros", () => {
+    const { wat } = checkedCompile(`export fn shr(a: u64, b: u64): u64 { return a >> b; }`);
+    assert.equal(runExport(wat, "shr", [-1n, 1n]), 9_223_372_036_854_775_807n);
   });
 
-  test("i64 right shift uses i64.shr_s", () => {
-    const { wat } = compile(`fn shr(a: i64, b: i64): i64 { return a >> b; }`);
-    assert(wat.includes("i64.shr_s"), wat);
+  maybeTest("i64 right shift preserves the sign", () => {
+    const { wat } = checkedCompile(`export fn shr(a: i64, b: i64): i64 { return a >> b; }`);
+    assert.equal(runExport(wat, "shr", [-8n, 1n]), -4n);
   });
 
-  test("f64 remainder lowers via f64.trunc / div / mul / sub", () => {
-    const { wat } = compile(`fn rem(a: f64, b: f64): f64 { return a % b; }`);
-    assert(wat.includes("f64.trunc"), wat);
-    assert(wat.includes("f64.div"), wat);
-    assert(wat.includes("f64.mul"), wat);
-    assert(wat.includes("f64.sub"), wat);
+  maybeTest("f64 remainder follows truncated division", () => {
+    const { wat } = checkedCompile(`export fn rem(a: f64, b: f64): f64 { return a % b; }`);
+    assert.equal(runExport(wat, "rem", [-7.5, 2]), -1.5);
   });
 
-  test("struct member typed i64 loads with i64.load", () => {
-    const { wat } = compile(`
+  maybeTest("struct members preserve i64 values", () => {
+    const { wat } = checkedCompile(`
       struct S { x: i32, y: i64, }
-      fn loady(): i64 {
+      export fn loady(): i64 {
         let s: S = { x = 1, y = 2 as i64, };
         return s.y;
       }
     `);
-    assert(wat.includes("i64.load"), wat);
+    assert.equal(runExport(wat, "loady"), 2n);
   });
+});
 
+describe("legacy emitter unit (dies with T38)", () => {
   test("resolved import with I_I emits i64 param and result in type", () => {
     const p = new Parser(`
       import callee from "m"
@@ -546,47 +595,32 @@ describe("Emission: 64-bit widths and unsigned ops", () => {
 });
 
 describe("Emission: Postfix Statement", () => {
-  test("idx++ as statement emits plain local.set, not block-with-result", () => {
-    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; idx++; return idx; }");
-    assert(wat.includes("(local.set $idx"), "Must mutate idx");
-    assert(
-      !wat.includes("(block (result i32)"),
-      "Statement-level postfix must not emit (block (result i32)) — that leaves a value on the stack",
-    );
+  maybeTest("idx++ as a statement increments the local", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { let idx: i32 = 0; idx++; return idx; }");
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("idx-- as statement emits plain local.set, not block-with-result", () => {
-    const { wat } = compile("fn test(): i32 { let idx: i32 = 5; idx--; return idx; }");
-    assert(wat.includes("(local.set $idx"), "Must mutate idx");
-    assert(
-      !wat.includes("(block (result i32)"),
-      "Statement-level postfix must not emit (block (result i32))",
-    );
+  maybeTest("idx-- as a statement decrements the local", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { let idx: i32 = 5; idx--; return idx; }");
+    assert.equal(runExport(wat, "run"), 4);
   });
 
-  test("idx++ as statement increments by 1 in emitted WAT", () => {
-    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; idx++; return idx; }");
-    // Must emit: (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
-    assert(wat.includes("(i32.add (local.get $idx) (i32.const 1))"), "Must increment by 1");
-  });
-
-  test("idx-- as statement decrements by 1 in emitted WAT", () => {
-    const { wat } = compile("fn test(): i32 { let idx: i32 = 5; idx--; return idx; }");
-    // Must emit: (local.set $idx (i32.add (local.get $idx) (i32.const -1)))
-    assert(wat.includes("(i32.add (local.get $idx) (i32.const -1))"), "Must decrement by 1");
-  });
-
-  test("postfix as rvalue still emits block-with-result", () => {
-    // When postfix is used as an expression (not a statement), the old value must be returned
-    const { wat } = compile("fn test(): i32 { let idx: i32 = 0; let x: i32 = idx++; return x; }");
-    assert(wat.includes("(block (result i32)"), "Rvalue postfix must emit block with result");
+  maybeTest("postfix as an rvalue returns the old value and still mutates", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let idx: i32 = 3;
+        let old: i32 = idx++;
+        return old * 10 + idx;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 34);
   });
 });
 
 describe("Emission: Compound Assignments", () => {
-  test("compound assigns are desugared through binary ops", () => {
-    const { wat } = compile(`
-      fn test(): i32 {
+  maybeTest("compound assignments preserve every operator's behavior", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
         let x: i32 = 10;
         x += 2;
         x -= 1;
@@ -601,16 +635,7 @@ describe("Emission: Compound Assignments", () => {
         return x;
       }
     `);
-    assert(wat.includes("i32.add"));
-    assert(wat.includes("i32.sub"));
-    assert(wat.includes("i32.mul"));
-    assert(wat.includes("i32.div_s"));
-    assert(wat.includes("i32.rem_s"));
-    assert(wat.includes("i32.or"));
-    assert(wat.includes("i32.and"));
-    assert(wat.includes("i32.xor"));
-    assert(wat.includes("i32.shl"));
-    assert(wat.includes("i32.shr_s"));
+    assert.equal(runExport(wat, "run"), 8);
   });
 });
 
@@ -702,38 +727,39 @@ describe("Emission: Index Access", () => {
 });
 
 describe("Emission: Literals", () => {
-  test("integer literal emits i32.const", () => {
-    const { wat } = compile("fn test(): i32 { return 42; }");
-    assert(wat.includes("(i32.const 42)"));
+  maybeTest("integer literals return their exact value", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { return 42; }");
+    assert.equal(runExport(wat, "run"), 42);
   });
 
-  test("negative integer literals fold to a constant", () => {
-    const { wat } = compile("fn test(): i32 { return -5; }");
-    assert(wat.includes("(i32.const -5)"), wat);
-    assert(!wat.includes("i32.sub (i32.const 0)"), wat);
+  maybeTest("negative integer literals retain their sign", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { return -5; }");
+    assert.equal(runExport(wat, "run"), -5);
   });
 
-  test("folded negative zero retains its sign", () => {
-    const { wat } = compile("fn test(): f32 { return -0.0; }");
-    assert(wat.includes("(f32.const -0)"), wat);
+  maybeTest("folded negative zero retains its IEEE-754 sign", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { return -0.0; }");
+    assert(Object.is(runExport(wat, "run"), -0));
   });
 
-  test("float literal emits f32.const", () => {
-    const { wat } = compile("fn test(): f32 { return 3.14; }");
-    assert(wat.includes("(f32.const 3.14)"));
+  maybeTest("float literals return their f32 value", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { return 3.14; }");
+    assert(Math.abs((runExport(wat, "run") as number) - 3.14) < 0.000_001);
   });
 
-  test("boolean literals emit i32 consts", () => {
-    const { wat } = compile("fn t1(): i32 { return true; } fn t2(): i32 { return false; }");
-    assert(wat.includes("(i32.const 1)"));
-    assert(wat.includes("(i32.const 0)"));
+  maybeTest("boolean literals return canonical truth values", () => {
+    const { wat } = checkedCompile(
+      "export fn yes(): i32 { return true; } export fn no(): i32 { return false; }",
+    );
+    assert.equal(runExport(wat, "yes"), 1);
+    assert.equal(runExport(wat, "no"), 0);
   });
 
-  test("string literal in let emits pointer constant and data segment", () => {
-    const { wat } = compile('fn test(): i32 { let s: string = "hello"; return 0; }');
-    assert(wat.includes("(local $s i32)"), `Missing local string slot:\n${wat}`);
-    assert(wat.includes("(local.set $s (i32.const"), `Missing pointer constant emit:\n${wat}`);
-    assert(wat.includes("(data (offset (i32.const"), `Missing data segment emit:\n${wat}`);
+  maybeTest("string literals materialize their payload and metadata", () => {
+    const { wat } = checkedCompile(
+      'export fn run(): i32 { let s: string = "hello"; return s.len; }',
+    );
+    assert.equal(runExport(wat, "run"), 5);
   });
 
   test("string payload data has no trailing allocation padding", () => {
@@ -817,9 +843,9 @@ describe("Module Metadata", () => {
 });
 
 describe("Emission: else if", () => {
-  test("else if chain emits nested if/else WAT", () => {
-    const { wat } = compile(`
-      fn grade(score: i32): i32 {
+  maybeTest("else-if chain selects every branch", () => {
+    const { wat } = checkedCompile(`
+      export fn grade(score: i32): i32 {
         if (score >= 90) {
           return 5;
         } else if (score >= 75) {
@@ -829,17 +855,14 @@ describe("Emission: else if", () => {
         }
       }
     `);
-    assert(wat.includes("(if"));
-    assert(wat.includes("(else"));
-    // two separate return values prove both branches compiled
-    assert(wat.includes("(i32.const 5)"));
-    assert(wat.includes("(i32.const 4)"));
-    assert(wat.includes("(i32.const 3)"));
+    assert.equal(runExport(wat, "grade", [95]), 5);
+    assert.equal(runExport(wat, "grade", [80]), 4);
+    assert.equal(runExport(wat, "grade", [50]), 3);
   });
 
-  test("three-level else if chain compiles", () => {
-    const { wat } = compile(`
-      fn classify(n: i32): i32 {
+  maybeTest("three-level else-if chain selects every branch", () => {
+    const { wat } = checkedCompile(`
+      export fn classify(n: i32): i32 {
         if (n == 0) {
           return 10;
         } else if (n == 1) {
@@ -851,51 +874,55 @@ describe("Emission: else if", () => {
         }
       }
     `);
-    assert(wat.includes("(i32.const 10)"));
-    assert(wat.includes("(i32.const 20)"));
-    assert(wat.includes("(i32.const 30)"));
-    assert(wat.includes("(i32.const 40)"));
+    assert.equal(runExport(wat, "classify", [0]), 10);
+    assert.equal(runExport(wat, "classify", [1]), 20);
+    assert.equal(runExport(wat, "classify", [2]), 30);
+    assert.equal(runExport(wat, "classify", [3]), 40);
   });
 });
 
 describe("Emission: continue", () => {
-  test("continue in for loop emits br to loop label", () => {
-    const { wat } = compile(`
-      fn test(): void {
+  maybeTest("continue in a for loop still runs the update", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let touched: i32 = 0;
         for (let i: i32 = 0; i < 10; i = i + 1) {
           continue;
+          touched++;
         }
+        return touched;
       }
     `);
-    assert(wat.includes("(loop"));
-    assert(wat.includes("(br $loop_"));
+    assert.equal(runExport(wat, "run"), 0);
   });
 
-  test("continue in while loop emits br to loop label", () => {
-    const { wat } = compile(`
-      fn test(): void {
+  maybeTest("continue in a while loop rechecks the condition", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
         let i: i32 = 0;
         while (i < 5) {
           i = i + 1;
           continue;
         }
+        return i;
       }
     `);
-    assert(wat.includes("(loop"));
-    assert(wat.includes("(br $loop_"));
+    assert.equal(runExport(wat, "run"), 5);
   });
 });
 
 describe("Emission: const", () => {
-  test("const global emits without mut", () => {
-    const { wat } = compile(`const MAX: i32 = 100;`);
-    assert(wat.includes("(global $MAX i32 (i32.const 100))"));
-    assert(!wat.includes("(global $MAX (mut i32)"));
+  maybeTest("const globals retain their initialized value", () => {
+    const { wat } = checkedCompile(`const MAX: i32 = 100; export fn run(): i32 { return MAX; }`);
+    assert.equal(runExport(wat, "run"), 100);
   });
 
-  test("let global still emits with mut", () => {
-    const { wat } = compile(`let x: i32 = 0;`);
-    assert(wat.includes("(global $x (mut i32) (i32.const 0))"));
+  maybeTest("let globals remain mutable", () => {
+    const { wat } = checkedCompile(`
+      let x: i32 = 0;
+      export fn run(): i32 { x++; x++; return x; }
+    `);
+    assert.equal(runExport(wat, "run"), 2);
   });
 });
 
@@ -935,34 +962,35 @@ describe("Emission: array literal defense", () => {
 });
 
 describe("Emission: switch", () => {
-  test("switch emits br_if dispatch with each case body", () => {
-    const { wat } = compile(`
-      fn classify(x: i32): i32 {
+  maybeTest("switch dispatches to each case and the default", () => {
+    const { wat } = checkedCompile(`
+      export fn classify(x: i32): i32 {
         switch (x) {
           case 0: { return 10; }
           case 1: { return 20; }
           default: { return 99; }
         }
+        return -1;
       }
     `);
-    assert.match(wat, /\(br_if \$switch_case_\d+ \(i32\.eq[^)]*\) \(i32\.const 0\)\)\)/);
-    assert.match(wat, /\(br_if \$switch_case_\d+ \(i32\.eq[^)]*\) \(i32\.const 1\)\)\)/);
-    assert(wat.includes("(i32.const 10)"));
-    assert(wat.includes("(i32.const 20)"));
-    assert(wat.includes("(i32.const 99)"));
+    assert.equal(runExport(wat, "classify", [0]), 10);
+    assert.equal(runExport(wat, "classify", [1]), 20);
+    assert.equal(runExport(wat, "classify", [9]), 99);
   });
 
-  test("switch without default still emits the dispatch chain", () => {
-    const { wat } = compile(`
-      fn test(x: i32): void {
+  maybeTest("switch without a default continues after unmatched input", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 {
         switch (x) {
-          case 0: { return; }
-          case 1: { return; }
+          case 0: { return 10; }
+          case 1: { return 20; }
         }
+        return 99;
       }
     `);
-    assert.match(wat, /\(br_if \$switch_case/);
-    assert.match(wat, /\(br \$switch_default/);
+    assert.equal(runExport(wat, "run", [0]), 10);
+    assert.equal(runExport(wat, "run", [1]), 20);
+    assert.equal(runExport(wat, "run", [9]), 99);
   });
 });
 
@@ -1164,16 +1192,14 @@ describe("Compiler: stdlib source resolution", () => {
 });
 
 describe("Emission: Type inference", () => {
-  test("inferred i32 local emits correct local declaration and set", () => {
-    const { wat } = compile("fn f(): void { let x = 5; }");
-    assert(wat.includes("(local $x i32)"), `Missing (local $x i32) in:\n${wat}`);
-    assert(wat.includes("(local.set $x (i32.const 5))"), `Missing local.set in:\n${wat}`);
+  maybeTest("inferred i32 locals preserve their value", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { let x = 5; return x; }");
+    assert.equal(runExport(wat, "run"), 5);
   });
 
-  test("inferred f32 local emits correct local declaration and set", () => {
-    const { wat } = compile("fn f(): void { let y = 3.14; }");
-    assert(wat.includes("(local $y f32)"), `Missing (local $y f32) in:\n${wat}`);
-    assert(wat.includes("(local.set $y (f32.const 3.14))"), `Missing local.set in:\n${wat}`);
+  maybeTest("inferred f32 locals preserve their value", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { let y = 3.14; return y; }");
+    assert(Math.abs((runExport(wat, "run") as number) - 3.14) < 0.000_001);
   });
 });
 
@@ -1225,299 +1251,363 @@ describe("Emission: Struct methods", () => {
 // ─── Control flow ───────────────────────────────────────────────
 
 describe("Emission: For init", () => {
-  test("for loop with non-zero init emits local.set before the loop block", () => {
-    // init is never emitted by emitForStatement - WASM locals default to 0
-    const { wat } = compile("fn f(): void { for (let i: i32 = 5; i < 10; i = i + 1) { } }");
-    const setIdx = wat.indexOf("(local.set $i (i32.const 5))");
-    const blockIdx = wat.indexOf("(block $break_");
-    assert(setIdx !== -1, `Missing (local.set $i (i32.const 5)) in:\n${wat}`);
-    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  maybeTest("for loop starts from a non-zero initializer", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let sum: i32 = 0;
+        for (let i: i32 = 5; i < 10; i = i + 1) { sum += i; }
+        return sum;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 35);
   });
 
-  test("for loop with negative init emits local.set before the loop block", () => {
-    // same bug - negative non-zero init silently becomes 0
-    const { wat } = compile("fn f(): void { for (let i: i32 = -3; i < 7; i = i + 1) { } }");
-    const setIdx = wat.indexOf("(local.set $i");
-    const blockIdx = wat.indexOf("(block $break_");
-    assert(setIdx !== -1, `Missing (local.set $i) for negative init in:\n${wat}`);
-    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  maybeTest("for loop starts from a negative initializer", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let sum: i32 = 0;
+        for (let i: i32 = -3; i < 2; i = i + 1) { sum += i; }
+        return sum;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), -5);
   });
 
-  test("for loop with zero init still emits local.set before the loop block", () => {
-    // zero init "works by accident" today but should be explicit
-    const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 3; i = i + 1) { } }");
-    const blockIdx = wat.indexOf("(block $break_");
-    assert(blockIdx !== -1, `Missing (block $break_) in:\n${wat}`);
-    // After fix, local.set $i (i32.const 0) should appear before (block
-    const setIdx = wat.indexOf("(local.set $i");
-    assert(setIdx !== -1, `Missing (local.set $i) in:\n${wat}`);
-    assert(setIdx < blockIdx, `Init local.set must appear before (block $break_) in:\n${wat}`);
+  maybeTest("for loop starts from a zero initializer", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let sum: i32 = 0;
+        for (let i: i32 = 0; i < 3; i = i + 1) { sum += i; }
+        return sum;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
   });
 });
 
 describe("Emission: If result type", () => {
-  test("if/else both returning f32 emits (result f32) not (result i32)", () => {
-    // result type is hardcoded to i32 in if.ts
-    const { wat } = compile(
-      `fn f(x: i32): f32 { if (x > 0) { return 1.0; } else { return 2.0; } }`,
-    );
-    assert(
-      !wat.includes("(result i32)"),
-      `Should not emit (result i32) for f32-returning branches:\n${wat}`,
-    );
+  maybeTest("f32-returning branches bypass code after the if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(x: i32): f32 {
+        if (x > 0) { return 1.0; } else { return 2.0; }
+        after = 99;
+        return 0.0;
+      }
+      export fn run(x: i32): f32 { return choose(x) + (after as f32); }
+    `);
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), 2);
   });
 
-  test("nested if returns that are all f32 still emit outer (result f32)", () => {
-    const { wat } = compile(`
-      fn f(x: i32): f32 {
+  maybeTest("nested f32-returning branches bypass code after the outer if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(x: i32): f32 {
         if (x > 0) {
           if (x > 1) { return 1.0; } else { return 2.0; }
         } else {
           return 3.0;
         }
+        after = 99;
+        return 0.0;
       }
+      export fn run(x: i32): f32 { return choose(x) + (after as f32); }
     `);
-    assert(wat.includes("(if (result f32)"), `Expected outer if (result f32) in:\n${wat}`);
-    assert(!wat.includes("(if (result i32)"), `Outer if must not be i32 in:\n${wat}`);
+    assert.equal(runExport(wat, "run", [2]), 1);
+    assert.equal(runExport(wat, "run", [1]), 2);
+    assert.equal(runExport(wat, "run", [0]), 3);
   });
 
-  test("if with only void returns does not emit a synthetic result type", () => {
-    const { wat } = compile(`
-      fn f(x: i32): void {
-        if (x > 0) { return; } else { return; }
+  maybeTest("void-returning branches bypass code after the if", () => {
+    const { wat } = checkedCompile(`
+      let reached: i32 = 0;
+      fn choose(x: i32): void {
+        if (x > 0) { reached = 1; return; } else { reached = 2; return; }
+        reached = 99;
       }
+      export fn run(x: i32): i32 { choose(x); return reached; }
     `);
-    assert(
-      !wat.includes("(if (result i32)"),
-      `Void-returning if should not emit (result i32):\n${wat}`,
-    );
-    assert(
-      !wat.includes("(if (result f32)"),
-      `Void-returning if should not emit (result f32):\n${wat}`,
-    );
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), 2);
   });
 
-  test("if/else both returning i32 emits (result i32)", () => {
-    // i32 case should still work correctly
-    const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }`);
-    assert(
-      wat.includes("(result i32)"),
-      `Expected (result i32) for i32-returning branches:\n${wat}`,
-    );
+  maybeTest("i32-returning branches bypass code after the if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(x: i32): i32 {
+        if (x > 0) { return 1; } else { return 2; }
+        after = 99;
+        return 0;
+      }
+      export fn run(x: i32): i32 { return choose(x) + after; }
+    `);
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), 2);
   });
 });
 
 describe("Emission: Loop conditions", () => {
-  test("if with void function as condition throws MapleError", () => {
-    assert.throws(
-      () => compile(`fn noop(): void {} fn f(): void { if (noop()) { return; } }`),
-      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+  test("checker rejects a void function as an if condition", () => {
+    assert(
+      checkerMessages(`fn noop(): void {} fn f(): void { if (noop()) { return; } }`).some(
+        (message) => message.includes("void call used as a value"),
+      ),
     );
   });
 
-  test("if with f32 condition emits f32.ne (normalized to i32)", () => {
-    const { wat } = compile(`fn f(): void { let x: f32 = 1.0; if (x) { return; } }`);
-    assert(wat.includes("f32.ne"), `Expected f32.ne for if condition in:\n${wat}`);
+  maybeTest("an f32 if condition uses numeric truthiness", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: f32): i32 { if (x) { return 1; } return 0; }
+    `);
+    assert.equal(runExport(wat, "run", [1.5]), 1);
+    assert.equal(runExport(wat, "run", [0]), 0);
   });
 
-  test("if with i32 condition emits i32.ne (normalized to i32)", () => {
-    const { wat } = compile(`fn f(): void { let x: i32 = 1; if (x) { return; } }`);
-    assert(wat.includes("i32.ne"), `Expected i32.ne for if condition in:\n${wat}`);
+  maybeTest("an i32 if condition uses numeric truthiness", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 { if (x) { return 1; } return 0; }
+    `);
+    assert.equal(runExport(wat, "run", [-3]), 1);
+    assert.equal(runExport(wat, "run", [0]), 0);
   });
 
-  test("for loop with void function as condition throws MapleError", () => {
-    assert.throws(
-      () =>
-        compile(`fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`),
-      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+  test("checker rejects a void function as a for condition", () => {
+    assert(
+      checkerMessages(
+        `fn noop(): void {} fn f(): void { for (let i: i32 = 0; noop(); i = i + 1) { } }`,
+      ).some((message) => message.includes("void call used as a value")),
     );
   });
 
-  test("while loop with void function as condition throws MapleError", () => {
-    assert.throws(
-      () => compile(`fn noop(): void {} fn f(): void { while (noop()) { } }`),
-      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+  test("checker rejects a void function as a while condition", () => {
+    assert(
+      checkerMessages(`fn noop(): void {} fn f(): void { while (noop()) { } }`).some((message) =>
+        message.includes("void call used as a value"),
+      ),
     );
   });
 
-  test("for loop with f32 condition emits f32.ne (explicit branch, not fallthrough)", () => {
-    // f32 conditions should work correctly via the explicit f32.ne branch
-    const { wat } = compile(
-      `fn f(): void { let x: f32 = 1.0; for (let i: i32 = 0; x; i = i + 1) { } }`,
-    );
-    assert(wat.includes("f32.ne"), `Expected f32.ne for f32 condition in:\n${wat}`);
+  maybeTest("an f32 for condition is rechecked", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let x: f32 = 1.0;
+        let count: i32 = 0;
+        for (let i: i32 = 0; x; i = i + 1) { count++; x = 0.0; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("while loop with bool condition passes through directly without ne wrapper", () => {
-    // bool conditions should not be wrapped in i32.ne
-    const { wat } = compile(`fn f(): void { let b: bool = true; while (b) { break; } }`);
-    assert(wat.includes("(local.get $b)"), `Expected direct bool condition in:\n${wat}`);
+  maybeTest("a bool while condition is rechecked", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let active: bool = true;
+        let count: i32 = 0;
+        while (active) { count++; active = false; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("while loop with i32 condition wraps in i32.ne", () => {
-    // i32 conditions should use i32.ne ... 0
-    const { wat } = compile(`fn f(): void { let i: i32 = 0; while (i) { break; } }`);
-    assert(wat.includes("i32.ne"), `Expected i32.ne for i32 condition in:\n${wat}`);
+  maybeTest("an i32 while condition is rechecked", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let i: i32 = 3;
+        let count: i32 = 0;
+        while (i) { count++; i--; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
   });
 });
 
 describe("Emission: Break/Continue outside loop", () => {
-  test("break outside any loop or switch throws error", () => {
-    // currently emits (br undefined) without error
-    assert.throws(
-      () => compile("fn f(): void { break; }"),
-      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+  test("checker rejects break outside any loop or switch", () => {
+    assert(
+      checkerMessages("fn f(): void { break; }").some((message) =>
+        message.includes("break statement must be inside a loop or switch"),
+      ),
     );
   });
 
-  test("continue outside any loop throws error", () => {
-    // currently emits (br undefined) without error
-    assert.throws(
-      () => compile("fn f(): void { continue; }"),
-      (e: unknown) => e instanceof MapleError || (e instanceof Error && e.message.length > 0),
+  test("checker rejects continue outside any loop", () => {
+    assert(
+      checkerMessages("fn f(): void { continue; }").some((message) =>
+        message.includes("continue statement must be inside a loop"),
+      ),
     );
   });
 
-  test("break in for loop emits valid br instruction", () => {
-    // break in a loop must still work
-    const { wat } = compile("fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { break; } }");
-    assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
+  maybeTest("break exits a for loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
+        for (let i: i32 = 0; i < 5; i = i + 1) { count++; break; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("continue in for loop emits valid br instruction to loop label", () => {
-    // continue in a loop must still work
-    const { wat } = compile(
-      "fn f(): void { for (let i: i32 = 0; i < 5; i = i + 1) { continue; } }",
-    );
-    assert(wat.includes("(br $loop_"), `Expected (br $loop_...) in:\n${wat}`);
+  maybeTest("continue in a for loop still performs the update", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
+        for (let i: i32 = 0; i < 5; i = i + 1) { continue; count++; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 0);
   });
 
-  test("break in while loop emits valid br instruction", () => {
-    const { wat } = compile("fn f(): void { while (1) { break; } }");
-    assert(wat.includes("(br $break_"), `Expected (br $break_...) in:\n${wat}`);
+  maybeTest("break exits a while loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
+        while (1) { count++; break; }
+        return count;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("continue in while loop emits valid br instruction", () => {
-    const { wat } = compile(
-      "fn f(): void { let i: i32 = 0; while (i < 5) { i = i + 1; continue; } }",
-    );
-    assert(wat.includes("(br $loop_"), `Expected (br $loop_...) in:\n${wat}`);
+  maybeTest("continue in a while loop rechecks the condition", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let i: i32 = 0;
+        while (i < 5) { i = i + 1; continue; }
+        return i;
+      }
+    `);
+    assert.equal(runExport(wat, "run"), 5);
   });
 });
 
 describe("Emission: Switch break", () => {
-  test("break in standalone switch does not emit (br undefined)", () => {
-    // switch does not push a break label, so (br undefined) is emitted
-    const { wat } = compile(`
-      fn f(x: i32): void {
+  maybeTest("break exits a standalone switch", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 {
+        let result: i32 = 0;
         switch (x) {
-          case 0: { break; }
-          default: { break; }
+          case 0: { result = 10; break; }
+          default: { result = 20; break; }
         }
+        return result + 1;
       }
     `);
-    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
+    assert.equal(runExport(wat, "run", [0]), 11);
+    assert.equal(runExport(wat, "run", [1]), 21);
   });
 
-  test("break inside switch inside for loop targets the switch exit, not the for loop", () => {
-    // break currently targets the for loop's break label (wrong)
-    const { wat } = compile(`
-      fn f(x: i32): void {
-        for (let i: i32 = 0; i < 5; i = i + 1) {
+  maybeTest("break inside a switch does not exit its enclosing for loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 {
+        let count: i32 = 0;
+        for (let i: i32 = 0; i < 3; i = i + 1) {
           switch (x) {
             case 0: { break; }
             default: { break; }
           }
+          count++;
         }
+        return count;
       }
     `);
-    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
-    // The switch should have its own labeled block
-    assert(wat.includes("$switch_"), `Expected switch-specific labels in:\n${wat}`);
+    assert.equal(runExport(wat, "run", [0]), 3);
+    assert.equal(runExport(wat, "run", [1]), 3);
   });
 
-  test("continue inside switch inside for loop targets the for loop", () => {
-    // continue in switch should target enclosing loop
-    const { wat } = compile(`
-      fn f(x: i32): void {
+  maybeTest("continue inside a switch targets its enclosing for loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
         for (let i: i32 = 0; i < 5; i = i + 1) {
-          switch (x) {
-            case 0: { continue; }
+          switch (i) {
+            case 2: { continue; }
             default: { break; }
           }
+          count++;
         }
+        return count;
       }
     `);
-    assert(wat.includes("$loop_"), `Expected loop label for continue:\n${wat}`);
-    assert(!wat.includes("(br undefined)"), `WAT must not contain (br undefined):\n${wat}`);
+    assert.equal(runExport(wat, "run"), 4);
   });
 
-  test("switch case body has implicit exit after case body", () => {
-    // existing Go-style no-fall-through behavior must not regress
-    const { wat } = compile(`
-      fn f(x: i32): i32 {
+  maybeTest("switch cases do not fall through", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 {
+        let result: i32 = 0;
         switch (x) {
-          case 0: { return 10; }
-          default: { return 99; }
+          case 0: { result = 10; }
+          case 1: { result = 20; }
+          default: { result = 99; }
         }
+        return result;
       }
     `);
-    // Each case body is followed by `(br $switch_break_*)` so cases don't
-    // fall through to one another.
-    assert.match(wat, /\(br \$break_\d+\)/);
+    assert.equal(runExport(wat, "run", [0]), 10);
+    assert.equal(runExport(wat, "run", [1]), 20);
+    assert.equal(runExport(wat, "run", [2]), 99);
   });
 });
 
 describe("Emission: Nested constructs", () => {
-  test("nested for loops - break in inner loop targets inner loop's break label", () => {
-    // nested loops should each have independent break/loop labels
-    const { wat } = compile(`
-      fn f(): void {
+  maybeTest("break in an inner for loop leaves the outer loop running", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
         for (let i: i32 = 0; i < 3; i = i + 1) {
           for (let j: i32 = 0; j < 3; j = j + 1) {
+            count++;
             break;
           }
         }
+        return count;
       }
     `);
-    assert(!wat.includes("(br undefined)"), `No (br undefined) in nested loops:\n${wat}`);
-    // There should be two distinct break labels
-    const breakMatches = wat.match(/\$break_\d+/g) ?? [];
-    const uniqueBreaks = new Set(breakMatches);
-    assert(uniqueBreaks.size >= 2, `Expected at least 2 distinct break labels in:\n${wat}`);
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("if inside for loop with break targets the for loop", () => {
-    const { wat } = compile(`
-      fn f(): void {
+  maybeTest("break inside an if exits the enclosing for loop", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 {
+        let count: i32 = 0;
         for (let i: i32 = 0; i < 5; i = i + 1) {
+          count++;
           if (i > 2) { break; }
         }
+        return count;
       }
     `);
-    assert(!wat.includes("(br undefined)"), `No (br undefined):\n${wat}`);
-    assert(wat.includes("(br $break_"), `Expected break label:\n${wat}`);
+    assert.equal(runExport(wat, "run"), 4);
   });
 
-  test("return inside for loop inside if emits return correctly", () => {
-    const { wat } = compile(`
-      fn f(x: i32): i32 {
+  maybeTest("return inside a for loop exits its enclosing function", () => {
+    const { wat } = checkedCompile(`
+      export fn run(x: i32): i32 {
         if (x > 0) {
           for (let i: i32 = 0; i < x; i = i + 1) {
-            return i;
+            return i + 10;
           }
         }
         return 0;
       }
     `);
-    assert(wat.includes("(return"), `Expected return instruction in:\n${wat}`);
+    assert.equal(runExport(wat, "run", [3]), 10);
+    assert.equal(runExport(wat, "run", [0]), 0);
   });
 });
 
 describe("Emission: Flow analysis", () => {
-  test("switch without default in if then-branch does not cause spurious (result i32)", () => {
-    const { wat } = compile(`
-      fn f(x: i32, y: i32): i32 {
+  maybeTest("a switch without default can reach code after its if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(x: i32, y: i32): i32 {
         if (x > 0) {
           switch (y) {
             case 0: { return 1; }
@@ -1525,71 +1615,70 @@ describe("Emission: Flow analysis", () => {
         } else {
           return 2;
         }
-        return 3;
+        after = 3;
+        return after;
       }
+      export fn run(x: i32, y: i32): i32 { return choose(x, y); }
     `);
-    const matches = wat.match(/\(result i32\)/g) ?? [];
-    assert.equal(
-      matches.length,
-      1,
-      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
-    );
+    assert.equal(runExport(wat, "run", [1, 0]), 1);
+    assert.equal(runExport(wat, "run", [1, 1]), 3);
+    assert.equal(runExport(wat, "run", [-1, 0]), 2);
   });
 
-  test("for loop in if then-branch does not cause spurious (result i32) on if", () => {
-    // stmtDefinitelyReturns(forStatement) incorrectly returns true,
-    // causing extractNeedsReturn to annotate the if with (result i32)
-    // which makes the (then) block required to produce a value - invalid WAT
-    const { wat } = compile(`
-      fn f(x: i32): i32 {
-        if (x > 0) {
-          for (let i: i32 = 0; i < x; i = i + 1) {
+  maybeTest("a zero-iteration for loop can reach code after its if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(branch: i32, limit: i32): i32 {
+        if (branch > 0) {
+          for (let i: i32 = 0; i < limit; i = i + 1) {
             return 1;
           }
         } else {
           return -1;
         }
-        return 0;
+        after = 4;
+        return after;
       }
+      export fn run(branch: i32, limit: i32): i32 { return choose(branch, limit); }
     `);
-    // Should have exactly 1 (result i32) - from the function signature only
-    const matches = wat.match(/\(result i32\)/g) ?? [];
-    assert.equal(
-      matches.length,
-      1,
-      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
-    );
+    assert.equal(runExport(wat, "run", [1, 2]), 1);
+    assert.equal(runExport(wat, "run", [1, 0]), 4);
+    assert.equal(runExport(wat, "run", [-1, 2]), -1);
   });
 
-  test("while loop in if then-branch does not cause spurious (result i32) on if", () => {
-    // same bug for while loops
-    const { wat } = compile(`
-      fn f(x: i32): i32 {
-        if (x > 0) {
-          while (x > 0) {
+  maybeTest("a zero-iteration while loop can reach code after its if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(branch: i32, limit: i32): i32 {
+        if (branch > 0) {
+          while (limit > 0) {
             return 1;
           }
         } else {
           return -1;
         }
-        return 0;
+        after = 4;
+        return after;
       }
+      export fn run(branch: i32, limit: i32): i32 { return choose(branch, limit); }
     `);
-    const matches = wat.match(/\(result i32\)/g) ?? [];
-    assert.equal(
-      matches.length,
-      1,
-      `Expected exactly 1 (result i32) from fn sig only, got ${matches.length}:\n${wat}`,
-    );
+    assert.equal(runExport(wat, "run", [1, 2]), 1);
+    assert.equal(runExport(wat, "run", [1, 0]), 4);
+    assert.equal(runExport(wat, "run", [-1, 2]), -1);
   });
 
-  test("if/else where both branches have explicit returns emits (result i32)", () => {
-    // genuine both-branches-return case should still get (result i32)
-    const { wat } = compile(`fn f(x: i32): i32 { if (x > 0) { return 1; } else { return -1; } }`);
-    assert(
-      wat.includes("(result i32)"),
-      `Expected (result i32) when both branches return:\n${wat}`,
-    );
+  maybeTest("both returning branches cannot reach code after the if", () => {
+    const { wat } = checkedCompile(`
+      let after: i32 = 0;
+      fn choose(x: i32): i32 {
+        if (x > 0) { return 1; } else { return -1; }
+        after = 99;
+        return 0;
+      }
+      export fn run(x: i32): i32 { return choose(x) + after; }
+    `);
+    assert.equal(runExport(wat, "run", [1]), 1);
+    assert.equal(runExport(wat, "run", [0]), -1);
   });
 });
 
