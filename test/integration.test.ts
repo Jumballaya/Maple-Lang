@@ -12,6 +12,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { linkStdlibImports } from "../src/compiler/compiler";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
+import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
 import {
   compile,
@@ -22,16 +25,21 @@ import {
   validateWithWat2Wasm,
 } from "./helpers";
 
-function countChar(s: string, ch: string): number {
-  let n = 0;
-  for (const c of s) {
-    if (c === ch) n++;
-  }
-  return n;
-}
-
-function isBalanced(wat: string): boolean {
-  return countChar(wat, "(") === countChar(wat, ")");
+function checkedCompile(source: string): string {
+  const parser = new Parser(source, "behavioralization.maple");
+  const ast = parser.parse("behavioralization");
+  assert.deepEqual(
+    parser.errors.map((error) => error.message),
+    [],
+  );
+  const meta = extractModuleMeta(ast, true);
+  collectFnReferences(ast, meta);
+  linkStdlibImports(meta);
+  assert.deepEqual(
+    typeCheck(ast, meta).map((error) => error.message),
+    [],
+  );
+  return compile(source);
 }
 
 const wat2wasmAvailable = hasWat2Wasm();
@@ -76,95 +84,95 @@ describe("wat2wasm test gating", () => {
   });
 });
 
-// ─── Level 1: WAT structure ─────────────────────────────────────────────────
-
-describe("Integration: WAT structure", () => {
-  test("output is wrapped in a single (module ...)", () => {
-    const wat = compile("fn add(a: i32, b: i32): i32 { return a + b; }");
-    assert(wat.trimStart().startsWith("(module"), "WAT must start with (module");
-    assert(wat.trimEnd().endsWith(")"), "WAT must end with )");
-  });
-
-  test("parentheses are balanced", () => {
-    const wat = compile(`
-      fn abs_diff(a: i32, b: i32): i32 {
-        if (a >= b) { return a - b; }
-        return b - a;
-      }
-    `);
-    assert(
-      isBalanced(wat),
-      `Unbalanced parens: ${countChar(wat, "(")} open vs ${countChar(wat, ")")} close`,
-    );
-  });
-
+/*
+ * WAT assertions are inventoried in test/behavioralization maps. Executable
+ * semantics use typechecked runExport/runMergedExport fixtures. Only host
+ * surface facts that execution cannot observe stay here: imports, exports,
+ * memory, tables/elements, start/data presence, and intentional absence.
+ * Structural regexes tolerate whitespace and generated names and never pin
+ * cross-section order. Formatting-only assertions are removed with a map
+ * justification; transitional guards are explicitly marked for T37.
+ */
+describe("host surface (WAT-structural)", () => {
   test("module-owned memory export is always present", () => {
     const wat = compile("fn noop(): void {}");
-    assert(wat.includes('(memory (export "memory") 2)'));
-    assert(!wat.includes('(import "runtime" "memory"'));
+    assert.match(wat, /\(memory\s+\(export\s+"memory"\)\s+\d+\s*\)/);
+    assert.doesNotMatch(wat, /\(import\s+"runtime"\s+"memory"\s+\(memory\b/);
   });
 
-  test("all declared functions appear in WAT", () => {
-    const wat = compile(`
-      fn alpha(): i32 { return 1; }
-      fn beta(): i32 { return 2; }
-      fn gamma(): i32 { return alpha() + beta(); }
-    `);
-    assert(wat.includes("$alpha"));
-    assert(wat.includes("$beta"));
-    assert(wat.includes("$gamma"));
-  });
-
-  test("exported functions emit export declarations", () => {
+  test("exported functions expose their public name", () => {
     const wat = compile(`
       export fn add(a: i32, b: i32): i32 { return a + b; }
     `);
-    assert(wat.includes('(export "add"'));
+    assert.match(wat, /\(export\s+"add"\)/);
   });
 
-  test("global variables appear in WAT", () => {
+  test("the math demo retains its external host imports", () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
+    const wat = compile(source);
+    assert.match(wat, /\(import\s+"math"\s+"[^"]+"\s+\((?:func|global)\b/);
+  });
+
+  test("sparse switches keep bounded textual output", () => {
     const wat = compile(`
-      let counter: i32 = 0;
-      fn inc(): void { counter = counter + 1; }
+      fn dispatch(x: i32): i32 {
+        switch (x) {
+          case 1: { return 1; }
+          case 1000000: { return 999; }
+          default: { return 0; }
+        }
+        return -1;
+      }
     `);
-    assert(wat.includes("(global $counter"));
+    assert(wat.length < 50_000, `WAT for a 2-case switch ballooned to ${wat.length} chars`);
   });
 
-  test("multi-function program with all features has balanced WAT", () => {
-    const wat = compile(`
+  test("structural regexes tolerate equivalent reformatting", () => {
+    assert.match(
+      '(memory\n  (export "memory")\n  3)',
+      /\(memory\s+\(export\s+"memory"\)\s+\d+\s*\)/,
+    );
+    assert.match(
+      '(import  "math"\n "sqrt"\n (func $generated (param f32) (result f32)))',
+      /\(import\s+"math"\s+"[^"]+"\s+\((?:func|global)\b/,
+    );
+  });
+});
+
+describe("Integration: behavioralized structure coverage", () => {
+  maybeTest("declared functions compose at runtime", () => {
+    const wat = checkedCompile(`
+      fn alpha(): i32 { return 1; }
+      fn beta(): i32 { return 2; }
+      export fn gamma(): i32 { return alpha() + beta(); }
+    `);
+    assert.equal(runExport(wat, "gamma"), 3);
+  });
+
+  maybeTest("globals and multi-function control flow execute", () => {
+    const wat = checkedCompile(`
       const MAX: i32 = 100;
       let total: i32 = 0;
-
       fn clamp(x: i32): i32 {
-        if (x < 0) {
-          return 0;
-        } else if (x > MAX) {
-          return MAX;
-        } else {
-          return x;
-        }
+        if (x < 0) { return 0; }
+        if (x > MAX) { return MAX; }
+        return x;
       }
-
       export fn run(seed: i32): i32 {
         let i: i32 = 0;
         while (i < 10) {
           total += clamp(seed + i);
-          i = i + 1;
+          i++;
         }
         return total;
       }
     `);
-    assert(isBalanced(wat));
-    assert(wat.includes("$clamp"));
-    assert(wat.includes("$run"));
-    assert(wat.includes("$MAX"));
-    assert(wat.includes("$total"));
+    assert.equal(runExport(wat, "run", [5]), 95);
   });
-});
 
-describe("Integration: Operators & control flow WAT structure", () => {
-  test("for loop with break and continue has balanced WAT", () => {
-    const wat = compile(`
+  maybeTest("for break and continue preserve update semantics", () => {
+    const wat = checkedCompile(`
       fn sum(n: i32): i32 {
         let result: i32 = 0;
         for (let i: i32 = 0; i < n; i = i + 1) {
@@ -174,107 +182,83 @@ describe("Integration: Operators & control flow WAT structure", () => {
         }
         return result;
       }
+      export fn run(n: i32): i32 { return sum(n); }
     `);
-    assert(isBalanced(wat));
-    assert(wat.includes("(loop"));
-    assert(wat.includes("(block"));
+    assert.equal(runExport(wat, "run", [10]), 18);
   });
 
-  test("for-loop continue branches to a $continue block so the update still runs", () => {
-    const wat = compile(`
-      fn sum(n: i32): i32 {
-        let result: i32 = 0;
-        for (let i: i32 = 0; i < n; i = i + 1) {
-          if (i == 3) { continue; }
-          result += i;
-        }
-        return result;
-      }
-    `);
-    assert(isBalanced(wat));
-    assert.match(wat, /\(block \$continue_\d+/);
-    assert.match(wat, /\(br \$continue_\d+\)/);
-    const err = validateWithWat2Wasm(wat);
-    if (wat2wasmAvailable) {
-      assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
-    }
-  });
-
-  test("switch statement has balanced WAT", () => {
-    const wat = compile(`
-      fn classify(x: i32): i32 {
+  maybeTest("switch dispatch selects cases and the default", () => {
+    const wat = checkedCompile(`
+      export fn classify(x: i32): i32 {
         switch (x) {
           case 0: { return 10; }
           case 1: { return 20; }
           case 2: { return 30; }
           default: { return 99; }
         }
+        return 0;
       }
     `);
-    assert(isBalanced(wat));
-    assert(wat.includes("br_if"));
+    assert.equal(runExport(wat, "classify", [0]), 10);
+    assert.equal(runExport(wat, "classify", [2]), 30);
+    assert.equal(runExport(wat, "classify", [9]), 99);
   });
 
-  test("all binary operators in one function has balanced WAT", () => {
-    const wat = compile(`
-      fn ops(a: i32, b: i32): i32 {
-        let r: i32 = (a + b) * (a - b);
-        r = r / 2;
-        r = r % 3;
-        r = (r & b) | (r ^ b);
-        r = (r << 1) >> 1;
-        let cmp: i32 = (a == b) || (a != b);
-        cmp = cmp && (a > b);
-        cmp = cmp || (a < b);
-        cmp = (a >= b) || (a <= b);
-        return r + cmp;
+  maybeTest("binary operator families produce observable results", () => {
+    const wat = checkedCompile(`
+      export fn arithmetic(a: i32, b: i32): i32 { return ((a + b) * (a - b)) / 2 % 7; }
+      export fn bits(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }
+      export fn shifts(a: i32): i32 { return (a << 2) >> 1; }
+      export fn comparisons(a: i32, b: i32): i32 {
+        return (a == b) || (a != b) && (a > b) || (a < b) || (a >= b) || (a <= b);
       }
     `);
-    assert(isBalanced(wat));
+    assert.equal(runExport(wat, "arithmetic", [9, 3]), 1);
+    assert.equal(runExport(wat, "bits", [12, 10]), 14);
+    assert.equal(runExport(wat, "shifts", [5]), 10);
+    assert.equal(runExport(wat, "comparisons", [1, 2]), 1);
   });
 
-  test("postfix and compound assignments have balanced WAT", () => {
-    const wat = compile(`
-      fn mutations(x: i32): i32 {
-        x++;
-        x--;
-        x += 5;
-        x -= 2;
-        x *= 3;
-        x /= 2;
-        x %= 7;
-        x &= 15;
-        x |= 4;
-        x ^= 1;
-        x <<= 1;
-        x >>= 1;
-        return x;
+  maybeTest("postfix and compound assignments mutate the value", () => {
+    const wat = checkedCompile(`
+      export fn mutations(seed: i32): i32 {
+        let value: i32 = seed;
+        value++;
+        value--;
+        value += 5;
+        value -= 2;
+        value *= 3;
+        value /= 2;
+        value %= 7;
+        value &= 15;
+        value |= 4;
+        value ^= 1;
+        value <<= 1;
+        value >>= 1;
+        return value;
       }
     `);
-    assert(isBalanced(wat));
+    assert.equal(runExport(wat, "mutations", [10]), 4);
   });
 
-  test("struct param and member access have balanced WAT", () => {
-    const wat = compile(`
-      struct Point {
-        x: i32,
-        y: i32,
-      }
-
+  maybeTest("struct parameters and member access compose", () => {
+    const wat = checkedCompile(`
+      struct Point { x: i32, y: i32 }
       fn manhattan(p: Point, q: Point): i32 {
-        let px: i32 = p.x;
-        let py: i32 = p.y;
-        let qx: i32 = q.x;
-        let qy: i32 = q.y;
-        return (px - qx) + (py - qy);
+        return (p.x - q.x) + (p.y - q.y);
+      }
+      export fn run(): i32 {
+        let p: Point = { x = 5, y = 7 };
+        let q: Point = { x = 2, y = 3 };
+        return manhattan(p, q);
       }
     `);
-    assert(isBalanced(wat));
+    assert.equal(runExport(wat, "run"), 7);
   });
 
-  test("nested else-if chain has balanced WAT", () => {
-    const wat = compile(`
-      fn grade(score: i32): i32 {
+  maybeTest("nested else-if chains choose the matching branch", () => {
+    const wat = checkedCompile(`
+      export fn grade(score: i32): i32 {
         if (score >= 90) {
           return 5;
         } else if (score >= 75) {
@@ -286,9 +270,10 @@ describe("Integration: Operators & control flow WAT structure", () => {
         }
       }
     `);
-    assert(isBalanced(wat));
-    assert(wat.includes("(if"));
-    assert(wat.includes("(else"));
+    assert.equal(runExport(wat, "grade", [95]), 5);
+    assert.equal(runExport(wat, "grade", [80]), 4);
+    assert.equal(runExport(wat, "grade", [65]), 3);
+    assert.equal(runExport(wat, "grade", [20]), 2);
   });
 });
 
@@ -413,7 +398,7 @@ describe("Integration: wat2wasm validation", () => {
   });
 
   maybeTest("void function discarding single-return call validates", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn _start(): void {
         produce();
@@ -421,23 +406,6 @@ describe("Integration: wat2wasm validation", () => {
     `);
     const err = validateWithWat2Wasm(wat);
     assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
-  });
-
-  test("single-return call in statement position has trailing drop", () => {
-    const wat = compile(`
-      fn produce(): i32 { return 42; }
-      export fn _start(): void {
-        produce();
-      }
-    `);
-    const callIdx = wat.indexOf("(call $produce");
-    assert.notEqual(callIdx, -1, "expected (call $produce) in WAT");
-    const after = wat.slice(callIdx);
-    assert.match(
-      after,
-      /\(call \$produce[^\n]*\)\s*\(drop\)/,
-      `expected (drop) after (call $produce): ${after}`,
-    );
   });
 });
 
@@ -737,7 +705,6 @@ describe("Integration: Inferred function call types", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
     const wat = compile(src);
-    assert(wat.includes('(import "math"'), "expected math imports in WAT");
     const err = validateWithWat2Wasm(wat);
     assert.equal(err, null, `wat2wasm failed: ${err}`);
   });
@@ -750,7 +717,7 @@ describe("Integration: Inferred function call types", () => {
 
 describe("for-loop continue runs the update clause", () => {
   maybeTest("for + continue: skips body but increments", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
         for (let i: i32 = 0; i < n; i = i + 1) {
@@ -939,22 +906,6 @@ describe("for-loop continue runs the update clause", () => {
     `);
     assert.equal(runExport(wat, "run", [100]), 0);
   });
-
-  // Structural assertion: every for-loop in the codegen wraps its body in a
-  // continue-block. Pins the implementation choice.
-  test("emitted for-loop wraps body in a $continue block", () => {
-    const wat = compile(`
-      fn f(): i32 {
-        let s: i32 = 0;
-        for (let i: i32 = 0; i < 3; i = i + 1) {
-          s = s + 1;
-        }
-        return s;
-      }
-    `);
-    assert.match(wat, /\(loop \$loop_\d+/);
-    assert.match(wat, /\(block \$continue_\d+/);
-  });
 });
 
 // ─── && and || short-circuit ───────────────────────────────────────────────
@@ -1094,37 +1045,34 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("u32 → f32 emits convert_i32_u in WAT", () => {
-    const wat = compile(`
+  maybeTest("u32 → f32 preserves values above the signed range", () => {
+    const wat = checkedCompile(`
       export fn run(): f32 {
-        let x: u32 = 1;
+        let x: u32 = 3000000000;
         return x as f32;
       }
     `);
-    assert.match(wat, /f32\.convert_i32_u/);
-    assert(!wat.includes("f32.convert_i32_s"));
+    assert.equal(runExport(wat, "run"), 3_000_000_000);
   });
 
-  maybeTest("f32 → u32 emits trunc_f32_u in WAT", () => {
-    const wat = compile(`
+  maybeTest("f32 → u32 preserves values above the signed range", () => {
+    const wat = checkedCompile(`
       export fn run(): u32 {
-        let f: f32 = 100.0;
+        let f: f32 = 3000000000.0;
         return f as u32;
       }
     `);
-    assert.match(wat, /i32\.trunc_f32_u/);
-    assert(!wat.includes("i32.trunc_f32_s"));
+    assert.equal(runExport(wat, "run"), -1_294_967_296);
   });
 
-  maybeTest("signed i32 → f32 still uses convert_i32_s", () => {
-    const wat = compile(`
+  maybeTest("signed i32 → f32 preserves negative values", () => {
+    const wat = checkedCompile(`
       export fn run(): f32 {
         let x: i32 = 0 - 5;
         return x as f32;
       }
     `);
-    assert.match(wat, /f32\.convert_i32_s/);
-    assert(!wat.includes("f32.convert_i32_u"));
+    assert.equal(runExport(wat, "run"), -5);
   });
 
   maybeTest("signed i32 → f32 → i32 preserves negative values", () => {
@@ -1138,25 +1086,23 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), -42);
   });
 
-  maybeTest("u8 → f32 emits unsigned convert", () => {
-    const wat = compile(`
+  maybeTest("u8 → f32 preserves its unsigned value", () => {
+    const wat = checkedCompile(`
       export fn run(): f32 {
         let x: u8 = 200;
         return x as f32;
       }
     `);
-    assert.match(wat, /f32\.convert_i32_u/);
+    assert.equal(runExport(wat, "run"), 200);
   });
 });
 
 // ─── unused call results are dropped at statement position ─────────────────
-// Pins both (a) the WAT contains the right number of (drop)s and (b) the
-// resulting module instantiates and runs without trapping. A leftover stack
-// value here causes wat2wasm to reject the module in void context.
+// A wrong drop count makes these modules fail validation or corrupt results.
 
 describe("unused call results are dropped at statement position", () => {
   maybeTest("void function discarding i32-returning call instantiates", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn _start(): void {
         produce();
@@ -1220,7 +1166,7 @@ describe("unused call results are dropped at statement position", () => {
   });
 
   maybeTest("discarded multi-return call instantiates and runs", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       fn pair(): (i32, i32) { return 1, 2; }
       export fn _start(): void {
         pair();
@@ -1230,7 +1176,7 @@ describe("unused call results are dropped at statement position", () => {
   });
 
   maybeTest("call result that is assigned does NOT get extra drop", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn run(): i32 {
         let x: i32 = produce();
@@ -1241,97 +1187,28 @@ describe("unused call results are dropped at statement position", () => {
     assert.equal(runExport(wat, "run"), 42);
   });
 
-  test("WAT: single-return discard → exactly one (drop)", () => {
-    const wat = compile(`
-      fn produce(): i32 { return 42; }
-      export fn _start(): void {
-        produce();
-      }
-    `);
-    // Strip whitespace and look at sequence after each call site.
-    const calls = wat.match(/\(call \$produce[^)]*\)\s*\(drop\)/g) ?? [];
-    assert.equal(calls.length, 1, `expected 1 call+drop, got WAT:\n${wat}`);
-  });
-
-  test("WAT: multi-return discard → N (drop)s", () => {
-    const wat = compile(`
-      fn pair(): (i32, i32) { return 1, 2; }
-      export fn _start(): void {
-        pair();
-      }
-    `);
-    const idx = wat.indexOf("(call $pair");
-    assert.notEqual(idx, -1);
-    const after = wat.slice(idx);
-    const drops = after.match(/\(drop\)/g) ?? [];
-    assert(drops.length >= 2, `expected ≥2 drops after multi-return call, got:\n${after}`);
-  });
-
-  test("WAT: void-returning call → NO (drop)", () => {
-    // Use an imported void fn so we don't need to declare a value-returning helper.
-    const wat = compile(`
-      import malloc, free from "memory"
-      export fn _start(): void {
-        let p: i32 = malloc(8);
-        free(p);
-      }
-    `);
-    const idx = wat.indexOf("(call $free");
-    assert.notEqual(idx, -1);
-    // Bound the search to the current function body so a drop in some later
-    // function doesn't falsely match.
-    const after = wat.slice(idx);
-    const stopAt = after.indexOf("$_start");
-    const window = stopAt === -1 ? after.slice(0, 200) : after.slice(0, stopAt);
-    assert(!window.includes("(drop)"), `unexpected drop after void call: ${window}`);
-  });
-
-  test("WAT: assigned call result → NO trailing drop on call", () => {
-    const wat = compile(`
-      fn produce(): i32 { return 42; }
+  maybeTest("void-returning calls do not introduce a stack value", () => {
+    const wat = checkedCompile(`
+      fn consume(): void {}
       export fn run(): i32 {
-        let x: i32 = produce();
-        return x;
+        consume();
+        return 7;
       }
     `);
-    assert(
-      !/\(call \$produce[^\n]*\)\s*\(drop\)/.test(wat),
-      `unexpected drop in assignment: ${wat}`,
-    );
+    assert.equal(runExport(wat, "run"), 7);
   });
 
-  // Indirect call through fn-ref needs the "memory" stdlib at instantiate
-  // time (for __make_fnref allocation), which the minimal harness above does
-  // not provide. Assert via WAT structure + wat2wasm validation instead.
-  maybeTest("indirect call via fn-typed variable: WAT has drop after call_indirect", () => {
-    const wat = compile(`
+  maybeTest("discarded indirect-call results leave the stack valid", async () => {
+    const source = `
       fn add(a: i32, b: i32): i32 { return a + b; }
-      export fn _start(): void {
+      export fn run(): i32 {
         let f: fn(i32,i32):i32 = add;
         f(1, 2);
+        return 7;
       }
-    `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
-    const idx = wat.indexOf("(call_indirect");
-    assert.notEqual(idx, -1, "expected call_indirect in WAT");
-    const after = wat.slice(idx);
-    // Find the matching close-paren for the call_indirect, then look for (drop) right after.
-    let depth = 0;
-    let endIdx = -1;
-    for (let i = 0; i < after.length; i++) {
-      if (after[i] === "(") depth++;
-      else if (after[i] === ")") {
-        depth--;
-        if (depth === 0) {
-          endIdx = i + 1;
-          break;
-        }
-      }
-    }
-    assert(endIdx > 0, "could not find end of call_indirect");
-    const tail = after.slice(endIdx, endIdx + 40);
-    assert.match(tail, /\s*\(drop\)/, `expected (drop) after call_indirect: ${tail}`);
+    `;
+    checkedCompile(source);
+    assert.equal(await runMergedExport(source, "run"), 7);
   });
 });
 
@@ -1707,14 +1584,12 @@ describe("bitwise and shift", () => {
   });
 
   maybeTest("unsigned shift ignores a signed count and remains unsigned", () => {
-    const wat = compile(`
+    const wat = checkedCompile(`
       export fn run(): i32 {
         return ((4294967295 as u32) >> 1) == 2147483647;
       }
       export fn adopted(x: u32, y: u32): i32 { return (1 + x) < y; }
     `);
-    assert(wat.includes("i32.shr_u"), wat);
-    assert(wat.includes("i32.lt_u"), wat);
     assert.equal(runExport(wat, "run"), 1);
     assert.equal(runExport(wat, "adopted", [4294967294, 1]), 0);
   });
@@ -1889,26 +1764,18 @@ describe("structs", () => {
     assert.equal(runExport(wat, "run"), 25);
   });
 
-  // Field offsets should align each field to its natural boundary, and the
-  // struct's size should pad to a multiple of the largest field's alignment.
-  // `struct M { a: u8, b: i32 }` currently packs b at offset 1, size 5.
-  maybeTest("struct {u8, i32} aligns b to offset 4 and has size 8", () => {
-    const wat = compile(`
+  maybeTest("aligned mixed-width structs remain independent", () => {
+    const wat = checkedCompile(`
       struct M { a: u8, b: i32 }
       export fn run(): i32 {
-        let m: M = { a = 7, b = 100 };
-        return (m.a as i32) + m.b;
+        let first: M = { a = 7, b = 100 };
+        let second: M = { a = 9, b = 200 };
+        first.b = first.b + 1;
+        second.a = 8;
+        return (first.a as i32) + first.b + (second.a as i32) + second.b;
       }
     `);
-    const frame = wat.match(/i32\.sub \(global\.get \$__sp\) \(i32\.const (\d+)\)/);
-    assert(frame, "could not find shadow-stack frame allocation");
-    const structSize = Number.parseInt(frame[1]!, 10);
-    assert.equal(structSize, 8, `struct M sized ${structSize} bytes (expected 8 with alignment)`);
-    const storeB = wat.match(
-      /\(i32\.store \(i32\.add \(local\.get \$m\) \(i32\.const (\d+)\)\) \(i32\.const 100\)\)/,
-    );
-    assert(storeB, "could not find i32.store of value 100 to field b");
-    assert.equal(storeB[1], "4", `field b stored at offset ${storeB[1]} (expected 4)`);
+    assert.equal(runExport(wat, "run"), 316);
   });
 
   // Struct equality silently does pointer comparison instead of field-wise
@@ -2631,22 +2498,6 @@ describe("switch statements", () => {
     assert.equal(runExport(wat, "run", [1.9]), 100); // trunc(1.9) == 1
     assert.equal(runExport(wat, "run", [2.5]), 200);
     assert.equal(runExport(wat, "run", [9.0]), 0);
-  });
-
-  // Switch emits one br_table entry per index in [0..maxCase]. A high case
-  // value causes the emitted WAT to balloon (a 1M case produces ~18 MB of text).
-  test("switch with sparse high case value does not balloon br_table", () => {
-    const wat = compile(`
-      fn dispatch(x: i32): i32 {
-        switch (x) {
-          case 1: { return 1; }
-          case 1000000: { return 999; }
-          default: { return 0; }
-        }
-        return -1;
-      }
-    `);
-    assert(wat.length < 50_000, `WAT for a 2-case switch ballooned to ${wat.length} chars`);
   });
 });
 

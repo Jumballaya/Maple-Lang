@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe } from "node:test";
+import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compiler } from "../src/compiler/compiler";
 import { maybeTest, memoryMinimumFromWat } from "./helpers";
@@ -107,6 +107,154 @@ function encodedData(value: string): string {
   return [...Buffer.from(value)].map((byte) => `\\${byte.toString(16).padStart(2, "0")}`).join("");
 }
 
+/*
+ * WAT assertions are inventoried in test/behavioralization maps. Runtime
+ * semantics stay in execution tests; only host-surface and intentionally
+ * unobservable reachability facts survive here. Regexes tolerate whitespace
+ * and generated-name prefixes and never require cross-section ordering.
+ */
+describe("host surface (WAT-structural)", () => {
+  maybeTest("emits a shared diamond dependency exactly once", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        import from_b from "./b.maple"
+        import from_c from "./c.maple"
+        export fn run(): i32 { return from_b() + from_c(); }
+      `,
+      "b.maple": `
+        import base from "./d.maple"
+        export fn from_b(): i32 { return base() + 1; }
+      `,
+      "c.maple": `
+        import base from "./d.maple"
+        export fn from_c(): i32 { return base() + 2; }
+      `,
+      "d.maple": "export fn base(): i32 { return 10; }",
+    });
+
+    assert.equal(wat.match(/\(func\s+\$[^\s()]*\$\$base\b/g)?.length, 1);
+  });
+
+  maybeTest("retains the function-reference table, element, and trampoline", async () => {
+    const { module, wat } = await compileProject({
+      "main.maple": `
+        import add from "./ops.maple"
+        export fn run(): i32 {
+          let op: fn(i32,i32):i32 = add;
+          return op(19, 23);
+        }
+      `,
+      "ops.maple": "export fn add(a: i32, b: i32): i32 { return a + b; }",
+    });
+
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$add\b/);
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$__indirect_add\b/);
+    assert.match(wat, /\(table\s+\$[^\s()]*fn_table\b\s+1\s+1\s+funcref\s*\)/);
+    assert.match(wat, /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add\b\s*\)/);
+    assert(WebAssembly.Module.exports(module).every((entry) => !entry.name.includes("indirect")));
+  });
+
+  maybeTest("filters unreachable user functions and exports", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        import used, unused_export from "./dep.maple"
+        export fn run(): i32 { return used(); }
+      `,
+      "dep.maple": `
+        fn unused_private(): i32 { return 1; }
+        export fn unused_export(): i32 { return 2; }
+        export fn used(): i32 { return 42; }
+      `,
+    });
+
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$used\b/);
+    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$unused_(?:private|export)\b/);
+  });
+
+  maybeTest("does not create a table for unreachable function references", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        fn target(value: i32): i32 { return value + 1; }
+        fn unused(): i32 {
+          let ref: fn(i32):i32 = target;
+          return ref(1);
+        }
+        export fn run(): i32 { return 42; }
+      `,
+    });
+
+    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$(?:target|unused)\b/);
+    assert.doesNotMatch(wat, /\(table\s+\$[^\s()]*fn_table\b/);
+  });
+
+  maybeTest("retains functions reached only from startup", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        fn seed(): i32 { return 42; }
+        let initialized: i32 = seed();
+        export fn run(): i32 { return initialized; }
+      `,
+    });
+
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$seed\b/);
+  });
+
+  maybeTest("filters unused stdlib function chains", async () => {
+    const unused = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        import sqrt from "math"
+        export fn run(): i32 {
+          let block: i32 = malloc(8);
+          return block - block;
+        }
+      `,
+    });
+    const used = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        import sqrt from "math"
+        export fn run(): i32 {
+          let block: i32 = malloc(8);
+          return (sqrt(16.0) as i32) + (block - block);
+        }
+      `,
+    });
+
+    assert.doesNotMatch(unused.wat, /\(func\s+\$[^\s()]*\$\$(?:sqrt|sin)\b/);
+    assert.match(used.wat, /\(func\s+\$[^\s()]*\$\$sqrt\b/);
+    assert.doesNotMatch(used.wat, /\(func\s+\$[^\s()]*\$\$sin\b/);
+  });
+
+  maybeTest("emits deterministic WAT before and after filtering", async () => {
+    const project = {
+      "main.maple": `
+        import used from "./dep.maple"
+        import unused from "./extra.maple"
+        export fn run(): i32 { return used(); }
+      `,
+      "dep.maple": "export fn used(): i32 { return 42; }",
+      "extra.maple": "export fn unused(): i32 { return 0; }",
+    };
+    const first = await compileProject(project);
+    const second = await compileProject(project);
+
+    assert.equal(first.wat, second.wat);
+    assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused\b/);
+  });
+
+  test("structural regexes tolerate equivalent reformatting", () => {
+    assert.match(
+      "(table\n  $generated_fn_table\n  1  1\n  funcref)",
+      /\(table\s+\$[^\s()]*fn_table\b\s+1\s+1\s+funcref\s*\)/,
+    );
+    assert.match(
+      "(elem\n (i32.const 0)\n func\n $prefix$$__indirect_add)",
+      /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add\b\s*\)/,
+    );
+  });
+});
+
 describe("Compiler: merged whole-program emission", () => {
   maybeTest("runs a two-module program as one wasm module", async () => {
     const { instance } = await compileProject({
@@ -121,7 +269,7 @@ describe("Compiler: merged whole-program emission", () => {
   });
 
   maybeTest("emits a diamond dependency once", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import from_b from "./b.maple"
         import from_c from "./c.maple"
@@ -139,7 +287,6 @@ describe("Compiler: merged whole-program emission", () => {
     });
 
     assert.equal(call(instance, "run"), 23);
-    assert.equal(wat.match(/\(func \$d\$\$base\b/g)?.length, 1);
   });
 
   maybeTest("isolates private collisions and identical string literals", async () => {
@@ -211,7 +358,7 @@ describe("Compiler: merged whole-program emission", () => {
   });
 
   maybeTest("exports owned memory and only entry-module API names", async () => {
-    const { instance, module, wat } = await compileProject({
+    const { instance, module } = await compileProject({
       "main.maple": `
         import add from "./math.maple"
         export fn run(): i32 { return add(2, 3); }
@@ -224,7 +371,6 @@ describe("Compiler: merged whole-program emission", () => {
       WebAssembly.Module.exports(module).map((entry) => entry.name),
       ["memory", "run"],
     );
-    assert(!wat.includes('(export "add"'));
   });
 
   maybeTest("preserves an alloc export when function references need malloc", async () => {
@@ -245,7 +391,7 @@ describe("Compiler: merged whole-program emission", () => {
   });
 
   maybeTest("keeps same-named struct equality helpers module-local", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import eq_a from "./a.maple"
         import eq_b from "./b.maple"
@@ -270,12 +416,10 @@ describe("Compiler: merged whole-program emission", () => {
     });
 
     assert.equal(call(instance, "run"), 2);
-    assert(wat.includes("__struct_eq_a$$Node"));
-    assert(wat.includes("__struct_eq_b$$Node"));
   });
 
   maybeTest("takes a function reference from another merged module", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
         export fn run(): i32 {
@@ -287,7 +431,6 @@ describe("Compiler: merged whole-program emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
-    assert.equal(wat.match(/\(table \$__fn_table/g)?.length, 1);
   });
 
   maybeTest("merges malloc and sqrt with module-owned memory", async () => {
@@ -419,20 +562,6 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("emits byte-identical WAT for identical projects", async () => {
-    const project = {
-      "main.maple": `
-        import value from "./value.maple"
-        export fn run(): i32 { return value(); }
-      `,
-      "value.maple": "export fn value(): i32 { return 42; }",
-    };
-    const first = await compileProject(project);
-    const second = await compileProject(project);
-
-    assert.equal(first.wat, second.wat);
-  });
-
   maybeTest("does not require a linker executable on PATH", async () => {
     const wat2wasm = execFileSync("which", ["wat2wasm"], { encoding: "utf8" }).trim();
     const node = execFileSync("which", ["node"], { encoding: "utf8" }).trim();
@@ -451,7 +580,7 @@ describe("Compiler: merged whole-program emission", () => {
 
 describe("Compiler: tree-shaken emission", () => {
   maybeTest("removes unreachable private functions from imported modules", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import used from "./dep.maple"
         export fn run(): i32 { return used(); }
@@ -463,13 +592,10 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
-    assert(wat.includes("(func $dep$$used"));
-    assert(!wat.includes("(func $dep$$unused"));
-    assert(wat.indexOf("(func $dep$$used") < wat.indexOf("(func $main$$run"));
   });
 
   maybeTest("removes unreachable exports from non-entry modules", async () => {
-    const { wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import unused from "./dep.maple"
         export fn run(): i32 { return 1; }
@@ -477,11 +603,11 @@ describe("Compiler: tree-shaken emission", () => {
       "dep.maple": "export fn unused(): i32 { return 2; }",
     });
 
-    assert(!wat.includes("(func $dep$$unused"));
+    assert.equal(call(instance, "run"), 1);
   });
 
   maybeTest("keeps cross-module functions reached only through fn-refs callable", async () => {
-    const { instance, module, wat } = await compileProject({
+    const { instance, module } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
         export fn run(): i32 {
@@ -493,17 +619,13 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
-    assert(wat.includes("(func $ops$$add"));
-    assert(wat.includes("(func $ops$$__indirect_add"));
-    assert(wat.includes("(table $__fn_table 1 1 funcref)"));
-    assert(wat.includes("(elem (i32.const 0) func $ops$$__indirect_add)"));
     assert(
       WebAssembly.Module.exports(module).every((entry) => !entry.name.includes("__indirect_")),
     );
   });
 
   maybeTest("does not slot fn-refs created only by unreachable code", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         fn target(value: i32): i32 { return value + 1; }
         fn unused(): i32 {
@@ -515,13 +637,10 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
-    assert(!wat.includes("(func $main$$target"));
-    assert(!wat.includes("(func $main$$unused"));
-    assert(!wat.includes("(table $__fn_table"));
   });
 
   maybeTest("keeps functions reached only from startup initialization", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         fn seed(): i32 { return 42; }
         let initialized: i32 = seed();
@@ -530,7 +649,6 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
-    assert(wat.includes("(func $main$$seed"));
   });
 
   maybeTest("emits only the used stdlib function chain", async () => {
@@ -556,12 +674,7 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert.equal(call(unused.instance, "run"), 0);
-    assert(!unused.wat.includes("$$sqrt"));
-    assert(!unused.wat.includes("$$sin"));
     assert.equal(call(used.instance, "run"), 4);
-    assert(used.wat.includes("$$sqrt"));
-    assert(!used.wat.includes("$$sin"));
-    assert(Buffer.byteLength(used.wat) > Buffer.byteLength(unused.wat));
   });
 
   maybeTest("shakes dead literal data before laying out the heap", async () => {
@@ -602,24 +715,6 @@ describe("Compiler: tree-shaken emission", () => {
     });
 
     assert(errors.some((error) => error.includes("cannot assign 'f32' to 'i32'")));
-  });
-
-  maybeTest("emits deterministic WAT after filtering", async () => {
-    const project = {
-      "main.maple": `
-        import used from "./dep.maple"
-        import unused from "./extra.maple"
-        export fn run(): i32 { return used(); }
-      `,
-      "dep.maple": "export fn used(): i32 { return 42; }",
-      "extra.maple": "export fn unused(): i32 { return 0; }",
-    };
-
-    const first = await compileProject(project);
-    const second = await compileProject(project);
-
-    assert.equal(first.wat, second.wat);
-    assert(!first.wat.includes("$$unused"));
   });
 });
 
