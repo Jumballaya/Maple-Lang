@@ -88,7 +88,7 @@ export type ModuleDataMeta = {
 
 // Initializer that runs once at startup (guarded by $__globals_inited):
 // "memory" writes a struct-literal field, "global" assigns a non-const global.
-export type DeferredGlobalInit =
+export type DeferredGlobalInitPayload =
   | {
       kind: "memory";
       baseAddr: number;
@@ -107,6 +107,11 @@ export type DeferredGlobalInit =
       name: string;
       args: Array<{ type: "i32"; value: number }>;
     };
+
+export type DeferredGlobalInit = DeferredGlobalInitPayload & {
+  id?: string;
+  owner?: string;
+};
 
 export type FunctionContext = {
   name: string;

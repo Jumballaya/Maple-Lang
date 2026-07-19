@@ -23,12 +23,25 @@ import { alignofType, alignTo } from "../../shared/types";
 import type { ModuleBuilder } from "../ModuleBuilder";
 import type { ModuleEmitter } from "../ModuleEmitter";
 import { baseScalar, sizeofType } from "./emit.types";
-import type { ModuleMeta, StructData } from "./emitter.types";
+import type { DeferredGlobalInitPayload, ModuleMeta, StructData } from "./emitter.types";
 
 type StaticDataBuilder = Pick<
   ModuleBuilder,
   "addBytes" | "dataAlloc" | "deferredGlobalInits" | "getStruct"
 >;
+
+function deferInitializer(
+  builder: StaticDataBuilder,
+  owner: string,
+  initializer: DeferredGlobalInitPayload,
+): void {
+  const ordinal = builder.deferredGlobalInits.filter((entry) => entry.owner === owner).length;
+  builder.deferredGlobalInits.push({
+    ...initializer,
+    id: `${owner}:${ordinal}`,
+    owner,
+  });
+}
 
 const ENCODABLE_STATIC_ARRAY_TYPES = new Set([
   "i8",
@@ -94,7 +107,7 @@ export function extractGlobalData(
         extractArrayLiteral(expr.value, builder, deferArrayElementErrors);
       }
       if (expr.value instanceof StructLiteralExpression && !insideFunction) {
-        extractStructLiteral(expr.value, builder);
+        extractStructLiteral(expr.value, builder, undefined, expr.left.tokenLiteral());
       }
     }
     if (stmt.expression instanceof CallExpression) {
@@ -118,7 +131,7 @@ export function extractGlobalData(
       extractArrayLiteral(stmt.expression, builder, deferArrayElementErrors);
     }
     if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
-      extractStructLiteral(stmt.expression, builder);
+      extractStructLiteral(stmt.expression, builder, undefined, "<anonymous>");
     }
     return;
   }
@@ -130,7 +143,7 @@ export function extractGlobalData(
       extractArrayLiteral(stmt.expression, builder, deferArrayElementErrors);
     }
     if (stmt.expression instanceof StructLiteralExpression && !insideFunction) {
-      extractStructLiteral(stmt.expression, builder);
+      extractStructLiteral(stmt.expression, builder, undefined, stmt.identifier.tokenLiteral());
     }
     // Non-const scalar initializers start at zero and get assigned at startup.
     if (
@@ -139,9 +152,10 @@ export function extractGlobalData(
       stmt.expression &&
       !isConstInitializer(stmt.expression)
     ) {
-      builder.deferredGlobalInits.push({
+      const owner = stmt.identifier.tokenLiteral();
+      deferInitializer(builder, owner, {
         kind: "global",
-        name: stmt.identifier.tokenLiteral(),
+        name: owner,
         type: stmt.typeAnnotation,
         expr: stmt.expression,
       });
@@ -243,6 +257,7 @@ function extractStructLiteral(
   expr: StructLiteralExpression,
   builder: StaticDataBuilder,
   linkedStruct?: StructData,
+  owner = "<anonymous>",
 ) {
   const sd = linkedStruct ?? builder.getStruct(expr.name);
   if (!sd) {
@@ -276,7 +291,7 @@ function extractStructLiteral(
     } else {
       encoded += numToLittleEndian([0], encodedType);
       if (value) {
-        builder.deferredGlobalInits.push({
+        deferInitializer(builder, owner, {
           kind: "memory",
           baseAddr: addr,
           offset: member.offset,
@@ -322,7 +337,12 @@ export function extractLinkedStructGlobals(program: ASTProgram, meta: ModuleMeta
     if (!(statement.expression instanceof StructLiteralExpression)) continue;
     const structImport = meta.imports[statement.expression.name];
     if (!structImport?.structMeta || meta.structs[statement.expression.name]) continue;
-    extractStructLiteral(statement.expression, builder, structImport.structMeta);
+    extractStructLiteral(
+      statement.expression,
+      builder,
+      structImport.structMeta,
+      statement.identifier.tokenLiteral(),
+    );
   }
 }
 
