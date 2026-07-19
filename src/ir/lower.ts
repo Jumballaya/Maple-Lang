@@ -40,6 +40,7 @@ import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
 import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement, ResolvedDecl } from "../parser/ast/types/ast.type";
+import { alignTo, sizeofType } from "../shared/types";
 import { type FuncBuilder, IrBuilder } from "./build";
 import type {
   BinOp,
@@ -52,7 +53,11 @@ import type {
   LabelId,
   LocalId,
   Stmt,
+  StructLayout,
+  StructLayoutMember,
 } from "./ir";
+import { structLayout } from "./layout";
+import { elemAddr, stringEq, structEqBatch } from "./runtime";
 
 export type PendingInitializer = {
   initializerId: string;
@@ -79,6 +84,26 @@ type GlobalBinding = {
 type ControlTarget = {
   breakLabel: LabelId;
   continueLabel?: LabelId;
+};
+
+type FramePlan = {
+  size: number;
+  offsets: Map<LetStatement, number>;
+};
+
+type PendingMemorySite = {
+  owner: string;
+  ordinal: number;
+  baseAddr: number;
+  member: StructLayoutMember;
+  expression: ASTExpression;
+  needsStore: boolean;
+};
+
+type IrLvalue = {
+  mapleType: string;
+  load: () => Expr;
+  store: (value: Expr) => void;
 };
 
 const COMPOUND_OPERATORS: Record<string, string> = {
@@ -164,6 +189,447 @@ function constantInitializer(expression: ASTExpression, targetType: string): num
   return unsupported(expression);
 }
 
+function isDirectStructField(expression: ASTExpression): boolean {
+  return (
+    expression instanceof IntegerLiteralExpression ||
+    expression instanceof FloatLiteralExpression ||
+    expression instanceof BooleanLiteralExpression ||
+    expression instanceof StringLiteralExpression
+  );
+}
+
+function widthOf(mapleType: string): 8 | 16 | undefined {
+  const type = baseScalar(mapleType);
+  if (type === "i8" || type === "u8" || type === "bool") return 8;
+  if (type === "i16" || type === "u16") return 16;
+  return undefined;
+}
+
+function signedLoad(mapleType: string): boolean | undefined {
+  const width = widthOf(mapleType);
+  if (width === undefined) return undefined;
+  const type = baseScalar(mapleType);
+  return type === "i8" || type === "i16";
+}
+
+function arrayElementType(arrayType: string): string {
+  if (arrayType.endsWith("[]")) return arrayType.slice(0, -2);
+  if (arrayType.startsWith("*")) return arrayType.slice(1);
+  throw new Error(`lowering: type '${arrayType}' is not indexable`);
+}
+
+function structIdentity(mapleType: string): string {
+  return mapleType.startsWith("*") ? mapleType.slice(1) : mapleType;
+}
+
+function encodePointer(value: number): Uint8Array {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value, true);
+  return bytes;
+}
+
+function encodeConstant(expression: ASTExpression, targetType: string): Uint8Array {
+  const type = baseScalar(targetType);
+  const bytes = new Uint8Array(sizeofType(type));
+  const view = new DataView(bytes.buffer);
+  const value = constantInitializer(expression, targetType);
+  switch (type) {
+    case "i8":
+      view.setInt8(0, Number(value));
+      break;
+    case "u8":
+    case "bool":
+      view.setUint8(0, Number(value));
+      break;
+    case "i16":
+      view.setInt16(0, Number(value), true);
+      break;
+    case "u16":
+      view.setUint16(0, Number(value), true);
+      break;
+    case "i32":
+      view.setInt32(0, Number(value), true);
+      break;
+    case "u32":
+      view.setUint32(0, Number(value), true);
+      break;
+    case "i64":
+      view.setBigInt64(0, BigInt.asIntN(64, BigInt(value)), true);
+      break;
+    case "u64":
+      view.setBigUint64(0, BigInt.asUintN(64, BigInt(value)), true);
+      break;
+    case "f32":
+      view.setFloat32(0, Number(value), true);
+      break;
+    case "f64":
+      view.setFloat64(0, Number(value), true);
+      break;
+    default:
+      throw new Error(`lowering: unsupported static type '${targetType}'`);
+  }
+  return bytes;
+}
+
+function copyBytes(target: Uint8Array, offset: number, bytes: Uint8Array): void {
+  target.set(bytes, offset);
+}
+
+class StaticDataPlanner {
+  readonly addresses = new Map<ASTExpression, number>();
+  readonly pendingSites: PendingMemorySite[] = [];
+  private cursor = 65_536;
+
+  constructor(
+    private readonly builder: IrBuilder,
+    private readonly layouts: Map<string, StructLayout>,
+  ) {}
+
+  get dataEnd(): number {
+    return this.cursor;
+  }
+
+  scan(program: ASTProgram): void {
+    for (const statement of program.statements) this.visitStatement(statement, false);
+  }
+
+  private allocate(bytes: Uint8Array, alignment: number): number {
+    const address = this.reserve(bytes.byteLength, alignment);
+    this.builder.data(address, bytes);
+    return address;
+  }
+
+  private reserve(size: number, alignment: number): number {
+    const address = alignTo(this.cursor, alignment);
+    this.cursor = address + size;
+    return address;
+  }
+
+  private visitStatement(statement: ASTStatement, insideFunction: boolean): void {
+    if (statement instanceof FunctionStatement) {
+      this.visitStatement(statement.fnExpr.body, true);
+      return;
+    }
+    if (statement instanceof BlockStatement) {
+      for (const child of statement.statements) this.visitStatement(child, insideFunction);
+      return;
+    }
+    if (statement instanceof LetStatement) {
+      if (!statement.expression) return;
+      if (statement.expression instanceof StructLiteralExpression) {
+        if (insideFunction) this.visitLocalStruct(statement.expression);
+        else this.allocateGlobalStruct(statement.expression, statement.identifier.tokenLiteral());
+      } else {
+        this.visitExpression(statement.expression);
+      }
+      return;
+    }
+    if (statement instanceof ReturnStatement) {
+      for (const value of statement.returnValues) this.visitExpression(value);
+      return;
+    }
+    if (statement instanceof ExpressionStatement) {
+      if (statement.expression) this.visitExpression(statement.expression);
+      return;
+    }
+    if (statement instanceof IfStatement) {
+      this.visitExpression(statement.conditionExpr);
+      this.visitStatement(statement.thenBlock, insideFunction);
+      if (statement.elseBlock) this.visitStatement(statement.elseBlock, insideFunction);
+      return;
+    }
+    if (statement instanceof WhileStatement) {
+      this.visitExpression(statement.condExpr);
+      this.visitStatement(statement.loopBody, insideFunction);
+      return;
+    }
+    if (statement instanceof ForStatement) {
+      this.visitStatement(statement.initBlock, insideFunction);
+      if (statement.conditionExpr.expression)
+        this.visitExpression(statement.conditionExpr.expression);
+      if (statement.updateExpr.expression) this.visitExpression(statement.updateExpr.expression);
+      this.visitStatement(statement.loopBody, insideFunction);
+      return;
+    }
+    if (statement instanceof SwitchStatement) {
+      this.visitExpression(statement.switchExpr);
+      for (const branch of statement.cases) this.visitStatement(branch.body, insideFunction);
+      if (statement.default) this.visitStatement(statement.default, insideFunction);
+    }
+  }
+
+  private visitExpression(expression: ASTExpression): void {
+    if (expression instanceof StringLiteralExpression) {
+      this.allocateString(expression);
+      return;
+    }
+    if (expression instanceof ArrayLiteralExpression) {
+      this.allocateArray(expression);
+      return;
+    }
+    if (expression instanceof StructLiteralExpression) {
+      this.allocateStaticStruct(expression);
+      return;
+    }
+    if (expression instanceof AssignmentExpression) {
+      this.visitExpression(expression.left);
+      if (expression.value) this.visitExpression(expression.value);
+      return;
+    }
+    if (expression instanceof CallExpression) {
+      for (const argument of expression.args) this.visitExpression(argument);
+      return;
+    }
+    if (expression instanceof InfixExpression) {
+      this.visitExpression(expression.left);
+      this.visitExpression(expression.right);
+      return;
+    }
+    if (expression instanceof IndexExpression) {
+      this.visitExpression(expression.left);
+      this.visitExpression(expression.index);
+      return;
+    }
+    if (expression instanceof MemberExpression || expression instanceof PointerMemberExpression) {
+      this.visitExpression(expression.parent);
+      return;
+    }
+    if (expression instanceof PrefixExpression) {
+      if (expression.right) this.visitExpression(expression.right);
+      return;
+    }
+    if (expression instanceof PostfixExpression) {
+      if (expression.left) this.visitExpression(expression.left);
+      return;
+    }
+    if (expression instanceof CastExpression) this.visitExpression(expression.expr);
+  }
+
+  private allocateString(expression: StringLiteralExpression): number {
+    const existing = this.addresses.get(expression);
+    if (existing !== undefined) return existing;
+    resolvedType(expression);
+    const payload = new TextEncoder().encode(expression.value);
+    const dataAddress = this.allocate(payload, 4);
+    const header = new Uint8Array(8);
+    const view = new DataView(header.buffer);
+    view.setUint32(0, payload.byteLength, true);
+    view.setUint32(4, dataAddress, true);
+    const address = this.allocate(header, 4);
+    this.addresses.set(expression, address);
+    return address;
+  }
+
+  private allocateArray(expression: ArrayLiteralExpression): number {
+    const existing = this.addresses.get(expression);
+    if (existing !== undefined) return existing;
+    resolvedType(expression);
+    const elementType = expression.memberType;
+    const elementSize = sizeofType(elementType);
+    const data = new Uint8Array(elementSize * expression.elements.length);
+    for (let index = 0; index < expression.elements.length; index += 1) {
+      const element = expression.elements[index]!;
+      this.visitExpression(element);
+      const encoded =
+        element instanceof StringLiteralExpression ||
+        element instanceof ArrayLiteralExpression ||
+        element instanceof StructLiteralExpression
+          ? encodePointer(this.addressOf(element))
+          : encodeConstant(element, elementType);
+      copyBytes(data, index * elementSize, encoded);
+    }
+    const dataAddress = this.allocate(data, Math.min(8, Math.max(1, elementSize)));
+    const header = new Uint8Array(8);
+    const view = new DataView(header.buffer);
+    view.setUint32(0, expression.elements.length, true);
+    view.setUint32(4, dataAddress, true);
+    const address = this.allocate(header, 4);
+    this.addresses.set(expression, address);
+    return address;
+  }
+
+  private visitLocalStruct(expression: StructLiteralExpression): void {
+    resolvedType(expression);
+    const layout = this.requireLayout(expression.name);
+    for (const member of layout.members) {
+      const value = expression.members[member.name];
+      if (!value) throw new Error(`lowering: struct '${expression.name}' missing '${member.name}'`);
+      this.visitExpression(value);
+    }
+  }
+
+  private allocateGlobalStruct(expression: StructLiteralExpression, owner: string): number {
+    const existing = this.addresses.get(expression);
+    if (existing !== undefined) return existing;
+    resolvedType(expression);
+    const layout = this.requireLayout(expression.name);
+    const address = this.reserve(layout.size, 8);
+    this.addresses.set(expression, address);
+    const bytes = new Uint8Array(layout.size);
+    let ordinal = 0;
+    for (const member of layout.members) {
+      const value = expression.members[member.name];
+      if (!value) throw new Error(`lowering: struct '${expression.name}' missing '${member.name}'`);
+      this.visitExpression(value);
+      const encoded = this.staticField(value, member.mapleType);
+      if (encoded) copyBytes(bytes, member.offset, encoded);
+      if (!isDirectStructField(value)) {
+        this.pendingSites.push({
+          owner,
+          ordinal,
+          baseAddr: address,
+          member,
+          expression: value,
+          needsStore: encoded === undefined,
+        });
+        ordinal += 1;
+      }
+    }
+    this.builder.data(address, bytes);
+    return address;
+  }
+
+  private allocateStaticStruct(expression: StructLiteralExpression): number {
+    const existing = this.addresses.get(expression);
+    if (existing !== undefined) return existing;
+    resolvedType(expression);
+    const layout = this.requireLayout(expression.name);
+    const address = this.reserve(layout.size, 8);
+    this.addresses.set(expression, address);
+    const bytes = new Uint8Array(layout.size);
+    for (const member of layout.members) {
+      const value = expression.members[member.name];
+      if (!value) throw new Error(`lowering: struct '${expression.name}' missing '${member.name}'`);
+      this.visitExpression(value);
+      const encoded = this.staticField(value, member.mapleType);
+      if (encoded) copyBytes(bytes, member.offset, encoded);
+    }
+    this.builder.data(address, bytes);
+    return address;
+  }
+
+  private staticField(expression: ASTExpression, mapleType: string): Uint8Array | undefined {
+    if (
+      expression instanceof StringLiteralExpression ||
+      expression instanceof ArrayLiteralExpression ||
+      expression instanceof StructLiteralExpression
+    ) {
+      return encodePointer(this.addressOf(expression));
+    }
+    if (isScalarConstant(expression)) return encodeConstant(expression, mapleType);
+    if (expression instanceof CharLiteralExpression) return encodeConstant(expression, mapleType);
+    return undefined;
+  }
+
+  addressOf(expression: ASTExpression): number {
+    const address = this.addresses.get(expression);
+    if (address === undefined)
+      throw new Error(`lowering: missing static address for ${nodeKind(expression)}`);
+    return address;
+  }
+
+  private requireLayout(identity: string): StructLayout {
+    const layout = this.layouts.get(identity);
+    if (!layout) throw new Error(`lowering: unknown struct layout '${identity}'`);
+    return layout;
+  }
+}
+
+class RuntimeHelpers {
+  private elemAddrId: FuncId | undefined;
+  private stringEqId: FuncId | undefined;
+  private readonly structCalls: Array<{
+    identity: string;
+    expression: Extract<Expr, { k: "call" }>;
+  }> = [];
+
+  constructor(
+    private readonly builder: IrBuilder,
+    private readonly layouts: Map<string, StructLayout>,
+  ) {}
+
+  elemAddr(): FuncId {
+    this.elemAddrId ??= elemAddr(this.builder);
+    return this.elemAddrId;
+  }
+
+  stringEq(): FuncId {
+    this.stringEqId ??= stringEq(this.builder);
+    return this.stringEqId;
+  }
+
+  structEq(identity: string, args: Expr[]): Expr {
+    if (!this.layouts.has(identity))
+      throw new Error(`lowering: unknown struct layout '${identity}'`);
+    const expression: Extract<Expr, { k: "call" }> = { k: "call", fn: -1, args };
+    this.structCalls.push({ identity, expression });
+    return expression;
+  }
+
+  finish(): void {
+    if (this.structCalls.length === 0) return;
+    const closure = new Map<string, StructLayout>();
+    let needsStrings = false;
+    const add = (identity: string): void => {
+      if (closure.has(identity)) return;
+      const layout = this.layouts.get(identity);
+      if (!layout) throw new Error(`lowering: unknown struct layout '${identity}'`);
+      closure.set(identity, layout);
+      for (const member of layout.members) {
+        if (member.mapleType === "string" || member.memberIdentity === "string") {
+          needsStrings = true;
+        } else if (member.memberIdentity !== undefined) {
+          add(member.memberIdentity);
+        }
+      }
+    };
+    for (const request of this.structCalls) add(request.identity);
+    const ids = structEqBatch(this.builder, closure, needsStrings ? this.stringEq() : undefined);
+    for (const request of this.structCalls) request.expression.fn = ids.get(request.identity)!;
+  }
+}
+
+function planFrame(block: BlockStatement, layouts: Map<string, StructLayout>): FramePlan {
+  const offsets = new Map<LetStatement, number>();
+  let size = 0;
+  const walk = (statement: ASTStatement): void => {
+    if (statement instanceof LetStatement) {
+      if (statement.expression instanceof StructLiteralExpression) {
+        const layout = layouts.get(statement.expression.name);
+        if (!layout)
+          throw new Error(`lowering: unknown struct layout '${statement.expression.name}'`);
+        offsets.set(statement, size);
+        size += layout.size;
+      }
+      return;
+    }
+    if (statement instanceof BlockStatement) {
+      for (const child of statement.statements) walk(child);
+      return;
+    }
+    if (statement instanceof IfStatement) {
+      walk(statement.thenBlock);
+      if (statement.elseBlock) walk(statement.elseBlock);
+      return;
+    }
+    if (statement instanceof WhileStatement) {
+      walk(statement.loopBody);
+      return;
+    }
+    if (statement instanceof ForStatement) {
+      walk(statement.initBlock);
+      walk(statement.loopBody);
+      return;
+    }
+    if (statement instanceof SwitchStatement) {
+      for (const branch of statement.cases) walk(branch.body);
+      if (statement.default) walk(statement.default);
+    }
+  };
+  walk(block);
+  return { size, offsets };
+}
+
 class FunctionLowerer {
   private readonly scopes: Array<Map<string, Binding>> = [];
   private readonly controls: ControlTarget[] = [];
@@ -173,6 +639,12 @@ class FunctionLowerer {
     private readonly functions: Map<string, FuncId>,
     private readonly globals: Map<string, GlobalBinding>,
     params: Array<{ name: string; type: string }>,
+    private readonly layouts: Map<string, StructLayout>,
+    private readonly staticData: StaticDataPlanner,
+    private readonly runtime: RuntimeHelpers,
+    private readonly frame: FramePlan = { size: 0, offsets: new Map() },
+    private readonly stackPointer?: GlobalId,
+    private readonly fragmentLocals?: IrType[],
   ) {
     const paramScope = new Map<string, Binding>();
     for (let index = 0; index < params.length; index += 1) {
@@ -184,7 +656,52 @@ class FunctionLowerer {
   }
 
   lowerBody(block: BlockStatement): void {
+    if (this.frame.size > 0) {
+      if (this.stackPointer === undefined) throw new Error("lowering: missing shadow stack");
+      this.fn.globalSet(
+        this.stackPointer,
+        this.fn.binop(
+          "sub",
+          "i32",
+          false,
+          this.fn.globalGet(this.stackPointer),
+          this.fn.constant("i32", this.frame.size),
+        ),
+      );
+    }
     this.lowerBlock(block);
+    this.restoreFrame();
+    if (this.frame.size > 0 && stmtDefinitelyReturns(block)) this.fn.unreachable();
+  }
+
+  lowerPendingStore(address: number, mapleType: string, expression: ASTExpression): void {
+    this.fn.store(
+      lane(mapleType),
+      this.fn.constant("i32", address),
+      this.lowerExpression(expression),
+      0,
+      widthOf(mapleType),
+    );
+  }
+
+  private local(type: IrType, name?: string): LocalId {
+    this.fragmentLocals?.push(type);
+    return this.fn.local(type, name);
+  }
+
+  private restoreFrame(): void {
+    if (this.frame.size === 0) return;
+    if (this.stackPointer === undefined) throw new Error("lowering: missing shadow stack");
+    this.fn.globalSet(
+      this.stackPointer,
+      this.fn.binop(
+        "add",
+        "i32",
+        false,
+        this.fn.globalGet(this.stackPointer),
+        this.fn.constant("i32", this.frame.size),
+      ),
+    );
   }
 
   private lowerBlock(block: BlockStatement): void {
@@ -256,8 +773,12 @@ class FunctionLowerer {
       return;
     }
     const name = statement.identifier.tokenLiteral();
+    if (statement.expression instanceof StructLiteralExpression) {
+      this.lowerStructLet(statement, name, statement.expression);
+      return;
+    }
     const localType = lane(statement.typeAnnotation);
-    const id = this.fn.local(localType, statement.resolvedName ?? name);
+    const id = this.local(localType, statement.resolvedName ?? name);
     const value = statement.expression
       ? this.lowerExpression(statement.expression)
       : this.fn.constant(localType, zero(localType));
@@ -265,6 +786,45 @@ class FunctionLowerer {
     this.scopes.at(-1)!.set(name, {
       id,
       mapleType: statement.typeAnnotation,
+      kind: "local",
+    });
+  }
+
+  private lowerStructLet(
+    statement: LetStatement,
+    name: string,
+    expression: StructLiteralExpression,
+  ): void {
+    resolvedType(expression);
+    const layout = this.layouts.get(expression.name);
+    const offset = this.frame.offsets.get(statement);
+    if (!layout || offset === undefined || this.stackPointer === undefined) unsupported(expression);
+    const id = this.local("i32", statement.resolvedName ?? name);
+    const pointer =
+      offset === 0
+        ? this.fn.globalGet(this.stackPointer)
+        : this.fn.binop(
+            "add",
+            "i32",
+            false,
+            this.fn.globalGet(this.stackPointer),
+            this.fn.constant("i32", offset),
+          );
+    this.fn.localSet(id, pointer);
+    for (const member of layout.members) {
+      const value = expression.members[member.name];
+      if (!value) throw new Error(`lowering: struct '${expression.name}' missing '${member.name}'`);
+      this.fn.store(
+        member.lane,
+        this.fn.localGet(id),
+        this.lowerExpression(value),
+        member.offset,
+        member.width,
+      );
+    }
+    this.scopes.at(-1)!.set(name, {
+      id,
+      mapleType: expression.name,
       kind: "local",
     });
   }
@@ -284,7 +844,7 @@ class FunctionLowerer {
       const part = statement.pattern.names[index];
       const resultType = call.results[index]!;
       const localName = part?.kind === "name" ? part.value : `__discard_${index}`;
-      const id = this.fn.local(lane(resultType), localName);
+      const id = this.local(lane(resultType), localName);
       targets.push(id);
       if (part?.kind === "name") {
         bindings.push({
@@ -310,18 +870,30 @@ class FunctionLowerer {
       const call = this.callAnnotations(callExpression);
       if (call.results.length > 1) {
         const targets = call.results.map((type, index) =>
-          this.fn.local(lane(type), `__return_${index}`),
+          this.local(lane(type), `__return_${index}`),
         );
         this.fn.multiCall(
           { kind: "func", fn: this.directCallee(callExpression, call.decl) },
           callExpression.args.map((argument) => this.lowerExpression(argument)),
           targets,
         );
+        this.restoreFrame();
         this.fn.ret(targets.map((target) => this.fn.localGet(target)));
         return;
       }
     }
-    this.fn.ret(statement.returnValues.map((value) => this.lowerExpression(value)));
+    if (this.frame.size === 0) {
+      this.fn.ret(statement.returnValues.map((value) => this.lowerExpression(value)));
+      return;
+    }
+    const targets = statement.returnValues.map((value, index) =>
+      this.local(lane(resolvedType(value)), `__return_${index}`),
+    );
+    for (let index = 0; index < statement.returnValues.length; index += 1) {
+      this.fn.localSet(targets[index]!, this.lowerExpression(statement.returnValues[index]!));
+    }
+    this.restoreFrame();
+    this.fn.ret(targets.map((target) => this.fn.localGet(target)));
   }
 
   private lowerEffect(expression: ASTExpression): void {
@@ -352,38 +924,33 @@ class FunctionLowerer {
   }
 
   private lowerAssignment(expression: AssignmentExpression): void {
-    if (!(expression.left instanceof Identifier) || expression.value === null) {
-      unsupported(expression);
-    }
-    const binding = this.resolveWritable(expression.left);
+    if (expression.value === null) unsupported(expression);
+    const target = this.resolveLvalue(expression.left);
     let value: Expr;
     const operator = COMPOUND_OPERATORS[expression.operator];
     if (operator === undefined) {
       value = this.lowerExpression(expression.value);
     } else {
-      value = this.lowerBinaryOperands(
-        operator,
-        binding.mapleType,
-        () => this.bindingGet(binding),
-        () => this.lowerExpression(expression.value!),
+      value = this.lowerBinaryOperands(operator, target.mapleType, target.load, () =>
+        this.lowerExpression(expression.value!),
       );
     }
-    this.bindingSet(binding, value);
+    target.store(value);
   }
 
   private lowerPostfixStatement(expression: PostfixExpression): void {
-    if (!(expression.left instanceof Identifier)) unsupported(expression);
-    const binding = this.resolveWritable(expression.left);
-    const type = lane(binding.mapleType);
+    if (!expression.left) unsupported(expression);
+    const target = this.resolveLvalue(expression.left);
+    const type = lane(target.mapleType);
     const operator = expression.operator === "++" ? "add" : "sub";
     const value = this.fn.binop(
       operator,
       type,
-      !isUnsignedMapleInteger(binding.mapleType),
-      this.bindingGet(binding),
+      !isUnsignedMapleInteger(target.mapleType),
+      target.load(),
       this.fn.constant(type, one(type)),
     );
-    this.bindingSet(binding, value);
+    target.store(value);
   }
 
   private lowerWhile(statement: WhileStatement): void {
@@ -425,7 +992,7 @@ class FunctionLowerer {
     const selectorType = resolvedType(statement.switchExpr);
     const selectorLane = lane(selectorType);
     if (selectorLane !== "i32") unsupported(statement.switchExpr);
-    const selector = this.fn.local("i32", "__switch");
+    const selector = this.local("i32", "__switch");
     this.fn.localSet(selector, this.lowerExpression(statement.switchExpr));
     this.fn.block((breakLabel) => {
       this.withControl({ breakLabel }, () => {
@@ -467,12 +1034,14 @@ class FunctionLowerer {
     if (
       expression instanceof StructLiteralExpression ||
       expression instanceof ArrayLiteralExpression ||
-      expression instanceof StringLiteralExpression ||
-      expression instanceof IndexExpression ||
-      expression instanceof MemberExpression ||
-      expression instanceof PointerMemberExpression
+      expression instanceof StringLiteralExpression
     ) {
-      return unsupported(expression);
+      resolvedType(expression);
+      return this.fn.constant("i32", this.staticData.addressOf(expression));
+    }
+    if (expression instanceof IndexExpression) return this.lowerIndex(expression);
+    if (expression instanceof MemberExpression || expression instanceof PointerMemberExpression) {
+      return this.lowerMember(expression);
     }
     if (expression instanceof IntegerLiteralExpression) {
       const type = lane(resolvedType(expression));
@@ -528,6 +1097,59 @@ class FunctionLowerer {
     return unsupported(expression);
   }
 
+  private lowerMember(expression: MemberExpression | PointerMemberExpression): Expr {
+    resolvedType(expression);
+    const member = this.resolveMember(resolvedType(expression.parent), expression.member);
+    return this.fn.load(
+      member.lane,
+      this.lowerExpression(expression.parent),
+      member.offset,
+      member.width,
+      signedLoad(member.mapleType),
+    );
+  }
+
+  private lowerIndex(expression: IndexExpression): Expr {
+    const elementType = resolvedType(expression);
+    const baseType = resolvedType(expression.left);
+    resolvedType(expression.index);
+    const declaredElement = arrayElementType(baseType);
+    if (elementType !== declaredElement) {
+      throw new Error(
+        `lowering: index annotation mismatch '${elementType}' and '${declaredElement}'`,
+      );
+    }
+    const base = this.local("i32", "__index_base");
+    const index = this.local("i32", "__index");
+    const address = this.fn.seq(
+      (body) => {
+        body.localSet(base, this.lowerExpression(expression.left));
+        body.localSet(index, this.lowerExpression(expression.index));
+      },
+      (body) =>
+        body.call(this.runtime.elemAddr(), [
+          body.localGet(base),
+          body.localGet(index),
+          body.constant("i32", sizeofType(elementType)),
+        ]),
+    );
+    return this.fn.load(
+      lane(elementType),
+      address,
+      0,
+      widthOf(elementType),
+      signedLoad(elementType),
+    );
+  }
+
+  private resolveMember(parentType: string, name: string): StructLayoutMember {
+    const identity = parentType.endsWith("[]") ? "string" : structIdentity(parentType);
+    const layout = this.layouts.get(identity);
+    const member = layout?.members.find((entry) => entry.name === name);
+    if (!member) throw new Error(`lowering: struct '${identity}' has no member '${name}'`);
+    return member;
+  }
+
   private lowerInfix(expression: InfixExpression): Expr {
     resolvedType(expression);
     if (expression.operator === "&&" || expression.operator === "||") {
@@ -544,6 +1166,26 @@ class FunctionLowerer {
     }
     const operandType = resolvedType(expression.left);
     resolvedType(expression.right);
+    if (expression.operator === "==" || expression.operator === "!=") {
+      let equal: Expr | undefined;
+      if (operandType === "string") {
+        equal = this.fn.call(this.runtime.stringEq(), [
+          this.lowerExpression(expression.left),
+          this.lowerExpression(expression.right),
+        ]);
+      } else {
+        const identity = structIdentity(operandType);
+        if (this.layouts.has(identity) && identity !== "string") {
+          equal = this.runtime.structEq(identity, [
+            this.lowerExpression(expression.left),
+            this.lowerExpression(expression.right),
+          ]);
+        }
+      }
+      if (equal) {
+        return expression.operator === "==" ? equal : this.fn.unop("eqz", "i32", equal);
+      }
+    }
     return this.lowerBinaryOperands(
       expression.operator,
       operandType,
@@ -561,8 +1203,8 @@ class FunctionLowerer {
     const type = lane(mapleType);
     const signed = !isUnsignedMapleInteger(mapleType);
     if (operator === "%" && (type === "f32" || type === "f64")) {
-      const leftLocal = this.fn.local(type, "__rem_left");
-      const rightLocal = this.fn.local(type, "__rem_right");
+      const leftLocal = this.local(type, "__rem_left");
+      const rightLocal = this.local(type, "__rem_right");
       return this.fn.seq(
         (body) => {
           body.localSet(leftLocal, left());
@@ -648,7 +1290,7 @@ class FunctionLowerer {
     if (!(expression.left instanceof Identifier)) return unsupported(expression);
     const binding = this.resolveWritable(expression.left);
     const type = lane(binding.mapleType);
-    const old = this.fn.local(type, "__postfix_old");
+    const old = this.local(type, "__postfix_old");
     const op = expression.operator === "++" ? "add" : "sub";
     return this.fn.seq(
       (body) => {
@@ -801,6 +1443,83 @@ class FunctionLowerer {
     return unsupported(identifier);
   }
 
+  private resolveLvalue(expression: ASTExpression): IrLvalue {
+    if (expression instanceof Identifier) {
+      const binding = this.resolveWritable(expression);
+      return {
+        mapleType: binding.mapleType,
+        load: () => this.bindingGet(binding),
+        store: (value) => this.bindingSet(binding, value),
+      };
+    }
+    if (expression instanceof MemberExpression || expression instanceof PointerMemberExpression) {
+      const mapleType = resolvedType(expression);
+      const member = this.resolveMember(resolvedType(expression.parent), expression.member);
+      const base = this.local("i32", "__member_base");
+      this.fn.localSet(base, this.lowerExpression(expression.parent));
+      return {
+        mapleType,
+        load: () =>
+          this.fn.load(
+            member.lane,
+            this.fn.localGet(base),
+            member.offset,
+            member.width,
+            signedLoad(member.mapleType),
+          ),
+        store: (value) =>
+          void this.fn.store(
+            member.lane,
+            this.fn.localGet(base),
+            value,
+            member.offset,
+            member.width,
+          ),
+      };
+    }
+    if (expression instanceof IndexExpression) {
+      const mapleType = resolvedType(expression);
+      const baseType = resolvedType(expression.left);
+      resolvedType(expression.index);
+      if (arrayElementType(baseType) !== mapleType) {
+        throw new Error(`lowering: index annotation mismatch '${mapleType}'`);
+      }
+      const base = this.local("i32", "__index_base");
+      const index = this.local("i32", "__index");
+      const address = this.local("i32", "__index_addr");
+      this.fn.localSet(base, this.lowerExpression(expression.left));
+      this.fn.localSet(index, this.lowerExpression(expression.index));
+      this.fn.localSet(
+        address,
+        this.fn.call(this.runtime.elemAddr(), [
+          this.fn.localGet(base),
+          this.fn.localGet(index),
+          this.fn.constant("i32", sizeofType(mapleType)),
+        ]),
+      );
+      return {
+        mapleType,
+        load: () =>
+          this.fn.load(
+            lane(mapleType),
+            this.fn.localGet(address),
+            0,
+            widthOf(mapleType),
+            signedLoad(mapleType),
+          ),
+        store: (value) =>
+          void this.fn.store(
+            lane(mapleType),
+            this.fn.localGet(address),
+            value,
+            0,
+            widthOf(mapleType),
+          ),
+      };
+    }
+    return unsupported(expression);
+  }
+
   private bindingGet(binding: Binding | GlobalBinding): Expr {
     return "kind" in binding ? this.fn.localGet(binding.id) : this.fn.globalGet(binding.id);
   }
@@ -842,8 +1561,35 @@ export function lowerModule(
   options: EmitOptions = { importMemory: false },
 ): LoweringResult {
   const builder = new IrBuilder();
-  const pages = meta.memoryMinimumPages ?? Math.max(2, Math.ceil(meta.dataPtr / 65_536) + 1);
-  builder.memory(options.importMemory ? "imported" : "owned", pages);
+  const layouts = new Map<string, StructLayout>();
+  layouts.set(
+    "string",
+    structLayout({
+      len: { name: "len", type: "i32" },
+      data: { name: "data", type: "i32" },
+    }),
+  );
+  for (const statement of ast.statements) {
+    if (statement instanceof StructStatement) {
+      layouts.set(statement.name, structLayout(statement.members));
+    }
+  }
+  for (const [identity, definition] of Object.entries(meta.structs)) {
+    if (!layouts.has(identity)) layouts.set(identity, structLayout(definition.members));
+  }
+  for (const [identity, layout] of layouts) builder.structLayout(identity, layout);
+
+  const staticData = new StaticDataPlanner(builder, layouts);
+  staticData.scan(ast);
+
+  const framePlans = new Map<FunctionStatement, FramePlan>();
+  for (const statement of ast.statements) {
+    if (statement instanceof FunctionStatement) {
+      framePlans.set(statement, planFrame(statement.fnExpr.body, layouts));
+    }
+  }
+  const needsStack = [...framePlans.values()].some((frame) => frame.size > 0);
+  const stackPointer = needsStack ? builder.global("__sp", "i32", true, 65_536) : undefined;
 
   const globals = new Map<string, GlobalBinding>();
   for (const statement of ast.statements) {
@@ -852,25 +1598,28 @@ export function lowerModule(
     const name = statement.identifier.tokenLiteral();
     const type = lane(statement.typeAnnotation);
     const expression = statement.expression;
-    if (
+    const aggregate =
       expression instanceof StructLiteralExpression ||
       expression instanceof ArrayLiteralExpression ||
-      expression instanceof StringLiteralExpression
-    ) {
-      unsupported(expression);
-    }
+      expression instanceof StringLiteralExpression;
     const constant = expression !== null && isScalarConstant(expression);
-    const init = constant ? constantInitializer(expression, statement.typeAnnotation) : zero(type);
+    const init = aggregate
+      ? staticData.addressOf(expression)
+      : constant
+        ? constantInitializer(expression, statement.typeAnnotation)
+        : zero(type);
     const globalOptions = statement.exported ? { export: name } : {};
     const id = builder.global(
       name,
       type,
-      expression !== null && !constant ? true : statement.mutable,
+      expression !== null && !constant && !aggregate ? true : statement.mutable,
       init,
       globalOptions,
     );
     globals.set(name, { id, mapleType: statement.typeAnnotation });
   }
+
+  const runtime = new RuntimeHelpers(builder, layouts);
 
   const functions = new Map<string, FuncId>();
   const functionBuilders = new Map<FunctionStatement, FuncBuilder>();
@@ -902,8 +1651,77 @@ export function lowerModule(
       name: param.identifier.tokenLiteral(),
       type: param.type,
     }));
-    new FunctionLowerer(fn, functions, globals, params).lowerBody(statement.fnExpr.body);
+    new FunctionLowerer(
+      fn,
+      functions,
+      globals,
+      params,
+      layouts,
+      staticData,
+      runtime,
+      framePlans.get(statement),
+      stackPointer,
+    ).lowerBody(statement.fnExpr.body);
   }
 
-  return { module: builder.finish(), pendingInits: [] };
+  const deferredByOwner = new Map<string, typeof meta.deferredGlobalInits>();
+  for (const initializer of meta.deferredGlobalInits) {
+    if (initializer.owner === undefined) continue;
+    const entries = deferredByOwner.get(initializer.owner) ?? [];
+    entries.push(initializer);
+    deferredByOwner.set(initializer.owner, entries);
+  }
+  const pendingInits: PendingInitializer[] = [];
+  for (const site of staticData.pendingSites) {
+    const initializer = deferredByOwner.get(site.owner)?.[site.ordinal];
+    if (!initializer) {
+      throw new Error(
+        `lowering: missing deferred initializer for '${site.owner}' ordinal ${site.ordinal}`,
+      );
+    }
+    if (initializer.kind !== "memory") {
+      throw new Error(
+        `lowering: deferred initializer kind mismatch for '${site.owner}' ordinal ${site.ordinal}`,
+      );
+    }
+    if (initializer.id === undefined || initializer.owner === undefined) {
+      throw new Error(`lowering: deferred initializer for '${site.owner}' is missing identity`);
+    }
+    if (!site.needsStore) {
+      pendingInits.push({ initializerId: initializer.id, locals: [], statements: [] });
+      continue;
+    }
+    const fragmentBuilder = new IrBuilder();
+    const signature = fragmentBuilder.signature([], []);
+    const fragment = fragmentBuilder.func("__pending_init", signature);
+    const locals: IrType[] = [];
+    const lowerer = new FunctionLowerer(
+      fragment,
+      functions,
+      globals,
+      [],
+      layouts,
+      staticData,
+      runtime,
+      undefined,
+      undefined,
+      locals,
+    );
+    lowerer.lowerPendingStore(
+      site.baseAddr + site.member.offset,
+      site.member.mapleType,
+      site.expression,
+    );
+    pendingInits.push({
+      initializerId: initializer.id,
+      locals,
+      statements: fragment.body,
+    });
+  }
+
+  runtime.finish();
+  const requiredPages = Math.max(2, Math.ceil(staticData.dataEnd / 65_536) + 1);
+  const pages = Math.max(meta.memoryMinimumPages ?? 0, requiredPages);
+  builder.memory(options.importMemory ? "imported" : "owned", pages);
+  return { module: builder.finish(), pendingInits };
 }

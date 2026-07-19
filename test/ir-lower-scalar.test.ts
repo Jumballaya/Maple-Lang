@@ -417,7 +417,7 @@ describe("IR scalar lowering: defensive diagnostics", () => {
     assert.throws(() => lowerModule(ast, meta), /lowering: missing annotation on Identifier/);
   });
 
-  test("rejects memory constructs until T31", () => {
+  test("hands memory constructs to the T31 lowering slice", () => {
     const { ast, meta } = checked(`
       struct Pair { value: i32 }
       export fn run(): i32 { let pair: Pair = { value = 1 }; return 0; }
@@ -427,6 +427,8 @@ describe("IR scalar lowering: defensive diagnostics", () => {
     const local = fn.fnExpr.body.statements[0];
     assert(local && "expression" in local);
     assert(local.expression instanceof StructLiteralExpression);
-    assert.throws(() => lowerModule(ast, meta), /lowering: unsupported StructLiteralExpression/);
+    const result = lowerModule(ast, meta);
+    assert.deepEqual(validateModule(result.module), []);
+    assert(result.module.structLayouts.has("Pair"));
   });
 });
