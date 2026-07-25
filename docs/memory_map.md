@@ -7,8 +7,8 @@
 |                              |
 +------------------------------+  0x0001_0000  (65536)  ← static-data base
 |                              |
-|   Static data                |  array literals, global struct literals,
-|   (compiler data section)    |  string bytes + string header records
+|   Static data                |  array/string literals, global struct literals,
+|   (compiler data section)    |  including literals declared inside functions
 |                              |  allocated upward from 0x1_0000 at compile time
 +------------------------------+  HEAP_BASE  (= final live-data end, aligned to 8)
 |                              |
@@ -44,7 +44,7 @@ Each local struct variable gets a single `i32` pointer local that is set to `$__
 
 ### Static data  (0x0001_0000 – HEAP_BASE)
 
-Compile-time-only. The compiler's `dataPtr` cursor starts at `65536` and allocates space upward for:
+The compiler assigns this region's layout at compile time. Its static-data planner starts at `65536` and allocates space upward for:
 
 - **Array literals** — an element block and an 8-byte `{ len: i32, data: *element }` header; the array value points to the header
 - **Global struct literals** — fields at their declared layout offsets; the global variable holds the address as an `i32`
@@ -55,13 +55,19 @@ therefore appear between segments, but are not encoded as trailing zero bytes.
 Whole-program emission discards allocations owned only by unreachable declarations
 before assigning final addresses, so dead literal data does not consume static space.
 
-Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack.
+Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack. Local array and string literals are placed here and share their static buffers across calls; writes therefore persist. A dynamic-element local array writes every element again when its declaration executes.
 
 When a global struct field uses an expression (for example `{ x = other + 1 }`), the compiler writes a zero placeholder in static data and emits a one-time runtime store in the WebAssembly start function. Literal-valued fields remain fully compile-time encoded.
 
-`dataPtr` starts at `65536` so the first WebAssembly page remains reserved for
+If any element of an array literal is dynamic, its entire static element block is zero-filled. Module-scope arrays fill that block from the WebAssembly start function during instantiation; local arrays fill it at the literal's evaluation point.
+
+The planner starts at `65536` so the first WebAssembly page remains reserved for
 the compiler-managed shadow stack. Static addresses baked into emitted code use
 the same whole-program layout.
+
+### Instantiation-time initialization
+
+Deferred global scalar values, expression-valued global struct fields, and module-scope dynamic array elements run in dependency post-order from the module's WebAssembly start function. When the allocator is present, `heap_init(align8(finalDataEnd))` is the first start action. A trap in any of these initializers makes WebAssembly instantiation throw before an export can be called.
 
 ### Heap  (HEAP_BASE – heap_end)
 
@@ -83,8 +89,9 @@ Programs that never call `malloc` never touch the heap region.
 - Maple reserves the first page for the shadow stack and begins merged static
   data at `65536`.
 - The shadow stack grows **down** and the heap grows **up**. They could theoretically collide if a program has deeply recursive functions with many large struct locals and simultaneously performs heavy heap allocation. No overflow detection is currently implemented.
-- The static data region is fixed during whole-program emission and never
-  changes at runtime.
+- The static data region's addresses and extent are fixed during whole-program
+  emission. Its bytes remain writable; dynamic arrays and ordinary program
+  writes can update their static buffers at runtime.
 - The module-owned memory declaration, or the runtime memory import under
   `--import-memory`, declares `max(2, ceil(finalDataEnd / 65536) + 1)` initial
   pages, reserving enough room for static data and one heap page. `memory.grow`

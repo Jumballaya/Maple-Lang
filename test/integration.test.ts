@@ -98,8 +98,9 @@ describe("wat2wasm test gating", () => {
 });
 
 /*
- * WAT assertions are inventoried in test/behavioralization maps. Executable
- * semantics use typechecked runExport/runMergedExport fixtures. Only host
+ * WAT assertions were inventoried and behavioralized by T33–T36/T38; the
+ * conversion maps live in git history. Executable semantics use typechecked
+ * runExport/runMergedExport fixtures. Only host
  * surface facts that execution cannot observe stay here: imports, exports,
  * memory, tables/elements, start/data presence, and intentional absence.
  * Structural regexes tolerate whitespace and generated names and never pin

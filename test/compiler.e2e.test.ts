@@ -95,8 +95,9 @@ function call(instance: WebAssembly.Instance, name: string, ...args: number[]): 
 }
 
 /*
- * WAT assertions are inventoried in test/behavioralization maps. Runtime
- * semantics stay in execution tests; only host-surface and intentionally
+ * WAT assertions were inventoried and behavioralized by T33–T36/T38; the
+ * conversion maps live in git history. Runtime semantics stay in execution
+ * tests; only host-surface and intentionally
  * unobservable reachability facts survive here. Regexes tolerate whitespace
  * and generated-name prefixes and never require cross-section ordering.
  */

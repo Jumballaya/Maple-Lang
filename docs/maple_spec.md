@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maple is a statically-typed, compiled language that targets WebAssembly. The compiler merges the source dependency graph into one `.wat` (WebAssembly Text Format) module and assembles it directly into the final `.wasm` binary with the project-local `wat2wasm` installed by npm. No system WebAssembly toolchain is required.
+Maple is a statically-typed, compiled language that targets WebAssembly. The compiler lowers the merged source dependency graph through a typed intermediate representation (IR), prints one `.wat` (WebAssembly Text Format) module, and assembles it into the final `.wasm` binary with the project-local `wat2wasm` installed by npm. No system WebAssembly toolchain is required.
 
 ---
 
@@ -17,6 +17,20 @@ npm start -- --import-memory src/main.maple
 ```
 
 `-o <file>` and `--output <file>` select the output path and may appear at most once. `--import-memory` may be repeated and is idempotent. Options may appear before or after the input file. Unknown options, a missing input, multiple input files, or a missing output-path value are errors.
+
+### Compiler pipeline
+
+Architecturally, compilation follows this pipeline:
+
+```
+parse modules → type-check and annotate → whole-program merge
+  → lower to typed IR → run the IR pass hook (empty in this phase)
+  → validate IR → print WAT → assemble wasm
+```
+
+The IR validator runs after the pass hook and before WAT printing. It is an internal compile-time guarantee that malformed IR does not reach the backend, not a language or host API. The former direct AST-to-WAT string emitter is no longer part of the compiler.
+
+For the same resolved entry path and module graph in the same checkout, repeated compilation produces byte-identical WAT. This is not a cross-machine or cross-checkout reproducible-build guarantee: bundled-standard-library module keys are relative to the entry module, so checkout location can change internal symbol names.
 
 ### Memory ownership
 
@@ -71,7 +85,7 @@ Maple supports both single-line and block comments.
 | `f64`  | 64-bit float             |
 | `bool` | Boolean (`true`/`false`) — backed by `i32` |
 
-All integer variants smaller than `i32` are represented in the WebAssembly `i32` lane. An explicit cast to a sub-word type masks or sign-extends the value to that type's width.
+All integer variants smaller than `i32` are represented in the WebAssembly `i32` lane. Explicit integer casts to a sub-word type mask or sign-extend to that type's width; float-to-sub-word casts truncate and mask, as detailed under Casts.
 
 `i64` and `u64` use the WebAssembly `i64` lane; `f64` uses the `f64` lane. Struct layout and loads/stores use the full width for these members.
 
@@ -94,9 +108,9 @@ let count: i32 = nums.len;
 
 Array reads are bounds-checked. An index greater than or equal to `.len` traps; the unsigned comparison used by the check also makes negative indices trap.
 
-Array elements may be expressions. Each element must be compatible with the declared element type; integer and float literals adopt that type and are range-checked against it, so `let values: i64[] = [1, 2];` is valid. Elements evaluate left to right.
+Array elements may be expressions. Each element must be compatible with the declared element type; integer and float literals adopt that type and are range-checked against it, so `let values: i64[] = [1, 2];` is valid. Elements evaluate once each, from left to right.
 
-Local array and string literals currently use shared static storage rather than fresh storage per call, so writes persist across calls. Dynamic-element array declarations re-initialize every element in that shared buffer each time the declaration executes.
+Local array and string literals currently use shared static storage rather than fresh storage per call, so writes persist across calls. Dynamic-element array declarations re-initialize every element in that shared buffer each time the declaration executes. Module-scope dynamic arrays perform those stores during WebAssembly instantiation. Fresh-per-call storage remains deferred until the ownership phase.
 
 ### Struct types
 
@@ -150,7 +164,14 @@ let base: i32 = 10;
 let offset: i32 = base + 5;
 ```
 
-WebAssembly constant initializers are emitted directly. Initializers that require runtime work are placed in a guarded prologue. The prologue runs once, immediately before the body of the first entry-module exported function that is called; it does not run merely because the module was instantiated. Global struct fields with literal values remain compile-time data, while expression-valued fields are written by this prologue.
+WebAssembly constant initializers are emitted directly. Initializers that require runtime work are placed in a WebAssembly `start` function and run during module instantiation, in dependency post-order. Global struct fields with literal values remain compile-time data, while expression-valued fields and module-scope dynamic array elements are written by `start`.
+
+An initializer trap is therefore an instantiation failure, before any export can be called:
+
+```js
+const module = new WebAssembly.Module(bytes);
+const instance = new WebAssembly.Instance(module); // may throw WebAssembly.RuntimeError
+```
 
 ---
 
@@ -181,9 +202,11 @@ fn apply(): i32 {
 }
 ```
 
-Indirect calls use a WebAssembly function table and `call_indirect`. Function-typed bindings are currently local only; module-scope `let` and `const` declarations of function type are rejected. Function types may also use `void`, array types, nested function types, or a multi-return tuple as their return type.
+Indirect calls use a WebAssembly function table and `call_indirect`. A reachable function-typed signature alone does not require the memory allocator; creating a named function reference does, and the compiler includes the allocator only for reachable creation sites. Function-typed bindings are currently local only; module-scope `let` and `const` declarations of function type are rejected. Function types may also use `void`, array types, nested function types, or a multi-return tuple as their return type.
 
-Lambda syntax, `fn(params): ReturnType { ... }`, is accepted by the parser.
+There is not yet an unambiguous type spelling for an array of function references. `fn(i32): i32[]` means a function returning `i32[]`, not an array whose elements have type `fn(i32): i32`. Parenthesized function types such as `(fn(i32): i32)[]` are deferred grammar work.
+
+Lambda syntax, `fn(params): ReturnType { ... }`, is accepted by the parser but rejected by the checker with `function literals are not supported yet`. Function literals are future surface owned by the closures phase.
 
 ### Multiple return values
 
@@ -263,13 +286,17 @@ Unary `-` is legal for unsigned integers and wraps in the value's WebAssembly la
 
 ### Postfix
 
-`++`, `--` — increment/decrement. When used as a statement, no value is left on the stack. When used as a sub-expression (rvalue), the original value is produced before the update.
+`++`, `--` — increment/decrement. When used as a statement on a supported variable, member, or index target, no value is left on the stack. In value position, only a plain variable produces its original value before the update. Member and index forms parse but are checker-rejected with `value-position increment requires a plain variable`; broader value-form lvalue increments are undecided.
 
 ### Compound assignment
 
 `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 
 Compound assignments use the same type and signedness rules as their corresponding binary operators.
+
+### Expression statements
+
+Calls, assignments, and postfix or compound mutations may be used as statements. Other expression statements parse but are permanently checker-rejected with `expression statement has no effect`; Maple does not implicitly discard effect-free values. Assignment is statement-only, so a value-position assignment is rejected with `assignment is a statement`.
 
 ### Integer literals
 
@@ -296,7 +323,8 @@ Supported conversions:
 - Integer-to-float conversion follows the source integer's signedness.
 - Float-to-integer conversion truncates toward zero and follows the target integer's signedness. NaN, positive or negative infinity, and values outside the target lane's range trap.
 - `i32`/`i64` widening follows the source signedness; narrowing from `i64` to the `i32` lane wraps.
-- Casts to `u8`/`u16` mask to the low 8/16 bits. Casts to `i8`/`i16` keep the low bits and sign-extend them in the `i32` lane.
+- Integer casts to `u8`/`u16` mask to the low 8/16 bits. Integer casts to `i8`/`i16` keep the low bits and sign-extend them in the `i32` lane.
+- Float-to-sub-word casts truncate first and then mask to the low 8/16 bits for both signed and unsigned targets; they do not apply a final sign extension. For example, `-1.5 as i8` produces the `i32`-lane value `255`.
 - `f32`/`f64` conversions demote or promote using WebAssembly's floating-point semantics.
 - Numeric casts that only change the Maple type while retaining the same full-width WebAssembly lane do not change the bits.
 
@@ -340,7 +368,7 @@ while (n > 0) {
 
 ### Switch
 
-Integer dispatch via `br_table`. Each case body is a block. Cases do not fall through. Use `break` to exit the switch without returning, or `return` to exit the enclosing function. `continue` inside a switch targets the nearest enclosing loop.
+The selector is evaluated exactly once, then cases are tested in source order through equality checks and conditional branches. Cases do not fall through. Use `break` to exit the switch without returning, or `return` to exit the enclosing function. `continue` inside a switch targets the nearest enclosing loop.
 
 ```maple
 switch (x) {
@@ -395,7 +423,9 @@ Struct literal field values can be full expressions, not just literals:
 let p: Point = { x = a + 1, y = add(2, 3) };
 ```
 
-For **global** struct literals, literal-valued fields are encoded in static data at compile time. Expression-valued fields are initialized at runtime once, guarded by a compiler-generated flag before exported function bodies execute.
+Struct literals are currently legal only as the direct initializer of a local or module-scope binding. Argument, return, and other nested positions parse but are checker-rejected with `struct literals are only supported as initializers`. General inline struct values are undecided.
+
+For **global** struct literals, literal-valued fields are encoded in static data at compile time. Expression-valued fields are initialized once by the WebAssembly `start` function during instantiation.
 
 ### Member access
 
@@ -524,7 +554,7 @@ Tier 2 functions use range reduction and short polynomials; expect roughly **1e-
 
 ### Memory standard library (`"memory"`)
 
-The bundled `"memory"` module exports `malloc`, `free`, `realloc`, and `heap_init` to other Maple modules. When the allocator is included, the compiler places `heap_init(align8(finalDataEnd))` first in the guarded initialization prologue. It runs once, immediately before the first entry-module exported function body executes, rather than when the WebAssembly module is instantiated.
+The bundled `"memory"` module exports `malloc`, `free`, `realloc`, and `heap_init` to other Maple modules. When the allocator is included, the compiler places `heap_init(align8(finalDataEnd))` first in the WebAssembly `start` function. It runs during module instantiation, before other deferred initializers and before any export can be called.
 
 `heap_init` is a Maple export for cross-module use, but the standard-library function is not itself a WebAssembly host export because only entry-module exports are host-visible. Calling `heap_init(data_end)` explicitly resets the allocator to `align8(data_end)`, discards the free list, and invalidates all previously returned allocations.
 
@@ -568,6 +598,11 @@ Maple performs a static type-checking pass after parsing. Errors are reported wi
 8. **Integer literal ranges** — literals are checked against the type required by their surrounding expression.
 9. **Array literal elements** — every element is checked for compatibility with the declared element type; nested array literals remain unsupported.
 10. **Function values** — function signatures, indirect-call arity, and function-type assignments are checked.
+11. **Resolved calls and value shapes** — an unknown callee reports `Undefined function '<name>'`; a void call used where a value is required reports `void call used as a value`.
+12. **Member and index totality** — scalar member access reports `type 'T' has no members`, indexing a non-array reports `type 'T' is not indexable`, and indexes outside the WebAssembly `i32` lane report `array index must be an i32-lane value`. `u32`, sub-word integers, and `bool` remain valid indexes because they use the `i32` lane; `i64`, `u64`, `f32`, and `f64` do not.
+13. **Operator domains** — arithmetic, negation, and increment/decrement require numeric operands and report `operator 'OP' requires numeric operands`; bitwise and shift operators require integer operands and report `operator 'OP' requires integer operands`. Compound assignments use the same domain checks.
+14. **Declaration totality** — unknown annotations and cast targets report `unknown type 'T'`; a non-void function that can fall through reports `function 'f' must return 'T' on all paths`. A binding's initializer resolves in the surrounding scope before the new binding enters scope.
+15. **Mutation and statement positions** — assignments require an lvalue, are valid only as statements, preserve assignment compatibility and `const` checks, and report `invalid assignment target` or `assignment is a statement` for those respective violations.
 
 ---
 

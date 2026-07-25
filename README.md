@@ -15,9 +15,10 @@ binary supplied by its `wabt` development dependency.
 
 ## Compilation pipeline
 
-The compiler parses the entry module and its dependency graph, type-checks each
-module, merges the whole program into one deterministic WAT module, and uses the
-project-local `wat2wasm` binary to produce the final `.wasm` file.
+The compiler parses the entry module and its dependency graph, type-checks and
+annotates each module, merges the whole program, lowers it to typed IR, runs the
+IR pass hook, validates the IR, prints WAT, and uses the project-local
+`wat2wasm` binary to produce the final `.wasm` file.
 
 ## Usage
 
