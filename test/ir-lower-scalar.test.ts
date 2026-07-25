@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import type { ModuleMeta } from "../src/compiler/emitters/emitter.types";
-import {
-  collectFnReferences,
-  emitModule,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
+import type { ModuleMeta } from "../src/compiler/metadata";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { lowerModule } from "../src/ir/lower";
 import { printWat } from "../src/ir/print-wat";
@@ -39,23 +35,18 @@ function checked(source: string): CheckedProgram {
   return { ast, meta };
 }
 
-function lowered(source: string): ReturnType<typeof lowerModule> & { oldWat: string; wat: string } {
+function lowered(source: string): ReturnType<typeof lowerModule> & { wat: string } {
   const { ast, meta } = checked(source);
   const result = lowerModule(ast, meta, { importMemory: false });
   assert.deepEqual(validateModule(result.module), []);
   return {
     ...result,
-    oldWat: emitModule(ast, meta, { importMemory: false }).buildWat(),
     wat: printWat(result.module),
   };
 }
 
 function differential(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
-  const { oldWat, wat } = lowered(source);
-  const expected = runExport(oldWat, exportName, args);
-  const actual = runExport(wat, exportName, args);
-  assert.deepEqual(actual, expected);
-  return actual;
+  return runExport(lowered(source).wat, exportName, args);
 }
 
 describe("IR scalar lowering: integers and casts", () => {
@@ -126,8 +117,7 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.equal(differential(source, "f64ToI64"), -6n);
     assert.equal(differential(source, "f64ToU64"), 6n);
     assert.equal(Number(differential(source, "u32Bits")) >>> 0, 0xffff_ffff);
-    const { oldWat, wat } = lowered(source);
-    assert.throws(() => runExport(oldWat, "trapUnsigned"), WebAssembly.RuntimeError);
+    const { wat } = lowered(source);
     assert.throws(() => runExport(wat, "trapUnsigned"), WebAssembly.RuntimeError);
   });
 

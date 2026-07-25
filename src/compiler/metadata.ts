@@ -1,5 +1,7 @@
-import type { ASTExpression } from "../../parser/ast/types/ast.type";
-import type { StructMember } from "../../shared/types";
+import { structLayout } from "../ir/layout";
+import type { ASTExpression } from "../parser/ast/types/ast.type";
+import type { StructMember } from "../shared/types";
+import { sizeofType } from "../shared/types";
 
 export type FnTypeKey = string;
 
@@ -18,21 +20,10 @@ export type FnTableEntry = {
   isLambda: boolean;
 };
 
-export type LambdaLiftedFn = {
-  syntheticName: string;
-  ordinal: number;
-  captures: Array<{ name: string; type: string; envOffset: number }>;
-  envSize: number;
-  signatureKey: FnTypeKey;
-};
-
 export type VariableMeta = {
   name: string;
-  scope: "global" | "local" | "memory" | "param" | "env";
+  scope: "global" | "local" | "param";
   type: "i32" | "f32" | "bool" | `*${string}` | `${string}[]` | string;
-  addr?: number;
-  offset?: number;
-  envOffset?: number;
 };
 
 export type FunctionMeta = {
@@ -78,54 +69,27 @@ export type ImportMeta = {
   mapleParams?: string[];
   mapleResults?: string[];
 };
-export type ModuleDataMeta = {
-  name?: string;
-  addr: number;
-  bytes: string;
-  alignment?: number;
-  pointerOffsets?: number[];
-};
-
-// Initializer that runs once at startup.
-// "memory" writes a struct-literal field, "global" assigns a non-const global.
-export type DeferredGlobalInitPayload =
+export type DeferredGlobalInit =
   | {
       kind: "memory";
-      baseAddr: number;
-      offset: number;
-      fieldType: string;
-      expr: ASTExpression;
+      id: string;
+      owner: string;
     }
   | {
       kind: "global";
+      id: string;
+      owner: string;
       name: string;
       type: string;
       expr: ASTExpression;
     }
   | {
       kind: "call";
+      id: string;
+      owner: string;
       name: string;
       args: Array<{ type: "i32"; value: number }>;
     };
-
-export type DeferredGlobalInit = DeferredGlobalInitPayload & {
-  id?: string;
-  owner?: string;
-};
-
-export type FunctionContext = {
-  name: string;
-  params: Record<string, VariableMeta>;
-  locals: Record<string, VariableMeta>;
-  labels: { break?: string; loop?: string }[];
-  /** Total bytes reserved on the shadow stack for this function frame (0 if none). */
-  frameSize: number;
-  /** Byte offset of each local struct variable from `global.get $__sp` right after prologue. */
-  structFrameOffsets: Record<string, number>;
-  // Lexical scope stack (innermost last) mapping source names to unique
-  // WASM local names; a `let` binds as it is emitted.
-  scopes: Array<Map<string, string>>;
-};
 
 export type ModuleMeta = {
   name: string;
@@ -134,15 +98,9 @@ export type ModuleMeta = {
   imports: Record<string, ImportMeta>;
   exports: Record<string, ExportMeta>;
   structs: Record<string, StructData>;
-  data: Array<ModuleDataMeta>;
-  stringPool: Record<string, number>;
-  dataPtr: number;
-  memoryMinimumPages?: number;
-  closureAllocator?: string;
   deferredGlobalInits: DeferredGlobalInit[];
   fnTable: Map<string, FnTableEntry>;
   fnSignatures: Map<FnTypeKey, FnSignature>;
-  liftedLambdas: LambdaLiftedFn[];
   hasFnTypedSurface: boolean;
   needsFnrefCreation: boolean;
 };
@@ -155,3 +113,21 @@ export type StructData = {
   size: number;
   exported?: boolean | undefined;
 };
+
+export function createStructData(
+  name: string,
+  members: Record<string, { name: string; type: string }>,
+  exported = false,
+): StructData {
+  const layout = structLayout(members);
+  const laidOutMembers: Record<string, StructMember> = {};
+  for (const member of layout.members) {
+    laidOutMembers[member.name] = {
+      name: member.name,
+      type: member.mapleType,
+      offset: member.offset,
+      size: sizeofType(member.mapleType),
+    };
+  }
+  return { name, members: laidOutMembers, size: layout.size, exported };
+}

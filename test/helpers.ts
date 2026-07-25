@@ -4,12 +4,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { compiler, linkStdlibImports, printValidatedModule } from "../src/compiler/compiler";
 import {
-  collectFnReferences,
-  type EmitOptions,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
+  type CompilerOptions,
+  compiler,
+  linkStdlibImports,
+  printValidatedModule,
+} from "../src/compiler/compiler";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { lowerModule } from "../src/ir/lower";
 import { Parser } from "../src/parser/Parser";
@@ -50,7 +51,7 @@ export function maybeTest(name: string, fn: () => void | Promise<void>): void {
   }
 }
 
-export function compile(src: string, options: EmitOptions = { importMemory: false }): string {
+export function compile(src: string, options: CompilerOptions = { importMemory: false }): string {
   const parser = new Parser(src);
   const ast = parser.parse("integration");
   assert.equal(

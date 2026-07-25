@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import type { ModuleMeta } from "../src/compiler/emitters/emitter.types";
-import { buildMergedAst, emitMergedProgram } from "../src/compiler/emitters/merge";
-import { buildMergedProgram } from "../src/compiler/emitters/merge-model";
-import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
 import type { MapleError } from "../src/compiler/errors";
+import { buildMergedAst } from "../src/compiler/merge";
+import { buildMergedProgram } from "../src/compiler/merge-model";
+import type { ModuleMeta } from "../src/compiler/metadata";
 import type { ModuleGraph, ModuleRecord } from "../src/compiler/module-graph";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import type { ASTProgram } from "../src/parser/ast/ASTProgram";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
@@ -383,18 +383,6 @@ describe("TypeChecker: resolved annotations", () => {
     assert.match(serialized, /"kind":"local","name":"local"/);
     assert.match(serialized, /"kind":"param","name":"pair"/);
     assert.doesNotMatch(serialized, /"kind":"import"/);
-  });
-
-  test("annotations do not change merged WAT emission", () => {
-    const graph = linkedProject();
-    const entryRun = onlyFunction(graph.modules.get("main")!.ast);
-    entryRun.fnExpr.body.statements.splice(1, 1);
-    const before = emitMergedProgram(buildMergedProgram(graph));
-    for (const module of graph.modules.values()) {
-      assert.deepEqual(typeCheck(module.ast, module.data), []);
-    }
-    const after = emitMergedProgram(buildMergedProgram(graph));
-    assert.equal(after, before);
   });
 });
 

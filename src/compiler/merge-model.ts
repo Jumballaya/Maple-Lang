@@ -1,41 +1,40 @@
-import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression";
-import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression";
-import { CallExpression } from "../../parser/ast/expressions/CallExpression";
-import { CastExpression } from "../../parser/ast/expressions/CastExpression";
-import { FunctionLiteralExpression } from "../../parser/ast/expressions/FunctionLiteralExpression";
-import { Identifier } from "../../parser/ast/expressions/Identifier";
-import { IndexExpression } from "../../parser/ast/expressions/IndexExpression";
-import { InfixExpression } from "../../parser/ast/expressions/InfixExpression";
-import { MemberExpression } from "../../parser/ast/expressions/MemberExpression";
-import { PointerMemberExpression } from "../../parser/ast/expressions/PointerMemberExpression";
-import { PostfixExpression } from "../../parser/ast/expressions/PostfixExpression";
-import { PrefixExpression } from "../../parser/ast/expressions/PrefixExpression";
-import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral";
-import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression";
-import { BlockStatement } from "../../parser/ast/statements/BlockStatement";
-import { ExpressionStatement } from "../../parser/ast/statements/ExpressionStatement";
-import { ForStatement } from "../../parser/ast/statements/ForStatement";
-import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement";
-import { IfStatement } from "../../parser/ast/statements/IfStatement";
-import { LetStatement } from "../../parser/ast/statements/LetStatement";
-import { ReturnStatement } from "../../parser/ast/statements/ReturnStatement";
-import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
-import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
-import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
-import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
-import { alignTo, type StructMember } from "../../shared/types";
-import { getIntrinsic } from "../intrinsics";
-import { minimumMemoryPages } from "../MapleModule";
-import type { ModuleGraph, ModuleRecord } from "../module-graph";
-import { canonicalFnType, isFnType, parseFnType, valueTypeToWasm } from "./emit.types";
+import { ArrayLiteralExpression } from "../parser/ast/expressions/ArrayLiteralExpression";
+import { AssignmentExpression } from "../parser/ast/expressions/AssignmentExpression";
+import { CallExpression } from "../parser/ast/expressions/CallExpression";
+import { CastExpression } from "../parser/ast/expressions/CastExpression";
+import { FunctionLiteralExpression } from "../parser/ast/expressions/FunctionLiteralExpression";
+import { Identifier } from "../parser/ast/expressions/Identifier";
+import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
+import { InfixExpression } from "../parser/ast/expressions/InfixExpression";
+import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
+import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
+import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
+import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
+import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
+import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../parser/ast/statements/ForStatement";
+import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
+import { IfStatement } from "../parser/ast/statements/IfStatement";
+import { LetStatement } from "../parser/ast/statements/LetStatement";
+import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
+import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
+import { TuplePattern } from "../parser/ast/statements/TuplePattern";
+import { WhileStatement } from "../parser/ast/statements/WhileStatement";
+import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
+import type { StructMember } from "../shared/types";
+import { getIntrinsic } from "./intrinsics";
 import type {
   DeferredGlobalInit,
   FnSignature,
   FunctionMeta,
   StructData,
   VariableMeta,
-} from "./emitter.types";
+} from "./metadata";
+import type { ModuleGraph, ModuleRecord } from "./module-graph";
 import { analyzeReachability, type ReachableSet } from "./reachability";
+import { canonicalFnType, isFnType, parseFnType, valueTypeToWasm } from "./types";
 
 export type DeclarationEdges = {
   calls: string[];
@@ -43,7 +42,6 @@ export type DeclarationEdges = {
   globalReads: string[];
   globalWrites: string[];
   runtimeHelpers: string[];
-  ownedData: string[];
 };
 
 type DeclarationBase = {
@@ -86,32 +84,11 @@ export type MergedStruct = {
   meta: StructData;
 };
 
-export type MergedDataSegment = {
-  id: string;
-  moduleKey: string;
-  sourceAddress: number;
-  address: number;
-  size: number;
-  bytes: string;
-  alignment: number;
-  pointerOffsets: number[];
-};
-
-export type MergedDataAllocation = {
-  id: string;
-  moduleKey: string;
-  owner: string;
-  kind: "string" | "array" | "struct";
-  address: number;
-  segmentIds: string[];
-};
-
 export type MergedStartupInitializer = {
   id: string;
   moduleKey: string;
   owner: string;
   initializer: DeferredGlobalInit;
-  targetAddress?: number;
 };
 
 export type MergedFnTableEntry = {
@@ -140,12 +117,6 @@ export type MergedProgram = {
   exports: Map<string, string>;
   imports: Map<string, string>;
   externalImports: Array<{ module: "runtime"; name: "memory" }>;
-  data: MergedDataSegment[];
-  dataEnd: number;
-  memoryMinimumPages: number;
-  dataAddresses: Map<string, Map<number, number>>;
-  dataAllocations: Map<string, MergedDataAllocation>;
-  dataOwners: Map<string, string>;
   startupInitializers: MergedStartupInitializer[];
   fnTable: {
     provisional: true;
@@ -173,7 +144,6 @@ function emptyEdges(): DeclarationEdges {
     globalReads: [],
     globalWrites: [],
     runtimeHelpers: [],
-    ownedData: [],
   };
 }
 
@@ -198,24 +168,6 @@ function dependencyPostOrder(graph: ModuleGraph): ModuleRecord[] {
 
   visit(graph.entryKey);
   return ordered;
-}
-
-function segmentSize(bytes: string): number {
-  return Math.floor(bytes.length / 3);
-}
-
-function bytesToI32(bytes: string, offset: number): number | undefined {
-  const values = bytes
-    .split("\\")
-    .filter(Boolean)
-    .map((value) => Number.parseInt(value, 16));
-  if (values.length < offset + 4) return undefined;
-  return (
-    (values[offset] ?? 0) |
-    ((values[offset + 1] ?? 0) << 8) |
-    ((values[offset + 2] ?? 0) << 16) |
-    ((values[offset + 3] ?? 0) << 24)
-  );
 }
 
 export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
@@ -303,36 +255,9 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     );
   }
 
-  const data: MergedDataSegment[] = [];
-  const dataAddresses = new Map<string, Map<number, number>>();
-  const dataByModule = new Map<string, MergedDataSegment[]>();
-  for (const module of orderedModules) {
-    const addresses = new Map<number, number>();
-    const moduleData: MergedDataSegment[] = [];
-    dataAddresses.set(module.key, addresses);
-    dataByModule.set(module.key, moduleData);
-    for (let index = 0; index < module.data.data.length; index++) {
-      const source = module.data.data[index]!;
-      const entry: MergedDataSegment = {
-        id: `${module.manglePrefix}$$data$${index}`,
-        moduleKey: module.key,
-        sourceAddress: source.addr,
-        address: source.addr,
-        size: segmentSize(source.bytes),
-        bytes: source.bytes,
-        alignment: source.alignment ?? 1,
-        pointerOffsets: source.pointerOffsets ?? [],
-      };
-      data.push(entry);
-      moduleData.push(entry);
-      addresses.set(source.addr, source.addr);
-    }
-  }
-
   const declarations = new Map<string, MergedDeclaration>();
   const functions = new Map<string, MergedFunction>();
   const globals = new Map<string, MergedGlobal>();
-  const dataAllocations = new Map<string, MergedDataAllocation>();
   const runtimeHelpers = new Map<string, MergedRuntimeHelper>();
 
   function ensureHelper(helper: MergedRuntimeHelper): void {
@@ -395,85 +320,8 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     return undefined;
   }
 
-  function expressionType(
-    module: ModuleRecord,
-    scopes: Scope,
-    expression: ASTExpression,
-  ): string | undefined {
-    if (expression instanceof Identifier) {
-      const name = expression.tokenLiteral();
-      const local = localType(scopes, name);
-      if (local) return resolveType(module, local);
-      const global = module.data.globals[name];
-      if (global) return resolveType(module, global.type);
-      const importedGlobal = importedTarget(module, name, "global");
-      if (importedGlobal) return globals.get(importedGlobal)?.resolvedType;
-      if (importKinds.get(module.key)?.get(name) === "struct") {
-        return imports.get(mangledName(module, name));
-      }
-    }
-    if (expression instanceof CallExpression) {
-      const localResult = module.data.functions[expression.func]?.mapleResults[0];
-      if (localResult) return resolveType(module, localResult);
-      const importedFunction = importedTarget(module, expression.func, "func");
-      if (importedFunction) return functions.get(importedFunction)?.resolvedResults[0];
-    }
-    if (expression instanceof StringLiteralExpression) return "string";
-    if (expression instanceof ArrayLiteralExpression)
-      return `${resolveType(module, expression.memberType)}[]`;
-    if (expression instanceof StructLiteralExpression) return resolveType(module, expression.name);
-    if (expression instanceof CastExpression) return resolveType(module, expression.targetType);
-    if (expression instanceof IndexExpression) {
-      const containerType = expressionType(module, scopes, expression.left);
-      if (containerType?.endsWith("[]")) return containerType.slice(0, -2);
-    }
-    if (expression instanceof MemberExpression || expression instanceof PointerMemberExpression) {
-      const parentType = expressionType(module, scopes, expression.parent)?.replace(/^\*/, "");
-      if (parentType) return structs.get(parentType)?.members[expression.member]?.resolvedType;
-    }
-    if (expression instanceof AssignmentExpression) {
-      return expressionType(module, scopes, expression.left);
-    }
-    if (expression instanceof PrefixExpression && expression.right) {
-      return expressionType(module, scopes, expression.right);
-    }
-    if (expression instanceof PostfixExpression && expression.left) {
-      return expressionType(module, scopes, expression.left);
-    }
-    return undefined;
-  }
-
-  function claimData(
-    module: ModuleRecord,
-    owner: MergedDeclaration,
-    kind: MergedDataAllocation["kind"],
-    sourceAddress: number,
-  ): void {
-    const address = dataAddresses.get(module.key)?.get(sourceAddress);
-    if (address === undefined) return;
-    const id = `${module.manglePrefix}$$allocation$${sourceAddress}`;
-    pushUnique(owner.edges.ownedData, id);
-    if (dataAllocations.has(id)) return;
-    const segments = dataByModule.get(module.key) ?? [];
-    const primary = [...segments]
-      .reverse()
-      .find((segment) => segment.sourceAddress === sourceAddress);
-    const segmentIds = primary ? [primary.id] : [];
-    if (primary && (kind === "string" || kind === "array")) {
-      const payloadAddress = bytesToI32(primary.bytes, 4);
-      const payload = segments.find(
-        (segment) => segment.id !== primary.id && segment.sourceAddress === payloadAddress,
-      );
-      if (payload) segmentIds.unshift(payload.id);
-    }
-    dataAllocations.set(id, {
-      id,
-      moduleKey: module.key,
-      owner: owner.name,
-      kind,
-      address,
-      segmentIds,
-    });
+  function expressionType(module: ModuleRecord, expression: ASTExpression): string | undefined {
+    return expression.resolvedType ? resolveType(module, expression.resolvedType) : undefined;
   }
 
   function addHelperEdge(owner: MergedDeclaration, helperName: string): void {
@@ -505,8 +353,15 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       for (const statement of block.statements) walkStatement(statement, blockScopes);
     }
 
-    function recordIdentifier(name: string, mode: "read" | "write", currentScopes: Scope): void {
-      if (localType(currentScopes, name) !== undefined) return;
+    function recordIdentifier(
+      expression: Identifier,
+      mode: "read" | "write",
+      currentScopes: Scope,
+    ): void {
+      const declaration = (expression as ASTExpression).resolvedDecl;
+      if (declaration?.kind === "local" || declaration?.kind === "param") return;
+      const name = declaration?.name ?? expression.tokenLiteral();
+      if (!declaration && localType(currentScopes, name) !== undefined) return;
       const global = globalTarget(module, name);
       if (global) {
         pushUnique(mode === "read" ? owner.edges.globalReads : owner.edges.globalWrites, global);
@@ -536,16 +391,15 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       currentScopes: Scope,
     ): void {
       if (expression instanceof Identifier) {
-        const name = expression.tokenLiteral();
-        recordIdentifier(name, "write", currentScopes);
-        if (compound) recordIdentifier(name, "read", currentScopes);
+        recordIdentifier(expression, "write", currentScopes);
+        if (compound) recordIdentifier(expression, "read", currentScopes);
         return;
       }
       if (expression instanceof IndexExpression) {
         ensureHelper({ name: "__elem_addr", kind: "array", calls: [], requirements: [] });
         addHelperEdge(owner, "__elem_addr");
         if (expression.left instanceof Identifier) {
-          recordIdentifier(expression.left.tokenLiteral(), "write", currentScopes);
+          recordIdentifier(expression.left, "write", currentScopes);
         }
         walkExpression(expression.left, currentScopes);
         walkExpression(expression.index, currentScopes);
@@ -553,7 +407,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       }
       if (expression instanceof MemberExpression || expression instanceof PointerMemberExpression) {
         if (expression.parent instanceof Identifier) {
-          recordIdentifier(expression.parent.tokenLiteral(), "write", currentScopes);
+          recordIdentifier(expression.parent, "write", currentScopes);
         }
         walkExpression(expression.parent, currentScopes);
         return;
@@ -563,7 +417,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
 
     function walkExpression(expression: ASTExpression, currentScopes: Scope): void {
       if (expression instanceof Identifier) {
-        recordIdentifier(expression.tokenLiteral(), "read", currentScopes);
+        recordIdentifier(expression, "read", currentScopes);
         return;
       }
       if (expression instanceof CallExpression) {
@@ -571,35 +425,18 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         if (lexicalType && isFnType(resolveType(module, lexicalType))) {
           registerFnType(lexicalType);
         } else if ((expression as ASTExpression).resolvedCallTarget?.kind === "field") {
-          registerFnType(
-            (
-              (expression as ASTExpression).resolvedCallTarget as Extract<
-                NonNullable<ASTExpression["resolvedCallTarget"]>,
-                { kind: "field" }
-              >
-            ).fnType,
-          );
-        } else {
-          const receiver = expression.args[0];
-          if (receiver instanceof Identifier) {
-            const sourceType = localType(currentScopes, receiver.tokenLiteral())?.replace(
-              /^\*/,
-              "",
-            );
-            const identity = sourceType ? resolveType(module, sourceType) : undefined;
-            const prefix = sourceType ? `${sourceType}_` : "";
-            const memberName =
-              prefix && expression.func.startsWith(prefix)
-                ? expression.func.slice(prefix.length)
-                : undefined;
-            const fieldType =
-              identity && memberName
-                ? structs.get(identity)?.members[memberName]?.resolvedType
-                : undefined;
-            if (fieldType) registerFnType(fieldType);
-          }
+          const target = (expression as ASTExpression).resolvedCallTarget;
+          if (target?.kind === "field") registerFnType(target.fnType);
         }
+        const callDeclaration = (expression as ASTExpression).resolvedDecl;
         if (
+          callDeclaration &&
+          (callDeclaration.kind === "function" || callDeclaration.kind === "import")
+        ) {
+          const target = functionTarget(module, callDeclaration.name);
+          if (target) pushUnique(owner.edges.calls, target);
+        } else if (
+          !callDeclaration &&
           localType(currentScopes, expression.func) === undefined &&
           !getIntrinsic(expression.func)
         ) {
@@ -623,8 +460,8 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       }
       if (expression instanceof InfixExpression) {
         if (expression.operator === "==" || expression.operator === "!=") {
-          const leftType = expressionType(module, currentScopes, expression.left);
-          const rightType = expressionType(module, currentScopes, expression.right);
+          const leftType = expressionType(module, expression.left);
+          const rightType = expressionType(module, expression.right);
           if (leftType && leftType === rightType) {
             if (leftType === "string") {
               ensureHelper({ name: "__string_eq", kind: "string", calls: [], requirements: [] });
@@ -655,16 +492,13 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         return;
       }
       if (expression instanceof StringLiteralExpression) {
-        claimData(module, owner, "string", expression.location);
         return;
       }
       if (expression instanceof ArrayLiteralExpression) {
-        claimData(module, owner, "array", expression.location);
         for (const element of expression.elements) walkExpression(element, currentScopes);
         return;
       }
       if (expression instanceof StructLiteralExpression) {
-        claimData(module, owner, "struct", expression.location);
         for (const member of Object.values(expression.members))
           walkExpression(member, currentScopes);
         return;
@@ -810,46 +644,52 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     (module) => module.bundledStdlib === "memory" && module.data.exports.heap_init?.kind === "func",
   );
   const heapInitializer: MergedStartupInitializer | undefined = memoryModule
-    ? {
-        id: `${memoryModule.manglePrefix}$$heap-init`,
-        moduleKey: memoryModule.key,
-        owner: mangledName(memoryModule, "heap_init"),
-        initializer: {
-          kind: "call",
-          name: mangledName(memoryModule, "heap_init"),
-          args: [{ type: "i32", value: 0 }],
-        },
-      }
+    ? (() => {
+        const id = `${memoryModule.manglePrefix}$$heap-init`;
+        const owner = mangledName(memoryModule, "heap_init");
+        return {
+          id,
+          moduleKey: memoryModule.key,
+          owner,
+          initializer: {
+            kind: "call",
+            id,
+            owner,
+            name: owner,
+            args: [{ type: "i32", value: 0 }],
+          },
+        };
+      })()
     : undefined;
   for (const module of orderedModules) {
     for (let index = 0; index < module.data.deferredGlobalInits.length; index++) {
       const initializer = module.data.deferredGlobalInits[index]!;
-      let sourceName = initializer.kind === "global" ? initializer.name : undefined;
-      if (!sourceName && initializer.kind === "memory") {
-        sourceName = module.ast.statements
-          .find(
-            (statement): statement is LetStatement =>
-              statement instanceof LetStatement &&
-              !(statement.pattern instanceof TuplePattern) &&
-              statement.expression instanceof StructLiteralExpression &&
-              statement.expression.location === initializer.baseAddr,
-          )
-          ?.pattern.tokenLiteral();
-      }
-      const owner = sourceName
-        ? mangledName(module, sourceName)
-        : `${module.manglePrefix}$$startup$${index}`;
-      const mergedInitializer: MergedStartupInitializer = {
-        id: `${module.manglePrefix}$$init$${index}`,
+      const id = `${module.manglePrefix}$$init$${index}`;
+      const owner = mangledName(module, initializer.owner);
+      const mergedPayload: DeferredGlobalInit =
+        initializer.kind === "memory"
+          ? { kind: "memory", id, owner }
+          : initializer.kind === "global"
+            ? {
+                ...initializer,
+                id,
+                owner,
+                name: mangledName(module, initializer.name),
+              }
+            : {
+                ...initializer,
+                id,
+                owner,
+                name:
+                  functionTarget(module, initializer.name) ?? mangledName(module, initializer.name),
+              };
+      const startup: MergedStartupInitializer = {
+        id,
         moduleKey: module.key,
         owner,
-        initializer,
+        initializer: mergedPayload,
       };
-      if (initializer.kind === "memory") {
-        const targetAddress = dataAddresses.get(module.key)?.get(initializer.baseAddr);
-        if (targetAddress !== undefined) mergedInitializer.targetAddress = targetAddress;
-      }
-      startupInitializers.push(mergedInitializer);
+      startupInitializers.push(startup);
     }
   }
 
@@ -878,7 +718,6 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   const reachabilityInput = {
     declarations,
     exports,
-    dataAllocations,
     startupInitializers,
     fnTableEntries: fnEntries,
     runtimeHelpers,
@@ -888,44 +727,6 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   if (heapInitializer && allocatorName && reachability.reachable.functions.has(allocatorName)) {
     startupInitializers.unshift(heapInitializer);
     reachability = analyzeReachability(reachabilityInput);
-  }
-
-  const ownedSegmentIds = new Set<string>();
-  const liveSegmentIds = new Set<string>();
-  for (const allocation of dataAllocations.values()) {
-    const ownerIsReachable =
-      reachability.reachable.functions.has(allocation.owner) ||
-      reachability.reachable.globals.has(allocation.owner);
-    for (const segmentId of allocation.segmentIds) {
-      ownedSegmentIds.add(segmentId);
-      if (ownerIsReachable) liveSegmentIds.add(segmentId);
-    }
-  }
-  const liveData = data.filter(
-    (segment) => !ownedSegmentIds.has(segment.id) || liveSegmentIds.has(segment.id),
-  );
-
-  for (const addresses of dataAddresses.values()) addresses.clear();
-  let dataCursor = 65536;
-  for (const segment of liveData) {
-    dataCursor = alignTo(dataCursor, segment.alignment);
-    segment.address = dataCursor;
-    dataAddresses.get(segment.moduleKey)?.set(segment.sourceAddress, segment.address);
-    dataCursor += segment.size;
-  }
-
-  for (const allocation of dataAllocations.values()) {
-    const address = dataAddresses.get(allocation.moduleKey)?.get(allocation.address);
-    if (address !== undefined) allocation.address = address;
-  }
-  for (const startup of startupInitializers) {
-    if (startup.initializer.kind === "call" && startup.id.endsWith("$$heap-init")) {
-      startup.initializer.args[0]!.value = alignTo(dataCursor, 8);
-    }
-    if (startup.initializer.kind === "memory") {
-      const targetAddress = dataAddresses.get(startup.moduleKey)?.get(startup.initializer.baseAddr);
-      if (targetAddress !== undefined) startup.targetAddress = targetAddress;
-    }
   }
 
   const reachableSignatures = new Map<string, FnSignature>();
@@ -963,12 +764,6 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
     exports,
     imports,
     externalImports: [{ module: "runtime", name: "memory" }],
-    data: liveData,
-    dataEnd: dataCursor,
-    memoryMinimumPages: minimumMemoryPages(dataCursor),
-    dataAddresses,
-    dataAllocations,
-    dataOwners: reachability.dataOwners,
     startupInitializers,
     fnTable: {
       provisional: true,

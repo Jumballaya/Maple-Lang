@@ -1,4 +1,4 @@
-import { isFnType, valueTypeToWasm } from "../compiler/emitters/emit.types";
+import { isFnType, valueTypeToWasm } from "../compiler/types";
 import type { StructMember } from "../shared/types";
 import { alignofType, alignTo, sizeofType } from "../shared/types";
 import type { StructLayout, StructLayoutMember } from "./ir";

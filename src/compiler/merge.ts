@@ -1,37 +1,35 @@
-import { ASTProgram } from "../../parser/ast/ASTProgram";
-import { ArrayLiteralExpression } from "../../parser/ast/expressions/ArrayLiteralExpression";
-import { AssignmentExpression } from "../../parser/ast/expressions/AssignmentExpression";
-import { CallExpression } from "../../parser/ast/expressions/CallExpression";
-import { CastExpression } from "../../parser/ast/expressions/CastExpression";
-import { FunctionLiteralExpression } from "../../parser/ast/expressions/FunctionLiteralExpression";
-import { Identifier } from "../../parser/ast/expressions/Identifier";
-import { IndexExpression } from "../../parser/ast/expressions/IndexExpression";
-import { InfixExpression } from "../../parser/ast/expressions/InfixExpression";
-import { MemberExpression } from "../../parser/ast/expressions/MemberExpression";
-import { PointerMemberExpression } from "../../parser/ast/expressions/PointerMemberExpression";
-import { PostfixExpression } from "../../parser/ast/expressions/PostfixExpression";
-import { PrefixExpression } from "../../parser/ast/expressions/PrefixExpression";
-import { StringLiteralExpression } from "../../parser/ast/expressions/StringLiteral";
-import { StructLiteralExpression } from "../../parser/ast/expressions/StructLiteralExpression";
-import { BlockStatement } from "../../parser/ast/statements/BlockStatement";
-import { ExpressionStatement } from "../../parser/ast/statements/ExpressionStatement";
-import { ForStatement } from "../../parser/ast/statements/ForStatement";
-import { FunctionStatement } from "../../parser/ast/statements/FunctionStatement";
-import { IfStatement } from "../../parser/ast/statements/IfStatement";
-import { ImportStatement } from "../../parser/ast/statements/ImportStatement";
-import { LetStatement } from "../../parser/ast/statements/LetStatement";
-import { ReturnStatement } from "../../parser/ast/statements/ReturnStatement";
-import { StructStatement } from "../../parser/ast/statements/StructStatement";
-import { SwitchStatement } from "../../parser/ast/statements/SwitchStatement";
-import { TuplePattern } from "../../parser/ast/statements/TuplePattern";
-import { WhileStatement } from "../../parser/ast/statements/WhileStatement";
-import type { ASTExpression, ASTStatement } from "../../parser/ast/types/ast.type";
-import { getIntrinsic } from "../intrinsics";
-import type { ModuleRecord } from "../module-graph";
-import { canonicalFnType, parseFnType } from "./emit.types";
-import type { DeferredGlobalInit, ModuleMeta, StructData } from "./emitter.types";
+import { ASTProgram } from "../parser/ast/ASTProgram";
+import { ArrayLiteralExpression } from "../parser/ast/expressions/ArrayLiteralExpression";
+import { AssignmentExpression } from "../parser/ast/expressions/AssignmentExpression";
+import { CallExpression } from "../parser/ast/expressions/CallExpression";
+import { CastExpression } from "../parser/ast/expressions/CastExpression";
+import { FunctionLiteralExpression } from "../parser/ast/expressions/FunctionLiteralExpression";
+import { Identifier } from "../parser/ast/expressions/Identifier";
+import { IndexExpression } from "../parser/ast/expressions/IndexExpression";
+import { InfixExpression } from "../parser/ast/expressions/InfixExpression";
+import { MemberExpression } from "../parser/ast/expressions/MemberExpression";
+import { PointerMemberExpression } from "../parser/ast/expressions/PointerMemberExpression";
+import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
+import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
+import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
+import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
+import { ForStatement } from "../parser/ast/statements/ForStatement";
+import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
+import { IfStatement } from "../parser/ast/statements/IfStatement";
+import { ImportStatement } from "../parser/ast/statements/ImportStatement";
+import { LetStatement } from "../parser/ast/statements/LetStatement";
+import { ReturnStatement } from "../parser/ast/statements/ReturnStatement";
+import { StructStatement } from "../parser/ast/statements/StructStatement";
+import { SwitchStatement } from "../parser/ast/statements/SwitchStatement";
+import { TuplePattern } from "../parser/ast/statements/TuplePattern";
+import { WhileStatement } from "../parser/ast/statements/WhileStatement";
+import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
+import { getIntrinsic } from "./intrinsics";
 import type { MergedProgram } from "./merge-model";
-import { emitModule } from "./module";
+import type { DeferredGlobalInit, ModuleMeta, StructData } from "./metadata";
+import type { ModuleRecord } from "./module-graph";
+import { canonicalFnType, parseFnType } from "./types";
 
 type Scope = Set<string>[];
 
@@ -174,20 +172,11 @@ function rewriteExpression(
   }
   if (expression instanceof ArrayLiteralExpression) {
     expression.memberType = rewriteType(model, module, expression.memberType);
-    expression.location =
-      model.dataAddresses.get(module.key)?.get(expression.location) ?? expression.location;
     for (const element of expression.elements) rewriteExpression(element, model, module, scopes);
-    return;
-  }
-  if (expression instanceof StringLiteralExpression) {
-    expression.location =
-      model.dataAddresses.get(module.key)?.get(expression.location) ?? expression.location;
     return;
   }
   if (expression instanceof StructLiteralExpression) {
     expression.name = structName(model, module, expression.name);
-    expression.location =
-      model.dataAddresses.get(module.key)?.get(expression.location) ?? expression.location;
     for (const member of Object.values(expression.members)) {
       rewriteExpression(member, model, module, scopes);
     }
@@ -279,32 +268,6 @@ function rewriteBlock(
   }
 }
 
-function rewriteData(
-  bytes: string,
-  addresses: Map<number, number>,
-  pointerOffsets: number[],
-): string {
-  const values = bytes
-    .split("\\")
-    .filter(Boolean)
-    .map((value) => Number.parseInt(value, 16));
-  for (const offset of pointerOffsets) {
-    if (offset < 0 || offset + 3 >= values.length) continue;
-    const source =
-      (values[offset] ?? 0) |
-      ((values[offset + 1] ?? 0) << 8) |
-      ((values[offset + 2] ?? 0) << 16) |
-      ((values[offset + 3] ?? 0) << 24);
-    const target = addresses.get(source >>> 0);
-    if (target === undefined) continue;
-    values[offset] = target & 0xff;
-    values[offset + 1] = (target >>> 8) & 0xff;
-    values[offset + 2] = (target >>> 16) & 0xff;
-    values[offset + 3] = (target >>> 24) & 0xff;
-  }
-  return values.map((value) => `\\${value.toString(16).padStart(2, "0")}`).join("");
-}
-
 function mergedStructs(model: MergedProgram): Record<string, StructData> {
   return Object.fromEntries(
     [...model.structs].map(([name, struct]) => [
@@ -381,20 +344,15 @@ export function buildMergedAst(model: MergedProgram): ASTProgram {
   return program;
 }
 
-function buildMeta(model: MergedProgram, includeLegacyData = true): ModuleMeta {
+function buildLoweringMeta(model: MergedProgram): ModuleMeta {
   const deferredGlobalInits: DeferredGlobalInit[] = model.startupInitializers.map((entry) => {
     const module = model.modules.get(entry.moduleKey)!;
     const initializer = clone(entry.initializer);
-    if (initializer.kind === "call") return { ...initializer, id: entry.id, owner: entry.owner };
-    rewriteExpression(initializer.expr, model, module, []);
     if (initializer.kind === "global") {
-      initializer.name = symbolName(model, module, initializer.name);
+      rewriteExpression(initializer.expr, model, module, []);
       initializer.type = rewriteType(model, module, initializer.type);
-    } else {
-      if (includeLegacyData) initializer.baseAddr = entry.targetAddress ?? initializer.baseAddr;
-      initializer.fieldType = rewriteType(model, module, initializer.fieldType);
     }
-    return { ...initializer, id: entry.id, owner: entry.owner };
+    return initializer;
   });
 
   const meta: ModuleMeta = {
@@ -421,21 +379,6 @@ function buildMeta(model: MergedProgram, includeLegacyData = true): ModuleMeta {
     imports: {},
     exports: {},
     structs: mergedStructs(model),
-    // data shaking: T24
-    data: includeLegacyData
-      ? model.data.map((entry) => ({
-          name: entry.id,
-          addr: entry.address,
-          bytes: rewriteData(
-            entry.bytes,
-            model.dataAddresses.get(entry.moduleKey) ?? new Map(),
-            entry.pointerOffsets,
-          ),
-        }))
-      : [],
-    stringPool: {},
-    dataPtr: includeLegacyData ? model.dataEnd : 65_536,
-    memoryMinimumPages: model.memoryMinimumPages,
     deferredGlobalInits,
     fnTable: new Map(
       model.fnTable.entries.map((entry) => [
@@ -450,7 +393,6 @@ function buildMeta(model: MergedProgram, includeLegacyData = true): ModuleMeta {
       ]),
     ),
     fnSignatures: new Map(model.fnTable.signatures),
-    liftedLambdas: [],
     hasFnTypedSurface: model.fnTable.hasFnTypedSurface,
     needsFnrefCreation: model.fnTable.needsFnrefCreation,
   };
@@ -474,37 +416,10 @@ export type MergedLoweringInput = {
 export function buildMergedLoweringInput(model: MergedProgram): MergedLoweringInput {
   const input: MergedLoweringInput = {
     ast: buildMergedAst(model),
-    meta: buildMeta(model, false),
+    meta: buildLoweringMeta(model),
     exportMap: new Map(model.exports),
   };
   const allocator = resolvedAllocator(model);
   if (allocator !== undefined) input.allocator = allocator;
   return input;
-}
-
-function publicExports(wat: string, model: MergedProgram): string {
-  let result = wat;
-  for (const [publicName, internalName] of model.exports) {
-    result = result.replaceAll(`(export "${internalName}")`, `(export "${publicName}")`);
-    result = result.replaceAll(
-      `(export "${internalName}" (global $${internalName}))`,
-      () => `(export "${publicName}" (global $${internalName}))`,
-    );
-  }
-  return result;
-}
-
-export function emitMergedProgram(
-  model: MergedProgram,
-  options: { importMemory: boolean } = { importMemory: false },
-): string {
-  const ast = buildMergedAst(model);
-  const meta = buildMeta(model);
-  const allocator = resolvedAllocator(model);
-  if (meta.needsFnrefCreation) {
-    if (!allocator) throw new Error("function references require the merged memory allocator");
-    meta.closureAllocator = allocator;
-  }
-  const wat = emitModule(ast, meta, options).buildWat();
-  return publicExports(wat, model);
 }

@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import {
-  f64CompareOp,
-  i64CompareOp,
-  valueTypeToWasm,
-  wasmLoadOp,
-  wasmStoreOp,
-} from "../src/compiler/emitters/emit.types";
+import { valueTypeToWasm } from "../src/compiler/types";
 import { sizeofType } from "../src/shared/types";
 
 describe("shared/types: sizeofType", () => {
@@ -63,7 +57,7 @@ describe("shared/types: sizeofType", () => {
   });
 });
 
-describe("emit.types: valueTypeToWasm and load/store", () => {
+describe("compiler/types: valueTypeToWasm", () => {
   test("i64 maps to wasm i64", () => {
     assert.equal(valueTypeToWasm("i64"), "i64");
   });
@@ -81,26 +75,5 @@ describe("emit.types: valueTypeToWasm and load/store", () => {
     assert.equal(valueTypeToWasm("f32"), "f32");
     assert.equal(valueTypeToWasm("u8"), "i32");
     assert.equal(valueTypeToWasm("bool"), "i32");
-  });
-
-  test("64-bit load/store op names", () => {
-    assert.equal(wasmLoadOp("i64"), "i64.load");
-    assert.equal(wasmStoreOp("i64"), "i64.store");
-    assert.equal(wasmLoadOp("u64"), "i64.load");
-    assert.equal(wasmStoreOp("u64"), "i64.store");
-    assert.equal(wasmLoadOp("f64"), "f64.load");
-    assert.equal(wasmStoreOp("f64"), "f64.store");
-  });
-
-  test("i64CompareOp signed less-than", () => {
-    assert.equal(i64CompareOp("<", true), "i64.lt_s");
-  });
-
-  test("i64CompareOp unsigned less-than", () => {
-    assert.equal(i64CompareOp("<", false), "i64.lt_u");
-  });
-
-  test("f64CompareOp greater-than", () => {
-    assert.equal(f64CompareOp(">"), "f64.gt");
   });
 });

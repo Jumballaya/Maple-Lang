@@ -9,24 +9,9 @@ import {
   printValidatedModule,
   resolveImportModule,
 } from "../src/compiler/compiler";
-import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
-import { emitExpression } from "../src/compiler/emitters/expression/expression";
-import { resolveStructMember } from "../src/compiler/emitters/expression/member";
-import {
-  collectFnReferences,
-  emitModule,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
-import { MapleError } from "../src/compiler/errors";
-import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { lowerModule } from "../src/ir/lower";
-import type { Token } from "../src/lexer/token.types";
-import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
-import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
-import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression";
-import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
-import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
 import { maybeTest, runExport, runMergedExport } from "./helpers";
 
@@ -553,172 +538,12 @@ describe("Emission: 64-bit widths and unsigned ops", () => {
   });
 });
 
-describe("legacy emitter unit (dies with T38)", () => {
-  function legacyCompile(src: string) {
-    const parser = new Parser(src);
-    const ast = parser.parse("test");
-    assert.equal(
-      parser.errors.length,
-      0,
-      `Parse errors: ${parser.errors.map((error) => error.message).join(", ")}`,
-    );
-    const meta = extractModuleMeta(ast);
-    collectFnReferences(ast, meta);
-    linkStdlibImports(meta);
-    const mod = emitModule(ast, meta);
-    return { ast, meta, mod, wat: mod.buildWat() };
-  }
-
-  test("resolved import with I_I emits i64 param and result in type", () => {
-    const p = new Parser(`
-      import callee from "m"
-      fn f(x: i64): i64 { return callee(x); }
-    `);
-    const ast = p.parse("test");
-    assert.equal(p.errors.length, 0);
-    const meta = extractModuleMeta(ast);
-    const callee = meta.imports.callee;
-    assert(callee);
-    callee.resolved = true;
-    callee.info = {
-      kind: "func",
-      signature: "I_I",
-    } as ExportMeta;
-    const wat = emitModule(ast, meta).buildWat();
-    assert(wat.includes("$I_I_type"), wat);
-    assert(wat.includes("(param i64)"), wat);
-    assert(wat.includes("(result i64)"), wat);
-  });
-
-  test("emitModule can request an imported memory", () => {
-    const p = new Parser("fn test(): void {}");
-    const ast = p.parse("test");
-    const meta = extractModuleMeta(ast);
-    const wat = emitModule(ast, meta, { importMemory: true }).buildWat();
-    assert(wat.includes('(import "runtime" "memory" (memory 2))'));
-    assert(!wat.includes('(memory (export "memory")'));
-  });
-
-  test("import emission includes import and type when import is resolved as function", () => {
-    const p = new Parser('import foo from "mod"');
-    const ast = p.parse("test");
-    assert.equal(p.errors.length, 0);
-    const meta = extractModuleMeta(ast);
-    const foo = meta.imports.foo;
-    assert(foo);
-    foo.resolved = true;
-    foo.info = {
-      kind: "func",
-      signature: "i_i",
-    } as ExportMeta;
-    const wat = emitModule(ast, meta).buildWat();
-    assert(wat.includes('(import "mod" "foo" (func $foo (type $i_i_type)))'));
-    assert(wat.includes("(type $i_i_type (func (param i32) (result i32)))"));
-  });
-
-  test("member access on an unsupported base shape errors", () => {
-    const token = {
-      type: "Identifier" as const,
-      literal: "x",
-      col: 0,
-      line: 0,
-      end: 0,
-      start: 0,
-    };
-    const nonSupported = new InfixExpression(
-      token,
-      "dummy" as unknown as ASTExpression,
-      "+",
-      "dummy" as unknown as ASTExpression,
-    );
-    const memberExpr = new MemberExpression(
-      token,
-      nonSupported as unknown as ASTExpression,
-      "field",
-    );
-    const meta = extractModuleMeta(new Parser("").parse("test"));
-    const emitter = new ModuleEmitter(meta);
-
-    assert.throws(() => resolveStructMember(memberExpr, emitter), {
-      message: /unsupported base/,
-    });
-  });
-
+describe("Static data extraction", () => {
   test("expression elements throw instead of silently encoding zero", () => {
-    assert.throws(
-      () => legacyCompile("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }"),
-      /array literal element must be a literal/,
-    );
-  });
-
-  test("void function with local struct and value return does not reference $__ret_tmp", () => {
-    // Emitter robustness path: type checker would reject this program, but
-    // emitter-only compile should not emit undeclared $__ret_tmp references.
-    const { wat } = legacyCompile(`
-      struct Point { x: i32, y: i32 }
-      fn test(): void {
-        let p: Point = { x = 1, y = 2 };
-        return 5;
-      }
-    `);
-    assert(!wat.includes("local.set $__ret_tmp"), `Must not set $__ret_tmp in void fn:\n${wat}`);
-    assert(!wat.includes("local.get $__ret_tmp"), `Must not get $__ret_tmp in void fn:\n${wat}`);
-    assert(wat.includes("(return (i32.const 5))"), `Missing direct value return:\n${wat}`);
-    assert(
-      wat.includes("(global.set $__sp (i32.add"),
-      `Missing SP restore before value return in void fn:\n${wat}`,
-    );
-  });
-
-  test("emitExpression throws clear MapleError for struct literal value-position use", () => {
-    const token: Token = { type: "LBrace", literal: "{", start: 0, end: 1, line: 1, col: 1 };
-    const fieldToken: Token = {
-      type: "IntegerLiteral",
-      literal: 1,
-      start: 7,
-      end: 8,
-      line: 1,
-      col: 8,
-    };
-    const expr = new StructLiteralExpression(token, "Point", {
-      x: new IntegerLiteralExpression(fieldToken, 1),
-    });
-    const emitter = new ModuleEmitter({
-      name: "test",
-      globals: {},
-      functions: {},
-      imports: {},
-      exports: {},
-      structs: {
-        Point: {
-          name: "Point",
-          size: 4,
-          members: {
-            x: { name: "x", type: "i32", size: 4, offset: 0 },
-          },
-        },
-      },
-      data: [],
-      stringPool: {},
-      dataPtr: 65536,
-      deferredGlobalInits: [],
-      fnTable: new Map(),
-      fnSignatures: new Map(),
-      liftedLambdas: [],
-      hasFnTypedSurface: false,
-      needsFnrefCreation: false,
-    });
-    assert.throws(
-      () => emitExpression(expr, emitter),
-      (err: unknown) => {
-        assert(err instanceof MapleError);
-        assert(
-          err.message.includes("must be assigned to a 'let' binding"),
-          `Unexpected message: ${String((err as Error).message)}`,
-        );
-        return true;
-      },
-    );
+    const parser = new Parser("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }");
+    const ast = parser.parse("test");
+    assert.deepEqual(parser.errors, []);
+    assert.throws(() => extractModuleMeta(ast), /array literal element must be a literal/);
   });
 });
 
@@ -856,14 +681,6 @@ describe("Emission: Literals", () => {
       'export fn run(): i32 { let s: string = "hello"; return s.len; }',
     );
     assert.equal(runExport(wat, "run"), 5);
-  });
-
-  test("string payload data has no trailing allocation padding", () => {
-    const { meta } = compile(`let text: string = "abc";`);
-    const payload = meta.data.find((entry) => entry.bytes.startsWith("\\61\\62\\63"));
-
-    assert(payload, "missing string payload segment");
-    assert.equal(payload.bytes, "\\61\\62\\63");
   });
 
   test("char literal currently fails to parse as expression", () => {

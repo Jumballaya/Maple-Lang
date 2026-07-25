@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
 import {

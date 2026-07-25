@@ -8,12 +8,10 @@ import { printWat } from "../ir/print-wat";
 import { validateModule } from "../ir/validate";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
-import { extractLinkedStructGlobals } from "./emitters/emit.data";
-import { canonicalFnType, parseFnType } from "./emitters/emit.types";
-import type { ModuleMeta } from "./emitters/emitter.types";
-import { buildMergedLoweringInput } from "./emitters/merge";
-import { buildMergedProgram } from "./emitters/merge-model";
-import { extractModuleMeta } from "./emitters/module";
+import { extractLinkedStructGlobals } from "./data-extraction";
+import { buildMergedLoweringInput } from "./merge";
+import { buildMergedProgram } from "./merge-model";
+import { createStructData, type ModuleMeta } from "./metadata";
 import {
   buildModuleGraph,
   type ModuleGraph,
@@ -22,7 +20,9 @@ import {
   resolveBundledStdlibModule,
   resolveImportModule,
 } from "./module-graph";
+import { extractModuleMeta } from "./module-metadata";
 import { typeCheck } from "./TypeChecker";
+import { canonicalFnType, parseFnType } from "./types";
 
 export type { ResolvedImportModule };
 export { resolveImportModule };
@@ -61,6 +61,49 @@ function resolveLinkedType(graph: ModuleGraph, module: ModuleRecord, type: strin
   const exporter = graph.modules.get(dependency.key);
   if (exporter?.data.exports[imported.name]?.kind !== "struct") return type;
   return `${exporter.manglePrefix}$$${imported.name}`;
+}
+
+export function linkModuleGraph(graph: ModuleGraph): void {
+  for (const mod of graph.modules.values()) {
+    for (const [impName, imp] of Object.entries(mod.data.imports)) {
+      if (imp.resolved) continue;
+      const dependency = mod.dependencies.find((entry) => entry.specifier === imp.module);
+      if (dependency?.kind === "external") continue;
+      const exporter = dependency ? graph.modules.get(dependency.key) : undefined;
+      if (!exporter) throw new Error(`no module "${imp.module}" found`);
+      const entry = exporter.data.exports[impName];
+      if (!entry) throw new Error(`no export "${impName}" from "${imp.module}"`);
+      imp.info = entry;
+      imp.resolved = true;
+      imp.mergeable = true;
+      if (entry.kind === "struct") {
+        imp.typeIdentity = `${exporter.manglePrefix}$$${entry.meta.name}`;
+        imp.structMeta = createStructData(
+          imp.typeIdentity,
+          Object.fromEntries(
+            Object.entries(entry.meta.members).map(([name, member]) => [
+              name,
+              { name, type: resolveLinkedType(graph, exporter, member.type) },
+            ]),
+          ),
+          entry.meta.exported,
+        );
+      } else if (entry.kind === "global") {
+        imp.mapleType = resolveLinkedType(graph, exporter, entry.type);
+      } else {
+        const target = exporter.data.functions[imp.name];
+        if (target) {
+          imp.mapleParams = target.params.map((param) =>
+            resolveLinkedType(graph, exporter, param.type),
+          );
+          imp.mapleResults = target.mapleResults.map((result) =>
+            resolveLinkedType(graph, exporter, result),
+          );
+        }
+      }
+    }
+  }
+  for (const mod of graph.modules.values()) extractLinkedStructGlobals(mod.ast, mod.data);
 }
 
 /** Resolve stdlib imports on a single module (tests, tooling). */
@@ -155,60 +198,7 @@ export async function compiler(
     },
   });
 
-  // 2. Link module imports/exports
-  for (const mod of graph.modules.values()) {
-    const data = mod.data;
-    for (const [impName, imp] of Object.entries(data.imports)) {
-      if (imp.resolved) {
-        continue;
-      }
-      const dependency = mod.dependencies.find((entry) => entry.specifier === imp.module);
-      if (dependency?.kind === "external") {
-        continue;
-      }
-      const userEntry = dependency ? graph.modules.get(dependency.key) : undefined;
-      if (!userEntry) {
-        throw new Error(`no module "${imp.module}" found`);
-      }
-      const entry = userEntry.data.exports[impName];
-      if (!entry) {
-        throw new Error(`no function "${impName}" exported from stdlib "${imp.module}"`);
-      }
-      // hook up the export -> import
-      imp.info = entry;
-      imp.resolved = true;
-      imp.mergeable = true;
-      if (entry.kind === "struct") {
-        imp.typeIdentity = `${userEntry.manglePrefix}$$${entry.meta.name}`;
-        imp.structMeta = {
-          ...entry.meta,
-          name: imp.typeIdentity,
-          members: Object.fromEntries(
-            Object.entries(entry.meta.members).map(([name, member]) => [
-              name,
-              { ...member, type: resolveLinkedType(graph, userEntry, member.type) },
-            ]),
-          ),
-        };
-      } else if (entry.kind === "global") {
-        imp.mapleType = resolveLinkedType(graph, userEntry, entry.type);
-      } else {
-        const target = userEntry.data.functions[imp.name];
-        if (target) {
-          imp.mapleParams = target.params.map((param) =>
-            resolveLinkedType(graph, userEntry, param.type),
-          );
-          imp.mapleResults = target.mapleResults.map((result) =>
-            resolveLinkedType(graph, userEntry, result),
-          );
-        }
-      }
-    }
-  }
-
-  for (const mod of graph.modules.values()) {
-    extractLinkedStructGlobals(mod.ast, mod.data);
-  }
+  linkModuleGraph(graph);
 
   // Validation pass — type checker
   for (const mod of graph.modules.values()) {

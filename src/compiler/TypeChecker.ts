@@ -35,7 +35,10 @@ import type {
   ResolvedCallTarget,
   ResolvedDecl,
 } from "../parser/ast/types/ast.type";
-import { stmtDefinitelyReturns } from "./emitters/analysis/flow";
+import { MapleError } from "./errors";
+import { stmtDefinitelyReturns } from "./flow";
+import { getIntrinsic } from "./intrinsics";
+import type { ModuleMeta, StructData } from "./metadata";
 import {
   baseScalar,
   canonicalFnType,
@@ -44,10 +47,7 @@ import {
   isUnsignedMapleInteger,
   parseFnType,
   valueTypeToWasm,
-} from "./emitters/emit.types";
-import type { ModuleMeta, StructData } from "./emitters/emitter.types";
-import { MapleError } from "./errors";
-import { getIntrinsic } from "./intrinsics";
+} from "./types";
 
 const ARITHMETIC_OPS = new Set(["+", "-", "*", "/", "%"]);
 const BITWISE_OPS = new Set(["&", "|", "^", "<<", ">>"]);

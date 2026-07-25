@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { StructMember } from "../src/compiler/emitters/emitter.types";
 import { Tokenizer } from "../src/lexer/Tokenizer";
 import { ArrayLiteralExpression } from "../src/parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../src/parser/ast/expressions/AssignmentExpression";
@@ -32,6 +31,7 @@ import { TuplePattern } from "../src/parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../src/parser/ast/statements/WhileStatement";
 import type { ASTStatement } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
+import type { StructMember } from "../src/shared/types";
 
 // @TODO:
 //
@@ -2916,18 +2916,11 @@ function assertStructStatement(
   assert(structStmt instanceof StructStatement);
   assert(structStmt.name === name);
   assert(Object.keys(structStmt.members).length === Object.keys(members).length);
+  assert.deepEqual(Object.keys(structStmt.members), Object.keys(members));
 
   for (const [key, data] of Object.entries(members)) {
     assert(!!structStmt.members[key], `Struct: "${name}" expected member does not exist: "${key}"`);
     assert(structStmt.members[key].name === data.name);
-    assert(
-      structStmt.members[key].offset === data.offset,
-      `Struct: "${name}" member: "${data.name}" incorrect offset. Expected: "${data.offset}", Got: "${structStmt.members[key].offset}"`,
-    );
-    assert(
-      structStmt.members[key].size === data.size,
-      `Struct: "${name}" member: "${data.name}" incorrect size. Expected: "${data.size}", Got: "${structStmt.members[key].size}"`,
-    );
     assert(
       structStmt.members[key].type === data.type,
       `Struct: "${name}" member: "${data.name}" incorrect type. Expected: "${data.type}", Got: "${structStmt.members[key].type}"`,

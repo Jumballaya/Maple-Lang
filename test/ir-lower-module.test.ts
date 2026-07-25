@@ -4,15 +4,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-import type { ModuleMeta } from "../src/compiler/emitters/emitter.types";
-import { buildMergedLoweringInput } from "../src/compiler/emitters/merge";
-import { buildMergedProgram } from "../src/compiler/emitters/merge-model";
-import {
-  collectFnReferences,
-  emitModule,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
+import { buildMergedLoweringInput } from "../src/compiler/merge";
+import { buildMergedProgram } from "../src/compiler/merge-model";
+import type { ModuleMeta } from "../src/compiler/metadata";
 import { buildModuleGraph } from "../src/compiler/module-graph";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { type LoweringOptions, lowerModule } from "../src/ir/lower";
 import { printWat } from "../src/ir/print-wat";
@@ -43,7 +39,6 @@ function lowered(source: string, options: Partial<LoweringOptions> = {}) {
   const result = lowerModule(ast, meta, { importMemory: false, ...options });
   return {
     ...result,
-    oldWat: emitModule(ast, meta, { importMemory: options.importMemory ?? false }).buildWat(),
     wat: printWat(result.module),
   };
 }
@@ -132,7 +127,7 @@ function call(instance: WebAssembly.Instance, name: string, args: number[] = [])
 
 describe("IR module lowering: function references", () => {
   maybeTest("executes local, parameter, void, discarded, and multi-result indirect calls", () => {
-    const { oldWat, wat, module, pendingInits } = lowered(`
+    const { wat, module, pendingInits } = lowered(`
       let trace: i32 = 0;
       fn add(value: i32): i32 { return value + 1; }
       fn mark(value: i32): void { trace += value; }
@@ -154,8 +149,7 @@ describe("IR module lowering: function references", () => {
     assert.equal(module.table?.entries.length, 3);
     assert.deepEqual(pendingInits, []);
     assert.match(wat, /call_indirect/);
-    const expected = call(instantiate(oldWat, allocatorImports()), "run");
-    assert.equal(call(instantiate(wat, allocatorImports()), "run"), expected);
+    assert.equal(call(instantiate(wat, allocatorImports()), "run"), 73_560);
   });
 
   maybeTest("stores and invokes a function reference through a struct field", () => {

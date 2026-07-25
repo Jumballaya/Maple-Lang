@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import { collectFnReferences, extractModuleMeta } from "../src/compiler/emitters/module";
 import type { MapleError } from "../src/compiler/errors";
 import { INTRINSICS } from "../src/compiler/intrinsics";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { Parser } from "../src/parser/Parser";
 

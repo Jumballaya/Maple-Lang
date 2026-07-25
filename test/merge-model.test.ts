@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { buildMergedProgram } from "../src/compiler/emitters/merge-model";
+import { linkModuleGraph } from "../src/compiler/compiler";
+import { buildMergedProgram } from "../src/compiler/merge-model";
 import { buildModuleGraph } from "../src/compiler/module-graph";
+import { typeCheck } from "../src/compiler/TypeChecker";
 
 function withProgram<T>(files: Record<string, string>, run: (entryPath: string) => T): T {
   const dir = mkdtempSync(path.join(tmpdir(), "maple-merge-model-"));
@@ -20,8 +22,20 @@ function withProgram<T>(files: Record<string, string>, run: (entryPath: string) 
   }
 }
 
+function modelFromEntry(entryPath: string) {
+  const graph = buildModuleGraph(entryPath);
+  linkModuleGraph(graph);
+  for (const module of graph.modules.values()) {
+    assert.deepEqual(
+      typeCheck(module.ast, module.data).map((error) => error.message),
+      [],
+    );
+  }
+  return buildMergedProgram(graph);
+}
+
 function modelFor(files: Record<string, string>) {
-  return withProgram(files, (entryPath) => buildMergedProgram(buildModuleGraph(entryPath)));
+  return withProgram(files, modelFromEntry);
 }
 
 describe("Merged program model", () => {
@@ -104,6 +118,13 @@ describe("Merged program model", () => {
       },
       (entryPath) => {
         const graph = buildModuleGraph(entryPath);
+        linkModuleGraph(graph);
+        for (const module of graph.modules.values()) {
+          assert.deepEqual(
+            typeCheck(module.ast, module.data).map((error) => error.message),
+            [],
+          );
+        }
         const model = buildMergedProgram(graph);
         assert.equal(model.imports.get("main$$local_value"), "dep$$local_value");
         assert.equal(model.imports.get("main$$shared"), "dep$$shared");
@@ -115,39 +136,6 @@ describe("Merged program model", () => {
         assert.deepEqual(model.externalImports, [{ module: "runtime", name: "memory" }]);
       },
     );
-  });
-
-  test("lays out live module data with address alignment in dependency post-order", () => {
-    const model = modelFor({
-      "main.maple": `
-        import dep_value from "./dep.maple"
-        let main_text: string = "main";
-        export fn run(): i32 { return main_text.len + dep_value(); }
-      `,
-      "dep.maple": `
-        let dep_text: string = "dependency";
-        export fn dep_value(): i32 { return dep_text.len; }
-      `,
-    });
-
-    assert.deepEqual(model.moduleOrder, ["dep", "main"]);
-    assert.equal(model.data[0]?.address, 65536);
-    for (let index = 1; index < model.data.length; index++) {
-      const previous = model.data[index - 1]!;
-      const current = model.data[index]!;
-      assert(current.address >= previous.address + previous.size);
-      assert.equal(current.address % current.alignment, 0);
-    }
-    const depEnd = Math.max(
-      ...model.data
-        .filter((entry) => entry.moduleKey === "dep")
-        .map((entry) => entry.address + entry.size),
-    );
-    const mainStart = Math.min(
-      ...model.data.filter((entry) => entry.moduleKey === "main").map((entry) => entry.address),
-    );
-    assert(depEnd <= mainStart);
-    assert.equal(model.dataEnd, model.data.at(-1)!.address + model.data.at(-1)!.size);
   });
 
   test("orders diamond dependencies and startup initializers deterministically", () => {
@@ -187,6 +175,25 @@ describe("Merged program model", () => {
     );
   });
 
+  test("keeps memory initializer identity and ownership address-free", () => {
+    const model = modelFor({
+      "main.maple": `
+        struct Box { value: i32 }
+        fn seed(): i32 { return 7; }
+        let box: Box = { value = seed() };
+        export fn run(): i32 { return box.value; }
+      `,
+    });
+    const startup = model.startupInitializers[0]!;
+    assert.equal(startup.id, "main$$init$0");
+    assert.equal(startup.owner, "main$$box");
+    assert.deepEqual(startup.initializer, {
+      kind: "memory",
+      id: "main$$init$0",
+      owner: "main$$box",
+    });
+  });
+
   test("wires the heap before other startup initializers", () => {
     const model = modelFor({
       "main.maple": `
@@ -201,8 +208,7 @@ describe("Merged program model", () => {
     assert.equal(first?.kind, "call");
     if (first?.kind !== "call") return;
     assert(first.name.endsWith("$$heap_init"));
-    assert.deepEqual(first.args, [{ type: "i32", value: Math.ceil(model.dataEnd / 8) * 8 }]);
-    assert.equal(model.memoryMinimumPages, Math.max(2, Math.ceil(model.dataEnd / 65_536) + 1));
+    assert.deepEqual(first.args, [{ type: "i32", value: 0 }]);
     assert.equal(model.startupInitializers[1]?.owner, "main$$answer");
   });
 
@@ -232,7 +238,7 @@ describe("Merged program model", () => {
     assert.equal(model.fnTable.signatures.size, 1);
   });
 
-  test("records declaration edges and owned data without re-walking later", () => {
+  test("records declaration edges without re-walking later", () => {
     const model = modelFor({
       "main.maple": `
         let total: i32 = 1;
@@ -255,8 +261,6 @@ describe("Merged program model", () => {
     assert.deepEqual(root.edges.globalReads, ["main$$total", "main$$items"]);
     assert.deepEqual(root.edges.globalWrites, ["main$$total"]);
     assert.deepEqual(root.edges.runtimeHelpers, ["__make_fnref", "__elem_addr"]);
-    assert.equal(root.edges.ownedData.length, 1);
-    assert.equal(model.dataAllocations.get(root.edges.ownedData[0]!)?.owner, "main$$root");
 
     const leaf = model.declarations.get("main$$leaf")!;
     assert.deepEqual(leaf.edges, {
@@ -265,7 +269,6 @@ describe("Merged program model", () => {
       globalReads: [],
       globalWrites: [],
       runtimeHelpers: [],
-      ownedData: [],
     });
   });
 
@@ -440,35 +443,6 @@ describe("Merged program model", () => {
     );
   });
 
-  test("maps static allocations to their declaring function or global", () => {
-    const model = modelFor({
-      "main.maple": `
-        struct Pair { left: i32, right: i32 }
-        let global_text: string = "global";
-        let global_values: i32[] = [1, 2];
-        let global_pair: Pair = { left = 3, right = 4 };
-        export fn run(): i32 {
-          let local_text: string = "local";
-          return 0;
-        }
-      `,
-    });
-    const global = model.globals.get("main$$global_text")!;
-    const run = model.functions.get("main$$run")!;
-
-    assert.deepEqual(
-      new Set([...model.dataAllocations.values()].map((allocation) => allocation.kind)),
-      new Set(["string", "array", "struct"]),
-    );
-    assert.equal(model.dataOwners.size, model.dataAllocations.size);
-    assert(run.edges.ownedData.length > 0);
-    for (const allocation of model.dataAllocations.values()) {
-      assert.equal(model.dataOwners.get(allocation.id), allocation.owner);
-    }
-    assert.equal(model.dataOwners.get(global.edges.ownedData[0]!), "main$$global_text");
-    assert.equal(model.dataOwners.get(run.edges.ownedData[0]!), "main$$run");
-  });
-
   test("is deeply deterministic", () => {
     withProgram(
       {
@@ -479,10 +453,7 @@ describe("Merged program model", () => {
         "dep.maple": 'let text: string = "same"; export fn value(): i32 { return 1; }',
       },
       (entryPath) => {
-        assert.deepEqual(
-          buildMergedProgram(buildModuleGraph(entryPath)),
-          buildMergedProgram(buildModuleGraph(entryPath)),
-        );
+        assert.deepEqual(modelFromEntry(entryPath), modelFromEntry(entryPath));
       },
     );
   });

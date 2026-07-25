@@ -6,7 +6,6 @@ export class ArrayLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public elements: ASTExpression[];
-  public location = 0;
   public memberType: string;
 
   constructor(token: Token, memberType: string, elements: ASTExpression[] = []) {

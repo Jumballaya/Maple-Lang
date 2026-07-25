@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
-import type { ModuleMeta } from "./emitters/emitter.types";
-import { collectFnReferences, extractModuleMeta } from "./emitters/module";
+import type { ModuleMeta } from "./metadata";
+import { collectFnReferences, extractModuleMeta } from "./module-metadata";
 
 export type ResolvedImportModule = {
   kind: "maple";

@@ -1,19 +1,12 @@
 import { extractTokenLiteral } from "../../../lexer/lexer.utils";
 import type { Token } from "../../../lexer/token.types";
-import type { StructMember } from "../../../shared/types";
 import type { ASTExpression } from "../types/ast.type";
-
-export type StructTable = {
-  size: number;
-  members: Record<string, StructMember>;
-};
 
 export class StructLiteralExpression implements ASTExpression {
   public readonly type = "expression";
   public token: Token;
   public name: string;
   public members: Record<string, ASTExpression>;
-  public location = 0;
 
   constructor(token: Token, name: string, members: Record<string, ASTExpression>) {
     this.token = token;

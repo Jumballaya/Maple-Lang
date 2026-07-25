@@ -1,11 +1,10 @@
-import { canonicalFnType, valueTypeToWasm } from "./emit.types";
 import type {
-  MergedDataAllocation,
   MergedDeclaration,
   MergedFnTableEntry,
   MergedRuntimeHelper,
   MergedStartupInitializer,
 } from "./merge-model";
+import { canonicalFnType, valueTypeToWasm } from "./types";
 
 export type ReachableSet = {
   functions: Set<string>;
@@ -16,7 +15,6 @@ export type ReachableSet = {
 type ReachabilityInput = {
   declarations: Map<string, MergedDeclaration>;
   exports: Map<string, string>;
-  dataAllocations: Map<string, MergedDataAllocation>;
   startupInitializers: MergedStartupInitializer[];
   fnTableEntries: MergedFnTableEntry[];
   runtimeHelpers: Map<string, MergedRuntimeHelper>;
@@ -25,7 +23,6 @@ type ReachabilityInput = {
 export type ReachabilityAnalysis = {
   reachable: ReachableSet;
   fnTableEntries: MergedFnTableEntry[];
-  dataOwners: Map<string, string>;
   hasFnTypedSurface: boolean;
   needsFnrefCreation: boolean;
 };
@@ -126,8 +123,5 @@ export function analyzeReachability(input: ReachabilityInput): ReachabilityAnaly
           : reachable.globals.has(declaration.name);
       return reached && declaration.needsFnrefCreation;
     }),
-    dataOwners: new Map(
-      [...input.dataAllocations].map(([allocation, data]) => [allocation, data.owner]),
-    ),
   };
 }

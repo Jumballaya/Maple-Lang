@@ -1,15 +1,13 @@
+import { MapleError } from "../compiler/errors";
+import { getIntrinsic } from "../compiler/intrinsics";
 import {
   canonicalFnType,
   isFnType,
   isUnsignedMapleInteger,
-  sizeofType,
   valueTypeToWasm,
-} from "../compiler/emitters/emit.types";
-import { MapleError } from "../compiler/errors";
-import { getIntrinsic } from "../compiler/intrinsics";
+} from "../compiler/types";
 import { Tokenizer } from "../lexer/Tokenizer";
 import type { IdentToken, Token } from "../lexer/token.types";
-import { alignofType, alignTo, type StructMember } from "../shared/types";
 import { ASTProgram } from "./ast/ASTProgram";
 import { ArrayLiteralExpression } from "./ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "./ast/expressions/AssignmentExpression";
@@ -40,7 +38,7 @@ import { IfStatement } from "./ast/statements/IfStatement";
 import { ImportStatement } from "./ast/statements/ImportStatement";
 import { LetStatement } from "./ast/statements/LetStatement";
 import { ReturnStatement } from "./ast/statements/ReturnStatement";
-import { StructStatement } from "./ast/statements/StructStatement";
+import { type ParsedStructMember, StructStatement } from "./ast/statements/StructStatement";
 import { SwitchStatement } from "./ast/statements/SwitchStatement";
 import { TuplePattern, type TuplePatternName } from "./ast/statements/TuplePattern";
 import { WhileStatement } from "./ast/statements/WhileStatement";
@@ -482,9 +480,7 @@ export class Parser {
       return null;
     }
 
-    const members: Record<string, StructMember> = {};
-    let size = 0;
-    let maxAlign = 1;
+    const members: Record<string, ParsedStructMember> = {};
 
     // Empty struct (`struct X {}`): advance past `{` so cur lands on `}`.
     if (this.tokenizer.curTokenIs("LBrace") && this.tokenizer.peekTokenIs("RBrace")) {
@@ -507,17 +503,10 @@ export class Parser {
         this.pushError("struct member cannot use void type", firstIdent);
         return null;
       }
-      const sz = sizeofType(firstType);
-      const align = alignofType(firstType);
-      size = alignTo(size, align);
-      maxAlign = Math.max(maxAlign, align);
       members[firstName] = {
         name: firstName,
-        offset: size,
-        size: sz,
         type: firstType,
       };
-      size += sz;
 
       // After parseTyping, cur is either on the last type token (scalar/array)
       // or already past it (fn-type, which is fully consuming). Normalize to
@@ -545,10 +534,7 @@ export class Parser {
     }
     this.tokenizer.nextToken(); // consume RBRACE
 
-    // Pad the struct so arrays/frames of it keep every field naturally aligned.
-    size = alignTo(size, maxAlign);
-
-    return new StructStatement(statementToken, name, members, size, exported);
+    return new StructStatement(statementToken, name, members, exported);
   }
 
   private parseLetStatement(

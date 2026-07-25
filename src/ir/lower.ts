@@ -1,13 +1,12 @@
-import { stmtDefinitelyReturns } from "../compiler/emitters/analysis/flow";
+import { stmtDefinitelyReturns } from "../compiler/flow";
+import { getIntrinsic } from "../compiler/intrinsics";
+import type { ModuleMeta } from "../compiler/metadata";
 import {
   baseScalar,
+  extractFunctionSignature,
   isUnsignedMapleInteger,
   valueTypeToWasm,
-} from "../compiler/emitters/emit.types";
-import type { ModuleMeta } from "../compiler/emitters/emitter.types";
-import type { EmitOptions } from "../compiler/emitters/module";
-import { extractFunctionSignature } from "../compiler/emitters/statement/function";
-import { getIntrinsic } from "../compiler/intrinsics";
+} from "../compiler/types";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { ArrayLiteralExpression } from "../parser/ast/expressions/ArrayLiteralExpression";
 import { AssignmentExpression } from "../parser/ast/expressions/AssignmentExpression";
@@ -68,7 +67,8 @@ import type {
 import { structLayout } from "./layout";
 import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "./runtime";
 
-export type LoweringOptions = EmitOptions & {
+export type LoweringOptions = {
+  importMemory: boolean;
   exportMap?: Map<string, string>;
   allocator?: string;
 };

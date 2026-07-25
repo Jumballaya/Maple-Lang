@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { linkStdlibImports } from "../src/compiler/compiler";
-import type { ModuleMeta } from "../src/compiler/emitters/emitter.types";
-import {
-  collectFnReferences,
-  emitModule,
-  extractModuleMeta,
-} from "../src/compiler/emitters/module";
+import type { ModuleMeta } from "../src/compiler/metadata";
+import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { structLayout } from "../src/ir/layout";
 import { lowerModule } from "../src/ir/lower";
 import { printWat } from "../src/ir/print-wat";
 import { validateModule } from "../src/ir/validate";
 import type { ASTProgram } from "../src/parser/ast/ASTProgram";
+import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
+import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { StructStatement } from "../src/parser/ast/statements/StructStatement";
 import { Parser } from "../src/parser/Parser";
 import { maybeTest, runExport } from "./helpers";
@@ -36,23 +34,18 @@ function checked(source: string): CheckedProgram {
   return { ast, meta };
 }
 
-function lowered(source: string): ReturnType<typeof lowerModule> & { oldWat: string; wat: string } {
+function lowered(source: string): ReturnType<typeof lowerModule> & { wat: string } {
   const { ast, meta } = checked(source);
   const result = lowerModule(ast, meta, { importMemory: false });
   assert.deepEqual(validateModule(result.module), []);
   return {
     ...result,
-    oldWat: emitModule(ast, meta, { importMemory: false }).buildWat(),
     wat: printWat(result.module),
   };
 }
 
 function differential(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
-  const { oldWat, wat } = lowered(source);
-  const expected = runExport(oldWat, exportName, args);
-  const actual = runExport(wat, exportName, args);
-  assert.deepEqual(actual, expected);
-  return actual;
+  return runExport(lowered(source).wat, exportName, args);
 }
 
 function fixed(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
@@ -63,21 +56,46 @@ function fixed(source: string, exportName: string, args: (number | bigint)[] = [
 }
 
 describe("IR memory lowering: layout and frames", () => {
-  test("matches parser alignment for mixed-width structs", () => {
+  test("freezes mixed-width struct layouts independently of the parser", () => {
     const { ast } = checked(`
       struct Mixed { byte: i8, wide: i64, half: i16, tail: u8 }
       struct Reverse { half: i16, byte: u8, wide: u64 }
       fn unused(): void {}
     `);
-    for (const statement of ast.statements) {
-      if (!(statement instanceof StructStatement)) continue;
-      const layout = structLayout(statement.members);
-      assert.equal(layout.size, statement.size);
-      assert.deepEqual(
-        layout.members.map(({ name, offset }) => ({ name, offset })),
-        Object.values(statement.members).map(({ name, offset }) => ({ name, offset })),
-      );
-    }
+    const structs = ast.statements.filter(
+      (statement): statement is StructStatement => statement instanceof StructStatement,
+    );
+    assert.deepEqual(
+      structs.map((statement) => {
+        const layout = structLayout(statement.members);
+        return {
+          name: statement.name,
+          size: layout.size,
+          offsets: layout.members.map(({ name, offset }) => ({ name, offset })),
+        };
+      }),
+      [
+        {
+          name: "Mixed",
+          size: 24,
+          offsets: [
+            { name: "byte", offset: 0 },
+            { name: "wide", offset: 8 },
+            { name: "half", offset: 16 },
+            { name: "tail", offset: 18 },
+          ],
+        },
+        {
+          name: "Reverse",
+          size: 16,
+          offsets: [
+            { name: "half", offset: 0 },
+            { name: "byte", offset: 2 },
+            { name: "wide", offset: 8 },
+          ],
+        },
+      ],
+    );
   });
 
   maybeTest("isolates recursive frames and restores on early return", () => {
@@ -119,12 +137,11 @@ describe("IR memory lowering: arrays", () => {
   });
 
   maybeTest("traps negative, length, and huge indices", () => {
-    const { oldWat, wat } = lowered(`
+    const { wat } = lowered(`
       export fn read(i: i32): i32 { let values: i32[] = [4, 5]; return values[i]; }
     `);
     assert.equal(runExport(wat, "read", [1]), 5);
     for (const index of [-1, 2, 2_000_000_000]) {
-      assert.throws(() => runExport(oldWat, "read", [index]), WebAssembly.RuntimeError);
       assert.throws(() => runExport(wat, "read", [index]), WebAssembly.RuntimeError);
     }
   });
@@ -395,7 +412,6 @@ describe("IR memory lowering: startup initializers and helper demand", () => {
     const { ast, meta } = checked(source);
     const memory = meta.deferredGlobalInits[0];
     assert(memory?.kind === "memory");
-    memory.baseAddr = 7;
     const result = lowerModule(ast, meta);
     assert.deepEqual(result.pendingInits, []);
     const start = result.module.funcs[result.module.start! - result.module.funcImports.length]!;
@@ -409,15 +425,21 @@ describe("IR memory lowering: startup initializers and helper demand", () => {
     const original = mismatched.meta.deferredGlobalInits[0];
     assert(original?.kind === "memory");
     const { id, owner } = original;
-    assert.notEqual(id, undefined);
-    assert.notEqual(owner, undefined);
+    const box = mismatched.ast.statements.find(
+      (statement) =>
+        statement instanceof LetStatement && statement.identifier.tokenLiteral() === "box",
+    );
+    assert(box instanceof LetStatement);
+    assert(box.expression instanceof StructLiteralExpression);
+    const expression = box.expression.members.value;
+    assert(expression);
     mismatched.meta.deferredGlobalInits[0] = {
       kind: "global",
       name: "box",
       type: "i32",
-      expr: original.expr,
-      id: id!,
-      owner: owner!,
+      expr: expression,
+      id,
+      owner,
     };
     assert.throws(() => lowerModule(mismatched.ast, mismatched.meta), /kind mismatch/);
   });
