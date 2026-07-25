@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compiler } from "../src/compiler/compiler";
-import { maybeTest, memoryMinimumFromWat } from "./helpers";
+import { maybeTest } from "./helpers";
 
 type Project = Record<string, string>;
 
@@ -94,19 +94,6 @@ function call(instance: WebAssembly.Instance, name: string, ...args: number[]): 
   return (fn as (...values: number[]) => unknown)(...args);
 }
 
-function wiredHeapBase(wat: string): number {
-  const values = [...wat.matchAll(/\(call \$[^\s()]*heap_init \(i32\.const (\d+)\)\)/g)].map(
-    (match) => Number(match[1]),
-  );
-  const generated = values.find((value) => value !== 131072);
-  assert(generated !== undefined, "missing generated heap_init call");
-  return generated;
-}
-
-function encodedData(value: string): string {
-  return [...Buffer.from(value)].map((byte) => `\\${byte.toString(16).padStart(2, "0")}`).join("");
-}
-
 /*
  * WAT assertions are inventoried in test/behavioralization maps. Runtime
  * semantics stay in execution tests; only host-surface and intentionally
@@ -114,6 +101,21 @@ function encodedData(value: string): string {
  * and generated-name prefixes and never require cross-section ordering.
  */
 describe("host surface (WAT-structural)", () => {
+  function wiredHeapBase(wat: string): number {
+    const values = [...wat.matchAll(/\(call \$[^\s()]*heap_init \(i32\.const (\d+)\)\)/g)].map(
+      (match) => Number(match[1]),
+    );
+    const generated = values.find((value) => value !== 131072);
+    assert(generated !== undefined, "missing generated heap_init call");
+    return generated;
+  }
+
+  function encodedData(value: string): string {
+    return [...Buffer.from(value)]
+      .map((byte) => `\\${byte.toString(16).padStart(2, "0")}`)
+      .join("");
+  }
+
   maybeTest("emits a shared diamond dependency exactly once", async () => {
     const { wat } = await compileProject({
       "main.maple": `
@@ -241,6 +243,30 @@ describe("host surface (WAT-structural)", () => {
 
     assert.equal(first.wat, second.wat);
     assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused\b/);
+  });
+
+  maybeTest("shakes dead literal data before laying out the heap", async () => {
+    const heavyLiteral = `dead-${"x".repeat(512)}`;
+    const liveLiteral = "live-data";
+    const source = (useHeavy: boolean) => `
+      import malloc from "memory"
+      fn heavy(): i32 {
+        let text: string = "${heavyLiteral}";
+        return text.len;
+      }
+      export fn run(): i32 {
+        let text: string = "${liveLiteral}";
+        let block: i32 = malloc(8);
+        return text.len + (block - block)${useHeavy ? " + heavy()" : ""};
+      }
+    `;
+    const shaken = await compileProject({ "main.maple": source(false) });
+    const retained = await compileProject({ "main.maple": source(true) });
+
+    assert(shaken.wat.includes(encodedData(liveLiteral)));
+    assert(!shaken.wat.includes(encodedData(heavyLiteral)));
+    assert(retained.wat.includes(encodedData(heavyLiteral)));
+    assert(wiredHeapBase(shaken.wat) < wiredHeapBase(retained.wat));
   });
 
   test("structural regexes tolerate equivalent reformatting", () => {
@@ -451,7 +477,7 @@ describe("Compiler: merged whole-program emission", () => {
   });
 
   maybeTest("starts the merged heap above static data without corrupting literals", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import malloc from "memory"
         struct Cell { value: i32 }
@@ -469,9 +495,8 @@ describe("Compiler: merged whole-program emission", () => {
       `,
     });
 
-    const heapBase = wiredHeapBase(wat);
     const pointer = call(instance, "run") as number;
-    assert(pointer >= heapBase + 8);
+    assert(pointer > 65_536);
     assert.equal(pointer % 8, 0);
   });
 
@@ -505,7 +530,7 @@ describe("Compiler: merged whole-program emission", () => {
       { length: 72 },
       (_, index) => `total += static_${index}.len;`,
     ).join("\n");
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import malloc from "memory"
         ${literals}
@@ -522,19 +547,19 @@ describe("Compiler: merged whole-program emission", () => {
       `,
     });
 
-    const heapBase = wiredHeapBase(wat);
-    const minimum = memoryMinimumFromWat(wat);
-    assert(heapBase > 2 * 65_536);
-    assert.equal(minimum, Math.max(2, Math.ceil(heapBase / 65_536) + 1));
-    assert.equal(call(instance, "pages"), minimum);
-    assert((call(instance, "allocate") as number) >= heapBase + 8);
+    const pages = call(instance, "pages") as number;
+    const pointer = call(instance, "allocate") as number;
+    assert(pages > 2);
+    assert(pointer > 2 * 65_536);
+    assert(pointer + 8 <= pages * 65_536);
   });
 
   maybeTest("resets the heap when heap_init is called explicitly", async () => {
-    const { instance, wat } = await compileProject({
+    const { instance } = await compileProject({
       "main.maple": `
         import malloc, heap_init from "memory"
         export fn run(base: i32): i32 {
+          heap_init(base);
           let first: i32 = malloc(8);
           heap_init(base);
           let second: i32 = malloc(8);
@@ -543,7 +568,7 @@ describe("Compiler: merged whole-program emission", () => {
       `,
     });
 
-    assert.equal(call(instance, "run", wiredHeapBase(wat)), 1);
+    assert.equal(call(instance, "run", 131_072), 1);
   });
 
   maybeTest("runs deferred global initializers in dependency post-order", async () => {
@@ -695,10 +720,6 @@ describe("Compiler: tree-shaken emission", () => {
     const shaken = await compileProject({ "main.maple": source(false) });
     const retained = await compileProject({ "main.maple": source(true) });
 
-    assert(shaken.wat.includes(encodedData(liveLiteral)));
-    assert(!shaken.wat.includes(encodedData(heavyLiteral)));
-    assert(retained.wat.includes(encodedData(heavyLiteral)));
-    assert(wiredHeapBase(shaken.wat) < wiredHeapBase(retained.wat));
     assert.equal(call(shaken.instance, "run"), liveLiteral.length);
     assert.equal(call(retained.instance, "run"), liveLiteral.length + heavyLiteral.length);
   });

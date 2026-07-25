@@ -22,7 +22,7 @@ import { MemberExpression } from "../src/parser/ast/expressions/MemberExpression
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest, runExport } from "./helpers";
+import { maybeTest, runExport, runMergedExport } from "./helpers";
 
 function compile(src: string) {
   const p = new Parser(src);
@@ -68,113 +68,108 @@ function checkerMessages(src: string): string[] {
   return typeCheck(ast, meta).map((error) => error.message);
 }
 
-function assertContainsInOrder(wat: string, fragments: string[]): void {
-  let cursor = 0;
-  for (const fragment of fragments) {
-    const index = wat.indexOf(fragment, cursor);
-    assert(index >= 0, `Expected to find "${fragment}" after index ${cursor}`);
-    cursor = index + fragment.length;
-  }
-}
-
 describe("Emission: Functions", () => {
-  test("void function emits func without result", () => {
-    const { wat } = compile("fn test(): void {}");
-    assert(wat.includes("(func $test"), "Missing function declaration");
-    assert(!wat.includes("(result"), "Void function should not emit result");
-  });
-
-  test("i32 return emits i32 result and constant", () => {
-    const { wat } = compile("fn test(): i32 { return 1; }");
-    assert(wat.includes("(result i32)"));
-    assert(wat.includes("(i32.const 1)"));
-  });
-
-  test("f32 return emits f32 result and constant", () => {
-    const { wat } = compile("fn test(): f32 { return 1.5; }");
-    assert(wat.includes("(result f32)"));
-    assert(wat.includes("(f32.const 1.5)"));
-  });
-
-  test("exported function emits export", () => {
-    const { wat } = compile("export fn test(): void {}");
-    assert(wat.includes('(export "test")'));
-  });
-
-  test("function params emit expected wasm params", () => {
-    const { wat } = compile("fn add(a: i32, b: i32): i32 { return a + b; }");
-    assert(wat.includes("(param $a i32)"));
-    assert(wat.includes("(param $b i32)"));
-    assert(wat.includes("(local.get $a)"));
-    assert(wat.includes("(local.get $b)"));
-  });
-
-  test("mixed param types emit expected wasm params", () => {
-    const { wat } = compile("fn mixed(a: i32, b: f32): i32 { return a; }");
-    assert(wat.includes("(param $a i32)"));
-    assert(wat.includes("(param $b f32)"));
-  });
-
-  test("function call emits call instruction", () => {
-    const { wat } = compile("fn callee(): i32 { return 1; } fn caller(): i32 { return callee(); }");
-    assert(/\(call \$callee\s*\)/.test(wat));
-  });
-
-  test("function call with arguments emits args before call", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn caller(): i32 { return add(3, 4); }
+  maybeTest("void functions execute their side effects without producing a value", () => {
+    const { wat } = checkedCompile(`
+      let touched: i32 = 0;
+      fn mark(): void { touched = 7; }
+      export fn run(): i32 { mark(); return touched; }
     `);
-    assert(wat.includes("(i32.const 3)"));
-    assert(wat.includes("(i32.const 4)"));
-    assert(wat.includes("(call $add"));
+    assert.equal(runExport(wat, "run"), 7);
   });
 
-  test("param count is not duplicated", () => {
-    const { wat } = compile("export fn quad(a: i32, b: i32, c: f32, d: i32): i32 { return a; }");
-    const params = wat.match(/\(param \$/g);
-    assert(params !== null);
-    assert.equal(params.length, 4);
+  maybeTest("i32 functions return their value", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { return 1; }");
+    assert.equal(runExport(wat, "run"), 1);
+  });
+
+  maybeTest("f32 functions return their value", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { return 1.5; }");
+    assert.equal(runExport(wat, "run"), 1.5);
+  });
+
+  maybeTest("i32 parameters participate in function behavior", () => {
+    const { wat } = checkedCompile("export fn add(a: i32, b: i32): i32 { return a + b; }");
+    assert.equal(runExport(wat, "add", [3, 4]), 7);
+  });
+
+  maybeTest("mixed parameter types preserve both arguments", () => {
+    const { wat } = checkedCompile(`
+      export fn mixed(a: i32, b: f32): i32 { return a + (b as i32); }
+    `);
+    assert.equal(runExport(wat, "mixed", [3, 4.75]), 7);
+  });
+
+  maybeTest("zero-argument function calls return the callee value", () => {
+    const { wat } = checkedCompile(`
+      fn callee(): i32 { return 1; }
+      export fn caller(): i32 { return callee(); }
+    `);
+    assert.equal(runExport(wat, "caller"), 1);
+  });
+
+  maybeTest("function calls pass arguments in source order", () => {
+    const { wat } = checkedCompile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      export fn caller(): i32 { return add(3, 4); }
+    `);
+    assert.equal(runExport(wat, "caller"), 7);
+  });
+
+  maybeTest("four parameters are passed exactly once", () => {
+    const { wat } = checkedCompile(`
+      export fn quad(a: i32, b: i32, c: f32, d: i32): i32 {
+        return a + b + (c as i32) + d;
+      }
+    `);
+    assert.equal(runExport(wat, "quad", [1, 2, 3.75, 4]), 10);
   });
 });
 
 describe("Emission: Variables", () => {
-  test("local i32 let emits local and local.set", () => {
-    const { wat } = compile("fn test(): void { let x: i32 = 5; }");
-    assert(wat.includes("(local $x i32)"));
-    assert(wat.includes("(local.set $x (i32.const 5))"));
+  maybeTest("local i32 bindings preserve their value", () => {
+    const { wat } = checkedCompile("export fn run(): i32 { let x: i32 = 5; return x; }");
+    assert.equal(runExport(wat, "run"), 5);
   });
 
-  test("local f32 let emits local and local.set", () => {
-    const { wat } = compile("fn test(): void { let x: f32 = 3.14; }");
-    assert(wat.includes("(local $x f32)"));
-    assert(wat.includes("(local.set $x (f32.const 3.14))"));
+  maybeTest("local f32 bindings preserve their value", () => {
+    const { wat } = checkedCompile("export fn run(): f32 { let x: f32 = 3.25; return x; }");
+    assert.equal(runExport(wat, "run"), 3.25);
   });
 
-  test("local bool let emits i32 local and i32 const", () => {
-    const { wat } = compile("fn test(): void { let x: bool = true; }");
-    assert(wat.includes("(local $x i32)"));
-    assert(wat.includes("(local.set $x (i32.const 1))"));
+  maybeTest("local bool bindings preserve canonical truth", () => {
+    const { wat } = checkedCompile("export fn run(): bool { let x: bool = true; return x; }");
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("global f32 let emits mutable f32 global", () => {
-    const { wat } = compile("let rate: f32 = 1.5;");
-    assert(wat.includes("(global $rate (mut f32) (f32.const 1.5))"));
+  maybeTest("global f32 bindings preserve their value", () => {
+    const { wat } = checkedCompile(`
+      let rate: f32 = 1.5;
+      export fn run(): f32 { return rate; }
+    `);
+    assert.equal(runExport(wat, "run"), 1.5);
   });
 
-  test("global i32 let emits mutable global", () => {
-    const { wat } = compile("let x: i32 = 5;");
-    assert(wat.includes("(global $x (mut i32) (i32.const 5))"));
+  maybeTest("global i32 bindings preserve their value", () => {
+    const { wat } = checkedCompile(`
+      let x: i32 = 5;
+      export fn run(): i32 { return x; }
+    `);
+    assert.equal(runExport(wat, "run"), 5);
   });
 
-  test("i32 assignment emits local.set with i32 value", () => {
-    const { wat } = compile("fn test(): void { let x: i32 = 0; x = 10; }");
-    assert(wat.includes("(local.set $x (i32.const 10))"));
+  maybeTest("i32 assignment updates the local value", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): i32 { let x: i32 = 0; x = 10; return x; }
+    `);
+    assert.equal(runExport(wat, "run"), 10);
   });
 
-  test("f32 assignment emits local.set with f32 value", () => {
-    const { wat } = compile("fn test(): void { let x: f32 = 0.0; x = 2.5; }");
-    assert(wat.includes("(local.set $x (f32.const 2.5))"));
+  maybeTest("f32 assignment updates the local value", () => {
+    const { wat } = checkedCompile(`
+      export fn run(): f32 { let x: f32 = 0.0; x = 2.5; return x; }
+    `);
+    assert.equal(runExport(wat, "run"), 2.5);
   });
 });
 
@@ -577,6 +572,32 @@ describe("legacy emitter unit (dies with T38)", () => {
     assert(wat.includes("(result i64)"), wat);
   });
 
+  test("emitModule can request an imported memory", () => {
+    const p = new Parser("fn test(): void {}");
+    const ast = p.parse("test");
+    const meta = extractModuleMeta(ast);
+    const wat = emitModule(ast, meta, { importMemory: true }).buildWat();
+    assert(wat.includes('(import "runtime" "memory" (memory 2))'));
+    assert(!wat.includes('(memory (export "memory")'));
+  });
+
+  test("import emission includes import and type when import is resolved as function", () => {
+    const p = new Parser('import foo from "mod"');
+    const ast = p.parse("test");
+    assert.equal(p.errors.length, 0);
+    const meta = extractModuleMeta(ast);
+    const foo = meta.imports.foo;
+    assert(foo);
+    foo.resolved = true;
+    foo.info = {
+      kind: "func",
+      signature: "i_i",
+    } as ExportMeta;
+    const wat = emitModule(ast, meta).buildWat();
+    assert(wat.includes('(import "mod" "foo" (func $foo (type $i_i_type)))'));
+    assert(wat.includes("(type $i_i_type (func (param i32) (result i32)))"));
+  });
+
   test("member access on an unsupported base shape errors", () => {
     const token = {
       type: "Identifier" as const,
@@ -850,23 +871,6 @@ describe("Module Metadata", () => {
     assert(meta.imports.b !== undefined);
   });
 
-  test("import emission includes import and type when import is resolved as function", () => {
-    const p = new Parser('import foo from "mod"');
-    const ast = p.parse("test");
-    assert.equal(p.errors.length, 0);
-    const meta = extractModuleMeta(ast);
-    const foo = meta.imports.foo;
-    assert(foo);
-    foo.resolved = true;
-    foo.info = {
-      kind: "func",
-      signature: "i_i",
-    } as ExportMeta;
-    const wat = emitModule(ast, meta).buildWat();
-    assert(wat.includes('(import "mod" "foo" (func $foo (type $i_i_type)))'));
-    assert(wat.includes("(type $i_i_type (func (param i32) (result i32)))"));
-  });
-
   test("exported function appears in exports metadata", () => {
     const { meta } = compile("export fn test(): void {}");
     assert(meta.exports.test !== undefined);
@@ -1103,27 +1107,6 @@ describe("Compiler Pipeline", () => {
       console.error = originalError;
       await rm(dir, { recursive: true, force: true });
     }
-  });
-
-  test("emitted wat is wrapped in module", () => {
-    const { wat } = compile("fn test(): void {}");
-    assert(wat.startsWith("(module"));
-    assert(wat.endsWith(")"));
-  });
-
-  test("emitted wat owns and exports memory by default", () => {
-    const { wat } = compile("fn test(): void {}");
-    assert(wat.includes('(memory (export "memory") 2)'));
-    assert(!wat.includes('(import "runtime" "memory"'));
-  });
-
-  test("emitModule can request an imported memory", () => {
-    const p = new Parser("fn test(): void {}");
-    const ast = p.parse("test");
-    const meta = extractModuleMeta(ast);
-    const wat = emitModule(ast, meta, { importMemory: true }).buildWat();
-    assert(wat.includes('(import "runtime" "memory" (memory 2))'));
-    assert(!wat.includes('(memory (export "memory")'));
   });
 });
 
@@ -2452,6 +2435,108 @@ describe("Emission: extractGlobalData — local struct skipped", () => {
 });
 
 describe("host surface (WAT-structural)", () => {
+  test("exports functions and owns memory by default", () => {
+    const { wat } = compile("export fn run(): i32 { return 1; }");
+    const exportPattern = /\(\s*func\s+\$run\s+\(\s*export\s+"run"\s*\)/;
+    const memoryPattern = /\(\s*memory\s+\(\s*export\s+"memory"\s*\)\s+2\s*\)/;
+    assert.match(wat, exportPattern);
+    assert.match(wat, memoryPattern);
+    assert.doesNotMatch(wat, /\(\s*import\s+"runtime"\s+"memory"/);
+  });
+
+  test("retains stdlib function and global imports", () => {
+    const { wat } = compile(`
+      import PI, sqrt, floor, abs_f32, sqrt_f64, abs_i32, sin, atan2, pow, fmod from "math"
+      export fn run(): f32 { return PI; }
+    `);
+    assert.match(wat, /\(\s*import\s+"math"\s+"PI"\s+\(\s*global\s+\$PI\s+f32\s*\)\s*\)/);
+    for (const name of [
+      "sqrt",
+      "floor",
+      "abs_f32",
+      "sqrt_f64",
+      "abs_i32",
+      "sin",
+      "atan2",
+      "pow",
+      "fmod",
+    ]) {
+      assert.match(wat, new RegExp(`\\(\\s*import\\s+"math"\\s+"${name}"\\s+\\(\\s*func\\b`));
+    }
+  });
+
+  test("retains the function-reference table, element, signature, and private trampoline", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      export fn run(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1, 2);
+      }
+    `);
+    assert.match(wat, /\(\s*table\s+\$__fn_table\s+1\s+1\s+funcref\s*\)/);
+    assert.match(wat, /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_add\s*\)/);
+    assert.match(
+      wat,
+      /\(\s*type\s+\$sig_fn_i32_i32__i32\s+\(\s*func\s+\(\s*param\s+i32\s*\)\s+\(\s*param\s+i32\s*\)\s+\(\s*param\s+i32\s*\)\s+\(\s*result\s+i32\s*\)\s*\)\s*\)/,
+    );
+    assert.match(wat, /\(\s*import\s+"memory"\s+"malloc"\s+\(\s*func\b/);
+    assert.doesNotMatch(wat, /\(\s*export\s+"[^"]*"\s+\(\s*func\s+\$__indirect_/);
+    assert.doesNotMatch(wat, /\b__fn_table_inited\b/);
+    assert.doesNotMatch(wat, /\btable\.set\b/);
+  });
+
+  test("active elements follow deterministic slots and share one signature", () => {
+    const { wat } = compile(`
+      fn add(a: i32, b: i32): i32 { return a + b; }
+      fn sub(a: i32, b: i32): i32 { return a - b; }
+      export fn run(): i32 {
+        let second: fn(i32,i32):i32 = sub;
+        let first: fn(i32,i32):i32 = add;
+        return first(3, 2) + second(3, 2);
+      }
+    `);
+    assert.match(wat, /\(\s*table\s+\$__fn_table\s+2\s+2\s+funcref\s*\)/);
+    assert.match(
+      wat,
+      /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_sub\s+\$__indirect_add\s*\)/,
+    );
+    assert.equal(
+      (wat.match(/\(\s*type\s+\$sig_fn_i32_i32__i32\s+\(\s*func\s+\(\s*param\s+i32\s*\)/g) ?? [])
+        .length,
+      1,
+    );
+  });
+
+  test("omits the closure runtime when no function references exist", () => {
+    const { wat } = compile("export fn add(a: i32, b: i32): i32 { return a + b; }");
+    assert.doesNotMatch(wat, /\(\s*table\b/);
+    assert.doesNotMatch(wat, /\b__make_fnref\b/);
+    assert.doesNotMatch(wat, /\(\s*import\s+"memory"\s+"malloc"/);
+  });
+
+  test("retains the environment lane for void function references", () => {
+    const { wat } = compile(`
+      fn noop(): void {}
+      export fn run(): void { let cb: fn():void = noop; cb(); }
+    `);
+    assert.match(wat, /\(\s*type\s+\$sig_fn___void\s+\(\s*func\s+\(\s*param\s+i32\s*\)\s*\)\s*\)/);
+  });
+
+  test("module-surface regexes tolerate equivalent reformatting", () => {
+    assert.match(
+      '( func\n  $run\n  ( export "run" ) )',
+      /\(\s*func\s+\$run\s+\(\s*export\s+"run"\s*\)/,
+    );
+    assert.match(
+      "( table\n  $__fn_table 1 1 funcref )",
+      /\(\s*table\s+\$__fn_table\s+1\s+1\s+funcref\s*\)/,
+    );
+    assert.match(
+      "( elem\n  ( i32.const 0 )\n  func $__indirect_add )",
+      /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_add\s*\)/,
+    );
+  });
+
   // transitional: T37 flips these to guard-ABSENCE
   test("global expression field emits init guard and i32.store", () => {
     const { wat } = compile(`
@@ -2562,30 +2647,29 @@ describe("host surface (WAT-structural)", () => {
 });
 
 describe("Compiler: inferred function call types", () => {
-  test("inferred i32 from function call emits correct local.set", () => {
-    const src = `
+  maybeTest("inferred i32 call results preserve their value", () => {
+    const { wat } = checkedCompile(`
       fn add(a: i32, b: i32): i32 { return a + b; }
-      fn f(): void { let x = add(1, 2); }
-    `;
-    const { wat } = compile(src);
-    assert(wat.includes("(local $x i32)"), "Expected i32 local for inferred call result");
-    assert(wat.includes("(local.set $x (call $add"), "Expected local.set with call");
+      export fn run(): i32 { let x = add(1, 2); return x; }
+    `);
+    assert.equal(runExport(wat, "run"), 3);
   });
 
-  test("inferred f32 from function call emits correct local.set", () => {
-    const src = `
+  maybeTest("inferred f32 call results preserve their value", () => {
+    const { wat } = checkedCompile(`
       fn half(x: f32): f32 { return x; }
-      fn f(): void { let y = half(1.0); }
-    `;
-    const { wat } = compile(src);
-    assert(wat.includes("(local $y f32)"), "Expected f32 local for inferred call result");
+      export fn run(): f32 { let y = half(1.5); return y; }
+    `);
+    assert.equal(runExport(wat, "run"), 1.5);
   });
 });
 
 describe("Emission: multi-return and destructure", () => {
-  test("multi-return function emits multi result clause", () => {
-    const { wat } = compile("fn swap(a: i32, b: i32): (i32, i32) { return b, a; }");
-    assert(wat.includes("(result i32 i32)"));
+  maybeTest("multi-return functions expose every result", () => {
+    const { wat } = checkedCompile(`
+      export fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
+    `);
+    assert.deepEqual(runExport(wat, "swap", [1, 2]), [2, 1]);
   });
 
   test("multi-return signature encodes all result lanes", () => {
@@ -2593,244 +2677,178 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(meta.functions.pair?.signature, "v_iI");
   });
 
-  test("three-return signature encodes all result lanes", () => {
-    const { meta, wat } = compile("fn tri(): (i32, i32, i32) { return 1, 2, 3; }");
+  maybeTest("three-return signatures and values retain every lane", () => {
+    const { meta, wat } = checkedCompile("export fn tri(): (i32, i32, i32) { return 1, 2, 3; }");
     assert.equal(meta.functions.tri?.signature, "v_iii");
-    assert(wat.includes("(result i32 i32 i32)"));
+    assert.deepEqual(runExport(wat, "tri"), [1, 2, 3]);
   });
 
-  test("five-return signature encodes all result lanes", () => {
-    const { meta, wat } = compile("fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }");
+  maybeTest("five-return signatures and values retain every lane", () => {
+    const { meta, wat } = checkedCompile(`
+      export fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
+    `);
     assert.equal(meta.functions.many?.signature, "v_iiiii");
-    assert(wat.includes("(result i32 i32 i32 i32 i32)"));
+    assert.deepEqual(runExport(wat, "many"), [1, 2, 3, 4, 5]);
   });
 
-  test("six-return signature encodes all result lanes", () => {
-    const { meta, wat } = compile(
-      "fn many6(): (i32, i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5, 6; }",
-    );
+  maybeTest("six-return signatures and values retain every lane", () => {
+    const { meta, wat } = checkedCompile(`
+      export fn many6(): (i32, i32, i32, i32, i32, i32) {
+        return 1, 2, 3, 4, 5, 6;
+      }
+    `);
     assert.equal(meta.functions.many6?.signature, "v_iiiiii");
-    assert(wat.includes("(result i32 i32 i32 i32 i32 i32)"));
+    assert.deepEqual(runExport(wat, "many6"), [1, 2, 3, 4, 5, 6]);
   });
 
-  test("multi-value return emits both values", () => {
-    const { wat } = compile("fn pair(): (i32, i32) { return 1, 2; }");
-    assert(wat.includes("(return"));
-    assert(wat.includes("i32.const 1"));
-    assert(wat.includes("i32.const 2"));
+  maybeTest("multi-value return expressions preserve source order", () => {
+    const { wat } = checkedCompile("export fn pair(): (i32, i32) { return 1, 2; }");
+    assert.deepEqual(runExport(wat, "pair"), [1, 2]);
   });
 
-  test("pass-through return emits direct call return", () => {
-    const { wat } = compile(`
+  maybeTest("pass-through returns preserve every result", () => {
+    const { wat } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
-      fn p(): (i32, i32) { return swap(1, 2); }
+      export fn pass(): (i32, i32) { return swap(1, 2); }
     `);
-    const pBody = wat.split("(func $p")[1] ?? "";
-    assert(pBody.includes("(return (call $swap"), pBody);
+    assert.deepEqual(runExport(wat, "pass"), [2, 1]);
   });
 
-  test("destructuring let emits reverse local.set order", () => {
-    const { wat } = compile(`
+  maybeTest("destructuring binds multi-return values by position", () => {
+    const { wat } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
-      fn f(): void { let (x, y) = swap(1, 2); }
+      export fn run(): i32 { let (x, y) = swap(1, 2); return x * 10 + y; }
     `);
-    assertContainsInOrder(wat, ["(call $swap", "(local.set $y)", "(local.set $x)"]);
+    assert.equal(runExport(wat, "run"), 21);
   });
 
-  test("destructuring let with discard emits drop", () => {
-    const { wat } = compile(`
+  maybeTest("destructuring wildcards discard only their position", () => {
+    const { wat } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
-      fn f(): void { let (_, y) = swap(1, 2); }
+      export fn run(): i32 { let (_, y) = swap(1, 2); return y; }
     `);
-    assertContainsInOrder(wat, ["(call $swap", "(local.set $y)", "(drop)"]);
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("destructure locals are declared with per-result types", () => {
-    const { wat } = compile(`
+  maybeTest("destructured locals preserve their individual result types", () => {
+    const { wat } = checkedCompile(`
       fn pair(): (i32, i64) { return 1, 2 as i64; }
-      fn f(): void { let (x, y) = pair(); }
+      export fn run(): i64 { let (x, y) = pair(); return y + (x as i64); }
     `);
-    assert(wat.includes("(local $x i32)"));
-    assert(wat.includes("(local $y i64)"));
+    assert.equal(runExport(wat, "run"), 3n);
   });
 
-  test("statement-level multi-return call emits drops", () => {
-    const { wat } = compile(`
+  maybeTest("statement-position multi-return calls discard every result", () => {
+    const { wat } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
-      fn f(): void { swap(1, 2); }
+      export fn run(): i32 { swap(1, 2); return 7; }
     `);
-    assertContainsInOrder(wat, ["(call $swap", "(drop)", "(drop)"]);
+    assert.equal(runExport(wat, "run"), 7);
   });
 
-  test("statement-level five-return call emits five drops", () => {
-    const { wat } = compile(`
+  maybeTest("statement-position five-return calls discard every result", () => {
+    const { wat } = checkedCompile(`
       fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
-      fn f(): void { many(); }
+      export fn run(): i32 { many(); return 9; }
     `);
-    const body = wat.split("(func $f")[1] ?? "";
-    const dropCount = (body.match(/\(drop\)/g) ?? []).length;
-    assert.equal(dropCount, 5, body);
+    assert.equal(runExport(wat, "run"), 9);
   });
 
-  test("destructuring five-return emits reverse order sets with discard drop", () => {
-    const { wat } = compile(`
+  maybeTest("five-return destructuring combines bindings and wildcards", () => {
+    const { wat } = checkedCompile(`
       fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
-      fn f(): void { let (a, _, c, d, e) = many(); }
+      export fn run(): i32 {
+        let (a, _, c, d, e) = many();
+        return a * 1000 + c * 100 + d * 10 + e;
+      }
     `);
-    assertContainsInOrder(wat, [
-      "(call $many",
-      "(local.set $e)",
-      "(local.set $d)",
-      "(local.set $c)",
-      "(drop)",
-      "(local.set $a)",
-    ]);
+    assert.equal(runExport(wat, "run"), 1_345);
   });
 
-  test("single-return still emits __ret_tmp for frame functions", () => {
-    const { wat } = compile(`
+  maybeTest("single-return frame functions preserve their result", () => {
+    const { wat } = checkedCompile(`
       struct P { x: i32, y: i32 }
-      fn f(): i32 { let p: P = { x = 1, y = 2 }; return p.x; }
+      export fn run(): i32 { let p: P = { x = 1, y = 2 }; return p.x; }
     `);
-    assert(wat.includes("(local $__ret_tmp i32)"));
+    assert.equal(runExport(wat, "run"), 1);
   });
 
-  test("multi-return frame function emits __mret locals", () => {
-    const { wat } = compile(`
+  maybeTest("multi-return frame functions restore the frame and preserve results", () => {
+    const { wat } = checkedCompile(`
       struct P { x: i32, y: i32 }
-      fn f(): (i32, i32) {
+      export fn run(): (i32, i32) {
         let p: P = { x = 1, y = 2 };
         return p.x, p.y;
       }
     `);
-    assert(wat.includes("(local $__mret_0 i32)"), wat);
-    assert(wat.includes("(local $__mret_1 i32)"), wat);
+    assert.deepEqual(runExport(wat, "run"), [1, 2]);
   });
 });
 
 describe("Emission: stdlib global import", () => {
-  test("imported f32 global emits import and global.get", () => {
-    const { wat } = compile(`
+  maybeTest("imported f32 globals retain their runtime value", async () => {
+    const result = await runMergedExport(
+      `
       import PI from "math"
-      fn f(): f32 { return PI; }
-    `);
-    assert(wat.includes('(import "math" "PI" (global $PI f32))'));
-    assert(wat.includes("(global.get $PI)"));
+      export fn run(): f32 { return PI; }
+      `,
+      "run",
+    );
+    assert(Math.abs(Number(result) - Math.PI) < 0.000_001);
   });
 });
 
 describe("Emission: named function references", () => {
-  test("WAT section order: imports before table before globals before signatures before functions", () => {
-    const { wat } = compile(`
+  maybeTest("function references call the original function with their arguments", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
       fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assertContainsInOrder(wat, ["(import", "(table", "(type $sig_", "(func $add"]);
-  });
-
-  test("fn table is emitted with correct size", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes("(table $__fn_table 1 1 funcref)"), `Missing table: ${wat}`);
-  });
-
-  test("active elem initializes private trampolines without runtime table writes", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(
-      wat.includes("(elem (i32.const 0) func $__indirect_add)"),
-      `Missing active elem: ${wat}`,
+      export fn run(): i32 {
+        let op: fn(i32,i32):i32 = add;
+        return op(1, 2);
+      }
+        `,
+        "run",
+      ),
+      3,
     );
-    assert(!wat.includes("__fn_table_inited"), `Unexpected table guard: ${wat}`);
-    assert(!wat.includes("table.set"), `Unexpected runtime table write: ${wat}`);
-    assert(!wat.includes('(export "__indirect_'), `Unexpected trampoline export: ${wat}`);
   });
 
-  test("active elem follows deterministic fn-table slot order", () => {
-    const { wat } = compile(`
+  maybeTest("multiple function references preserve their distinct targets", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
       fn add(a: i32, b: i32): i32 { return a + b; }
       fn sub(a: i32, b: i32): i32 { return a - b; }
-      fn outer(): i32 {
+      export fn run(): i32 {
         let second: fn(i32,i32):i32 = sub;
         let first: fn(i32,i32):i32 = add;
         return first(3, 2) + second(3, 2);
       }
-    `);
-
-    assert(
-      wat.includes("(elem (i32.const 0) func $__indirect_sub $__indirect_add)"),
-      `Wrong active elem order: ${wat}`,
-    );
-  });
-
-  test("trampoline function forwards to original", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes("(func $__indirect_add"), `Missing trampoline: ${wat}`);
-    assert(wat.includes("(param $__env i32)"), `Trampoline missing env param: ${wat}`);
-    assert(wat.includes("(call $add"), `Trampoline missing call: ${wat}`);
-  });
-
-  test("fn-type signature declared with env param", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes("$sig_fn_i32_i32__i32"), `Missing sig name: ${wat}`);
-    assert(
-      wat.includes(
-        "(type $sig_fn_i32_i32__i32 (func (param i32) (param i32) (param i32) (result i32)))",
+        `,
+        "run",
       ),
-      `Wrong sig decl: ${wat}`,
+      6,
     );
   });
 
-  test("__make_fnref helper is emitted when closure runtime needed", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes("(func $__make_fnref"), `Missing __make_fnref: ${wat}`);
-    assert(wat.includes("(call $alloc"), `__make_fnref missing alloc call: ${wat}`);
-  });
-
-  test("alloc import synthesized when closure runtime is needed", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes('(import "memory" "malloc"'), `Missing alloc import: ${wat}`);
-  });
-
-  test("emitGet for function name produces call to __make_fnref", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 { let op: fn(i32,i32):i32 = add; return op(1, 2); }
-    `);
-    assert(wat.includes("(call $__make_fnref (i32.const 0))"), `Missing fnref creation: ${wat}`);
-  });
-
-  test("indirect call emits call_indirect with env+args+idx order", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn outer(): i32 {
-        let op: fn(i32,i32):i32 = add;
-        return op(1, 2);
+  maybeTest("void function references remain callable", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
+      let touched: i32 = 0;
+      fn mark(): void { touched = 7; }
+      export fn run(): i32 {
+        let cb: fn():void = mark;
+        cb();
+        return touched;
       }
-    `);
-    assertContainsInOrder(wat, [
-      "(call_indirect (type $sig_fn_i32_i32__i32)",
-      "(i32.load offset=4",
-      "(i32.const 1)",
-      "(i32.const 2)",
-      "(i32.load offset=0",
-    ]);
+        `,
+        "run",
+      ),
+      7,
+    );
   });
 
   test("two different functions get distinct slots", () => {
@@ -2858,70 +2876,47 @@ describe("Emission: named function references", () => {
     `);
     assert(meta.fnTable.size === 1, `Expected 1 table entry, got ${meta.fnTable.size}`);
   });
-
-  test("same fn-type signature used by two functions is declared once", () => {
-    const { wat } = compile(`
-      fn add(a: i32, b: i32): i32 { return a + b; }
-      fn sub(a: i32, b: i32): i32 { return a - b; }
-      fn outer(): void {
-        let a: fn(i32,i32):i32 = add;
-        let b: fn(i32,i32):i32 = sub;
-      }
-    `);
-    const count = (wat.match(/\$sig_fn_i32_i32__i32/g) ?? []).length;
-    assert(count >= 1, "Signature should appear at least once");
-    const typeCount = (wat.match(/\(type \$sig_fn_i32_i32__i32/g) ?? []).length;
-    assert.equal(typeCount, 1, "Type declaration should appear exactly once");
-  });
-
-  test("no closure runtime when no fn-refs used", () => {
-    const { wat } = compile(`fn add(a: i32, b: i32): i32 { return a + b; }`);
-    assert(!wat.includes("(table"), `Should not emit table: ${wat}`);
-    assert(!wat.includes("__make_fnref"), `Should not emit __make_fnref: ${wat}`);
-    assert(!wat.includes("alloc"), `Should not emit alloc: ${wat}`);
-  });
-
-  test("void function reference emits correct sig type", () => {
-    const { wat } = compile(`
-      fn noop(): void {}
-      fn outer(): void { let cb: fn():void = noop; }
-    `);
-    assert(wat.includes("$sig_fn___void"), `Missing void sig: ${wat}`);
-    assert(wat.includes("(type $sig_fn___void (func (param i32)))"), `Wrong void sig decl: ${wat}`);
-  });
 });
 
 describe("Emission: math stdlib calls", () => {
-  test("Tier 1 f32 imports emit call", () => {
-    const { wat } = compile(`
+  maybeTest("Tier 1 f32 imports execute through the bundled stdlib", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
       import sqrt, floor, abs_f32 from "math"
-      fn f(): f32 { return floor(sqrt(abs_f32(-4.0))); }
-    `);
-    assertContainsInOrder(wat, ['(import "math" "sqrt"', "(call $sqrt"]);
-    assertContainsInOrder(wat, ["(call $floor", "(call $abs_f32"]);
+      export fn run(): f32 { return floor(sqrt(abs_f32(-4.0))); }
+        `,
+        "run",
+      ),
+      2,
+    );
   });
 
-  test("Tier 1 f64 and abs_i32 imports emit call", () => {
-    const { wat } = compile(`
+  maybeTest("Tier 1 f64 and integer imports execute through the bundled stdlib", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
       import sqrt_f64, abs_i32 from "math"
-      fn f(): i32 { return abs_i32(-3); }
-      fn g(): f64 { return sqrt_f64(9.0); }
-    `);
-    assert(wat.includes("(call $sqrt_f64"));
-    assert(wat.includes("(call $abs_i32"));
+      export fn run(): i32 { return abs_i32(-3) + (sqrt_f64(9.0 as f64) as i32); }
+        `,
+        "run",
+      ),
+      6,
+    );
   });
 
-  test("Tier 2 imports emit call", () => {
-    const { wat } = compile(`
+  maybeTest("Tier 2 imports execute through the bundled stdlib", async () => {
+    assert.equal(
+      await runMergedExport(
+        `
       import sin, atan2, pow, fmod from "math"
-      fn f(): f32 { return sin(0.1); }
-      fn g(): f32 { return atan2(1.0, 1.0); }
-      fn h(): f32 { return pow(2.0, 3); }
-      fn i(): f32 { return fmod(3.0, 2.0); }
-    `);
-    assert(wat.includes("(call $sin"));
-    assert(wat.includes("(call $atan2"));
-    assert(wat.includes("(call $pow"));
-    assert(wat.includes("(call $fmod"));
+      export fn run(): f32 {
+        return sin(0.0) + atan2(0.0, 1.0) + pow(2.0, 3) + fmod(3.0, 2.0);
+      }
+        `,
+        "run",
+      ),
+      9,
+    );
   });
 });
