@@ -669,7 +669,7 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       const mergedPayload: DeferredGlobalInit =
         initializer.kind === "memory"
           ? { kind: "memory", id, owner }
-          : initializer.kind === "global"
+          : initializer.kind === "global" || initializer.kind === "array-elements"
             ? {
                 ...initializer,
                 id,

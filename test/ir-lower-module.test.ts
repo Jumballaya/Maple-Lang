@@ -422,36 +422,55 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
   });
 
-  maybeTest(
-    "interleaves heap, dependency scalar, memory, and importer startup in model order",
-    () => {
-      const result = mergedLowered({
-        "main.maple": `
+  maybeTest("interleaves heap, dependency scalar, memory, array, and importer startup", () => {
+    const result = mergedLowered({
+      "main.maple": `
         import value from "./dep.maple"
         import malloc from "memory"
         export let answer: i32 = value() + 4;
         export fn allocate(): i32 { return malloc(8); }
       `,
-        "dep.maple": `
+      "dep.maple": `
         struct State { value: i32 }
         fn seed_value(): i32 { return 2; }
         let seed: i32 = seed_value();
         let state: State = { value = seed + 3 };
-        export fn value(): i32 { return state.value; }
+        let values: i32[] = [state.value];
+        export fn value(): i32 { return values[0]; }
       `,
-      });
-      assert(result.input.meta.deferredGlobalInits[0]?.owner?.endsWith("$$heap_init"));
-      assert.deepEqual(
-        result.input.meta.deferredGlobalInits.map((entry) => [entry.kind, entry.owner]),
-        [
-          ["call", result.input.meta.deferredGlobalInits[0]?.owner],
-          ["global", "dep$$seed"],
-          ["memory", "dep$$state"],
-          ["global", "main$$answer"],
-        ],
-      );
-      const instance = instantiate(result.wat);
-      assert.equal((instance.exports.answer as WebAssembly.Global).value, 9);
-    },
-  );
+    });
+    assert(result.input.meta.deferredGlobalInits[0]?.owner?.endsWith("$$heap_init"));
+    assert.deepEqual(
+      result.input.meta.deferredGlobalInits.map((entry) => [entry.kind, entry.owner]),
+      [
+        ["call", result.input.meta.deferredGlobalInits[0]?.owner],
+        ["global", "dep$$seed"],
+        ["memory", "dep$$state"],
+        ["array-elements", "dep$$values"],
+        ["global", "main$$answer"],
+      ],
+    );
+    const arrayInitializer = result.input.meta.deferredGlobalInits[3];
+    assert(arrayInitializer?.kind === "array-elements");
+    assert.equal(arrayInitializer.name, "dep$$values");
+    const instance = instantiate(result.wat);
+    assert.equal((instance.exports.answer as WebAssembly.Global).value, 9);
+  });
+
+  maybeTest("roots a dependency global touched only by dynamic-array startup", () => {
+    const result = mergedLowered({
+      "main.maple": `
+        import ready from "./dep.maple"
+        export fn run(): i32 { return ready(); }
+      `,
+      "dep.maple": `
+        fn seed(): i32 { return 7; }
+        let startup_only: i32[] = [seed()];
+        export fn ready(): i32 { return 1; }
+      `,
+    });
+    assert(result.model.reachable.globals.has("dep$$startup_only"));
+    assert(result.model.reachable.functions.has("dep$$seed"));
+    assert.equal(call(instantiate(result.wat), "run"), 1);
+  });
 });

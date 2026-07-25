@@ -123,6 +123,102 @@ describe("IR memory lowering: layout and frames", () => {
 });
 
 describe("IR memory lowering: arrays", () => {
+  maybeTest("evaluates dynamic elements left to right once per declaration execution", () => {
+    const source = `
+      let trace: i32 = 0;
+      fn mark(value: i32): i32 { trace = trace * 10 + value; return value; }
+      fn build(): i32 {
+        let values: i32[] = [mark(1), mark(2)];
+        let result: i32 = values[0] * 10 + values[1];
+        values[0] = 9;
+        values[1] = 9;
+        return result;
+      }
+      export fn run(): i32 {
+        let first: i32 = build();
+        let second: i32 = build();
+        return trace * 10000 + first * 100 + second;
+      }
+    `;
+    assert.equal(fixed(source, "run"), 12_121_212);
+  });
+
+  maybeTest("reinitializes every slot of a mixed dynamic array", () => {
+    const source = `
+      fn middle(): i32 { return 2; }
+      fn build(): i32 {
+        let values: i32[] = [1, middle(), 3];
+        let result: i32 = values[0] * 100 + values[1] * 10 + values[2];
+        values[0] = 8;
+        values[1] = 8;
+        values[2] = 8;
+        return result;
+      }
+      export fn run(): i32 { return build() * 1000 + build(); }
+    `;
+    assert.equal(fixed(source, "run"), 123_123);
+  });
+
+  maybeTest("stores runtime u8 and i16 elements with their declared widths", () => {
+    const source = `
+      fn byte(value: u8): u8 { return value; }
+      fn half(value: i16): i16 { return value; }
+      export fn run(): i32 {
+        let bytes: u8[] = [byte(250), 1];
+        let halves: i16[] = [half(-1234), 2];
+        return (bytes[0] as i32) * 10000 + halves[0];
+      }
+    `;
+    assert.equal(fixed(source, "run"), 2_498_766);
+  });
+
+  maybeTest("stores dynamic string and struct-reference elements", () => {
+    const source = `
+      struct Pair { value: i32 }
+      export fn run(): i32 {
+        let text: string = "same";
+        let strings: string[] = ["same", text];
+        let first: Pair = { value = 4 };
+        let second: Pair = { value = 7 };
+        let pairs: Pair[] = [first, second];
+        return (strings[0] == strings[1]) * 100 + pairs[0].value * 10 + pairs[1].value;
+      }
+    `;
+    assert.equal(fixed(source, "run"), 147);
+  });
+
+  maybeTest("runs dynamic array stores in return, argument, and inline-index positions", () => {
+    const source = `
+      let trace: i32 = 0;
+      fn mark(value: i32): i32 { trace = trace * 10 + value; return value; }
+      fn returned(): i32[] { return [1, mark(2)]; }
+      fn take(values: i32[]): i32 { return values[1]; }
+      fn inline(): i32 { return [5, mark(6)][1]; }
+      export fn run(): i32 {
+        let fromReturn: i32 = returned()[1];
+        let fromArgument: i32 = take([3, mark(4)]);
+        let inlineIndex: i32 = inline();
+        let ordered: i32 = mark(7) + [0, mark(8)][1];
+        return trace * 100 + fromReturn + fromArgument + inlineIndex + ordered;
+      }
+    `;
+    assert.equal(fixed(source, "run"), 2_467_827);
+  });
+
+  maybeTest("keeps dynamic array stores inside short-circuited expressions", () => {
+    const source = `
+      let trace: i32 = 0;
+      fn mark(): i32 { trace++; return 1; }
+      export fn run(flag: i32): i32 {
+        if (flag && [0, mark()][1]) {}
+        return trace;
+      }
+    `;
+    const { wat } = lowered(source);
+    assert.equal(runExport(wat, "run", [0]), 0);
+    assert.equal(runExport(wat, "run", [1]), 1);
+  });
+
   maybeTest("preserves shared local literal buffers across calls", () => {
     const source = `
       fn touch(): i32 {
@@ -375,6 +471,26 @@ describe("IR memory lowering: structs", () => {
 });
 
 describe("IR memory lowering: startup initializers and helper demand", () => {
+  maybeTest("initializes module-scope dynamic arrays through start", () => {
+    const source = `
+      let trace: i32 = 0;
+      fn seed(): i32 { trace = trace + 1; return 4; }
+      let values: i32[] = [seed()];
+      export fn run(): i32 { return values[0] * 10 + trace; }
+    `;
+    const result = lowered(source);
+    assert.deepEqual(
+      checked(source).meta.deferredGlobalInits.map((entry) => [
+        entry.kind,
+        entry.owner,
+        "name" in entry ? entry.name : undefined,
+      ]),
+      [["array-elements", "values", "values"]],
+    );
+    assert.notEqual(result.module.start, undefined);
+    assert.equal(runExport(result.wat, "run"), 41);
+  });
+
   test("splices global struct stores by owner and ordinal", () => {
     const { ast, meta } = checked(`
       struct Pair { left: i32, right: i32 }

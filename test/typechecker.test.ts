@@ -207,31 +207,28 @@ describe("TypeChecker: integer literal ranges", () => {
 });
 
 describe("TypeChecker: array literal elements", () => {
-  const expressionsUnsupported =
-    "array literal elements must be literals (expressions are not supported yet)";
-
   for (const [name, source] of [
     ["identifier", "fn f(x: i32): void { let a: i32[] = [x, 2]; }"],
     ["call", "fn value(x: i32): i32 { return x; } fn f(): void { let a: i32[] = [value(1)]; }"],
     ["infix expression", "fn f(): void { let a: i32[] = [1 + 2]; }"],
     ["postfix expression", "fn f(): void { let y: i32 = 1; let a: i32[] = [y++]; }"],
   ] as const) {
-    test(`${name} elements are rejected until runtime initialization exists`, () => {
-      expectExactError(source, expressionsUnsupported);
+    test(`${name} elements use runtime initialization`, () => {
+      expectNoErrors(source);
     });
   }
 
-  test("mixed literal types are rejected", () => {
+  test("incompatible elements are rejected", () => {
     expectExactError(
-      "fn f(): void { let a = [1, 2.5]; }",
-      "array literal has mixed element types: 'i32' and 'f32'",
+      'fn f(): void { let a: i32[] = [1, "x"]; }',
+      "array element: expected 'i32', got 'string'",
     );
   });
 
   test("array member and literal types must agree", () => {
     expectExactError(
       "fn f(): void { let a: i32[] = [1.0, 2.0]; }",
-      "array literal of 'f32' elements cannot initialize 'i32[]'",
+      "array element: expected 'i32', got 'f32'",
     );
   });
 

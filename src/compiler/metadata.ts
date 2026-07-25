@@ -84,6 +84,12 @@ export type DeferredGlobalInit =
       expr: ASTExpression;
     }
   | {
+      kind: "array-elements";
+      id: string;
+      owner: string;
+      name: string;
+    }
+  | {
       kind: "call";
       id: string;
       owner: string;

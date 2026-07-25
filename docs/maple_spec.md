@@ -94,7 +94,9 @@ let count: i32 = nums.len;
 
 Array reads are bounds-checked. An index greater than or equal to `.len` traps; the unsigned comparison used by the check also makes negative indices trap.
 
-Array literal elements must currently be literals. Integer and float literals adopt the declared element type and are range-checked against it, so `let values: i64[] = [1, 2];` is valid. Expression elements such as `[x, f(2)]` are rejected until runtime element initialization is implemented.
+Array elements may be expressions. Each element must be compatible with the declared element type; integer and float literals adopt that type and are range-checked against it, so `let values: i64[] = [1, 2];` is valid. Elements evaluate left to right.
+
+Local array and string literals currently use shared static storage rather than fresh storage per call, so writes persist across calls. Dynamic-element array declarations re-initialize every element in that shared buffer each time the declaration executes.
 
 ### Struct types
 
@@ -564,7 +566,7 @@ Maple performs a static type-checking pass after parsing. Errors are reported wi
 6. **Const mutation** — assigning to a `const` binding, or writing through a member/index expression rooted in a `const` binding, is an error.
 7. **Struct literal field validation** — unknown fields, missing required fields, and field type mismatches are compile-time errors.
 8. **Integer literal ranges** — literals are checked against the type required by their surrounding expression.
-9. **Array literal elements** — unsupported expressions, mixed literal kinds, and element-type mismatches are rejected.
+9. **Array literal elements** — every element is checked for compatibility with the declared element type; nested array literals remain unsupported.
 10. **Function values** — function signatures, indirect-call arity, and function-type assignments are checked.
 
 ---

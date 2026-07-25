@@ -1,3 +1,4 @@
+import { hasDynamicArrayElements } from "../compiler/data-extraction";
 import { stmtDefinitelyReturns } from "../compiler/flow";
 import { getIntrinsic } from "../compiler/intrinsics";
 import type { ModuleMeta } from "../compiler/metadata";
@@ -112,6 +113,11 @@ type PendingMemorySite = {
   member: StructLayoutMember;
   expression: ASTExpression;
   needsStore: boolean;
+};
+
+type PendingArraySite = {
+  owner: string;
+  expression: ArrayLiteralExpression;
 };
 
 type IrLvalue = {
@@ -302,7 +308,9 @@ function copyBytes(target: Uint8Array, offset: number, bytes: Uint8Array): void 
 
 class StaticDataPlanner {
   readonly addresses = new Map<ASTExpression, number>();
+  readonly arrayPayloads = new Map<ArrayLiteralExpression, number>();
   readonly pendingSites: PendingMemorySite[] = [];
+  readonly pendingArrays: PendingArraySite[] = [];
   private cursor = 65_536;
 
   constructor(
@@ -346,6 +354,16 @@ class StaticDataPlanner {
         else this.allocateGlobalStruct(statement.expression, statement.identifier.tokenLiteral());
       } else {
         this.visitExpression(statement.expression);
+        if (
+          !insideFunction &&
+          statement.expression instanceof ArrayLiteralExpression &&
+          hasDynamicArrayElements(statement.expression)
+        ) {
+          this.pendingArrays.push({
+            owner: statement.identifier.tokenLiteral(),
+            expression: statement.expression,
+          });
+        }
       }
       return;
     }
@@ -452,9 +470,11 @@ class StaticDataPlanner {
     const elementType = expression.memberType;
     const elementSize = sizeofType(elementType);
     const data = new Uint8Array(elementSize * expression.elements.length);
+    const dynamic = hasDynamicArrayElements(expression);
     for (let index = 0; index < expression.elements.length; index += 1) {
       const element = expression.elements[index]!;
       this.visitExpression(element);
+      if (dynamic) continue;
       const encoded =
         element instanceof StringLiteralExpression ||
         element instanceof ArrayLiteralExpression ||
@@ -464,6 +484,7 @@ class StaticDataPlanner {
       copyBytes(data, index * elementSize, encoded);
     }
     const dataAddress = this.allocate(data, Math.min(8, Math.max(1, elementSize)));
+    this.arrayPayloads.set(expression, dataAddress);
     const header = new Uint8Array(8);
     const view = new DataView(header.buffer);
     view.setUint32(0, expression.elements.length, true);
@@ -550,6 +571,14 @@ class StaticDataPlanner {
     const address = this.addresses.get(expression);
     if (address === undefined)
       throw new Error(`lowering: missing static address for ${nodeKind(expression)}`);
+    return address;
+  }
+
+  arrayPayloadOf(expression: ArrayLiteralExpression): number {
+    const address = this.arrayPayloads.get(expression);
+    if (address === undefined) {
+      throw new Error("lowering: missing static array payload");
+    }
     return address;
   }
 
@@ -708,6 +737,10 @@ class FunctionLowerer {
       0,
       widthOf(mapleType),
     );
+  }
+
+  lowerPendingArray(expression: ArrayLiteralExpression): void {
+    this.initializeArray(expression);
   }
 
   lowerInitializer(expression: ASTExpression): Expr {
@@ -1069,9 +1102,14 @@ class FunctionLowerer {
   }
 
   private lowerExpression(expression: ASTExpression): Expr {
+    if (expression instanceof ArrayLiteralExpression) {
+      resolvedType(expression);
+      const pointer = this.fn.constant("i32", this.staticData.addressOf(expression));
+      if (!hasDynamicArrayElements(expression)) return pointer;
+      return this.fn.seq(() => this.initializeArray(expression), pointer);
+    }
     if (
       expression instanceof StructLiteralExpression ||
-      expression instanceof ArrayLiteralExpression ||
       expression instanceof StringLiteralExpression
     ) {
       resolvedType(expression);
@@ -1116,6 +1154,22 @@ class FunctionLowerer {
     }
     if (expression instanceof FunctionLiteralExpression) return unsupported(expression);
     return unsupported(expression);
+  }
+
+  private initializeArray(expression: ArrayLiteralExpression): void {
+    const elementType = expression.memberType;
+    const elementSize = sizeofType(elementType);
+    const dataAddress = this.staticData.arrayPayloadOf(expression);
+    for (let index = 0; index < expression.elements.length; index += 1) {
+      const element = expression.elements[index]!;
+      this.fn.store(
+        lane(elementType),
+        this.fn.constant("i32", dataAddress),
+        this.lowerExpression(element),
+        index * elementSize,
+        widthOf(elementType),
+      );
+    }
   }
 
   private lowerIdentifier(expression: Identifier): Expr {
@@ -2038,6 +2092,37 @@ export function lowerModule(
       site.member.mapleType,
       site.expression,
     );
+    pendingInits.push({
+      initializerId: initializer.id,
+      locals,
+      statements: fragment.body,
+    });
+  }
+  for (const site of staticData.pendingArrays) {
+    const initializer = deferredByOwner
+      .get(site.owner)
+      ?.find((entry) => entry.kind === "array-elements" && entry.name === site.owner);
+    if (!initializer) {
+      throw new Error(`lowering: missing deferred array initializer for '${site.owner}'`);
+    }
+    const fragmentBuilder = new IrBuilder();
+    const signature = fragmentBuilder.signature([], []);
+    const fragment = fragmentBuilder.func("__pending_init", signature);
+    const locals: IrType[] = [];
+    const lowerer = new FunctionLowerer(
+      fragment,
+      functions,
+      globals,
+      [],
+      layouts,
+      staticData,
+      runtime,
+      undefined,
+      undefined,
+      locals,
+      fnrefs,
+    );
+    lowerer.lowerPendingArray(site.expression);
     pendingInits.push({
       initializerId: initializer.id,
       locals,

@@ -539,11 +539,23 @@ describe("Emission: 64-bit widths and unsigned ops", () => {
 });
 
 describe("Static data extraction", () => {
-  test("expression elements throw instead of silently encoding zero", () => {
-    const parser = new Parser("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }");
+  test("records one deferred entry per dynamic global array and none for locals", () => {
+    const parser = new Parser(`
+      let seed: i32 = 1;
+      let first: i32[] = [seed];
+      let second: i32[] = [seed + 1, 2];
+      fn f(): void { let local: i32[] = [seed]; }
+    `);
     const ast = parser.parse("test");
     assert.deepEqual(parser.errors, []);
-    assert.throws(() => extractModuleMeta(ast), /array literal element must be a literal/);
+    const meta = extractModuleMeta(ast);
+    assert.deepEqual(
+      meta.deferredGlobalInits.map((entry) => [entry.kind, entry.owner, entry.id]),
+      [
+        ["array-elements", "first", "first:0"],
+        ["array-elements", "second", "second:0"],
+      ],
+    );
   });
 });
 

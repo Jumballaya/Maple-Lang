@@ -27,21 +27,6 @@ import { TuplePattern } from "../parser/ast/statements/TuplePattern";
 import { WhileStatement } from "../parser/ast/statements/WhileStatement";
 import type { ASTExpression, ASTStatement } from "../parser/ast/types/ast.type";
 import type { ModuleMeta, StructData } from "./metadata";
-import { baseScalar } from "./types";
-
-const ENCODABLE_STATIC_ARRAY_TYPES = new Set([
-  "i8",
-  "u8",
-  "i16",
-  "u16",
-  "i32",
-  "u32",
-  "i64",
-  "u64",
-  "f32",
-  "f64",
-  "bool",
-]);
 
 function nextInitializerId(meta: ModuleMeta, owner: string): string {
   const ordinal = meta.deferredGlobalInits.filter((entry) => entry.owner === owner).length;
@@ -86,6 +71,20 @@ export function extractGlobalData(
   if (statement instanceof LetStatement) {
     if (statement.expression) {
       scanExpression(statement.expression, deferArrayElementErrors);
+    }
+    if (
+      !insideFunction &&
+      !(statement.pattern instanceof TuplePattern) &&
+      statement.expression instanceof ArrayLiteralExpression &&
+      hasDynamicArrayElements(statement.expression)
+    ) {
+      const owner = statement.identifier.tokenLiteral();
+      meta.deferredGlobalInits.push({
+        kind: "array-elements",
+        id: nextInitializerId(meta, owner),
+        owner,
+        name: owner,
+      });
     }
     if (
       !insideFunction &&
@@ -204,7 +203,6 @@ function isDirectStructField(expression: ASTExpression): boolean {
 
 function scanExpression(expression: ASTExpression, deferArrayElementErrors: boolean): void {
   if (expression instanceof ArrayLiteralExpression) {
-    validateArrayLiteral(expression, deferArrayElementErrors);
     for (const element of expression.elements) scanExpression(element, deferArrayElementErrors);
     return;
   }
@@ -250,21 +248,15 @@ function scanExpression(expression: ASTExpression, deferArrayElementErrors: bool
   }
 }
 
-function validateArrayLiteral(
-  expression: ArrayLiteralExpression,
-  deferElementErrors: boolean,
-): void {
-  const elementType =
-    expression.memberType === "string" ? "i32" : baseScalar(expression.memberType);
-  if (deferElementErrors && !ENCODABLE_STATIC_ARRAY_TYPES.has(elementType)) return;
-  const hasUnsupportedElement = expression.elements.some(
-    (element) =>
-      !(element instanceof IntegerLiteralExpression) &&
-      !(element instanceof FloatLiteralExpression) &&
-      !(element instanceof BooleanLiteralExpression) &&
-      !(element instanceof StringLiteralExpression),
+export function isStaticArrayElement(expression: ASTExpression): boolean {
+  return (
+    expression instanceof IntegerLiteralExpression ||
+    expression instanceof FloatLiteralExpression ||
+    expression instanceof BooleanLiteralExpression ||
+    expression instanceof StringLiteralExpression
   );
-  if (hasUnsupportedElement && !deferElementErrors) {
-    throw new Error("array literal element must be a literal");
-  }
+}
+
+export function hasDynamicArrayElements(expression: ArrayLiteralExpression): boolean {
+  return expression.elements.some((element) => !isStaticArrayElement(element));
 }
