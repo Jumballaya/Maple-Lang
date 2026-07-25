@@ -4,13 +4,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { compiler, linkStdlibImports } from "../src/compiler/compiler";
+import { compiler, linkStdlibImports, printValidatedModule } from "../src/compiler/compiler";
 import {
   collectFnReferences,
   type EmitOptions,
-  emitModule,
   extractModuleMeta,
 } from "../src/compiler/emitters/module";
+import { typeCheck } from "../src/compiler/TypeChecker";
+import { lowerModule } from "../src/ir/lower";
 import { Parser } from "../src/parser/Parser";
 
 function probeWat2Wasm(): boolean {
@@ -57,10 +58,16 @@ export function compile(src: string, options: EmitOptions = { importMemory: fals
     0,
     `Parse errors: ${parser.errors.map((error) => error.message).join("; ")}`,
   );
-  const meta = extractModuleMeta(ast);
+  const meta = extractModuleMeta(ast, true);
   collectFnReferences(ast, meta);
   linkStdlibImports(meta);
-  return emitModule(ast, meta, options).buildWat();
+  assert.deepEqual(
+    typeCheck(ast, meta).map((error) => error.message),
+    [],
+  );
+  const result = lowerModule(ast, meta, options);
+  assert.deepEqual(result.pendingInits, []);
+  return printValidatedModule(result.module, []);
 }
 
 export function validateWithWat2Wasm(wat: string): string | null {

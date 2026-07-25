@@ -57,7 +57,7 @@ before assigning final addresses, so dead literal data does not consume static s
 
 Local struct literals (declared inside function bodies) are **not** placed here — they live on the shadow stack.
 
-When a global struct field uses an expression (for example `{ x = other + 1 }`), the compiler writes a zero placeholder in static data and emits a one-time runtime store guarded by `$__globals_inited`. Literal-valued fields remain fully compile-time encoded.
+When a global struct field uses an expression (for example `{ x = other + 1 }`), the compiler writes a zero placeholder in static data and emits a one-time runtime store in the WebAssembly start function. Literal-valued fields remain fully compile-time encoded.
 
 `dataPtr` starts at `65536` so the first WebAssembly page remains reserved for
 the compiler-managed shadow stack. Static addresses baked into emitted code use
@@ -72,7 +72,7 @@ Runtime-managed by the Maple stdlib module (`src/compiler/stdlib/memory.maple`).
 - `free(ptr)` — marks the block free, coalesces with the next block if it is also free, and reclaims the wilderness top if the freed block is at `heap_end`.
 - `realloc(old, old_size, new_size)` — `malloc` + `memory.copy` + `free`.
 - `memory.grow` is called automatically when `malloc` needs more capacity.
-- Merged programs place `heap_init(align8(finalDataEnd))` first in the guarded initialization prologue, placing the heap above all static data. The prologue runs lazily before the first entry-module exported function body, not at WebAssembly instantiation time.
+- Merged programs place `heap_init(align8(finalDataEnd))` first in the start function, placing the heap above all static data when WebAssembly instantiation runs.
 - `heap_init(data_end)` is Maple-exported from the `"memory"` module for explicit resets, but is not itself a host export. It discards the free list and resets the wilderness to `align8(data_end)`, invalidating every allocation returned before the call.
 - Unwired single-module and direct-harness instances initialize lazily at `131072` on their first `malloc` call.
 

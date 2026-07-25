@@ -42,6 +42,19 @@ function checkedCompile(source: string): string {
   return compile(source);
 }
 
+function checkerMessages(source: string): string[] {
+  const parser = new Parser(source, "integration.maple");
+  const ast = parser.parse("integration");
+  assert.deepEqual(
+    parser.errors.map((error) => error.message),
+    [],
+  );
+  const meta = extractModuleMeta(ast, true);
+  collectFnReferences(ast, meta);
+  linkStdlibImports(meta);
+  return typeCheck(ast, meta).map((error) => error.message);
+}
+
 const wat2wasmAvailable = hasWat2Wasm();
 
 describe("wat2wasm test gating", () => {
@@ -2432,21 +2445,19 @@ describe("narrow integer casts", () => {
 // ─── Switch statements ─────────────────────────────────────────────────────
 
 describe("switch statements", () => {
-  // The typechecker permits `switch (expr)` on f32; the emitter lowers to
-  // `br_table` which requires an i32 discriminant. wat2wasm rejects.
-  maybeTest("switch on f32 discriminant is either rejected or lowered correctly", () => {
-    const wat = compile(`
-      export fn run(): i32 {
-        let x: f32 = 1.0;
-        switch (x) {
-          case 1: { return 10; }
-          default: { return 0; }
+  test("switch on f32 discriminant is rejected before lowering", () => {
+    assert.deepEqual(
+      checkerMessages(`
+        export fn run(x: f32): i32 {
+          switch (x) {
+            case 1: { return 10; }
+            default: { return 0; }
+          }
+          return -1;
         }
-        return -1;
-      }
-    `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+      `),
+      ["switch discriminant must be an i32-compatible type, got 'f32'"],
+    );
   });
 
   test("switch case can use a negative integer literal", () => {
@@ -2481,12 +2492,10 @@ describe("switch statements", () => {
     assert.equal(runExport(wat, "run", [5]), 999);
   });
 
-  // Switch on f32 is coerced to i32 via `i32.trunc_f32_s`, so the case
-  // bodies fire for values whose truncation matches.
-  maybeTest("switch on f32 dispatches on the truncated integer value", () => {
+  maybeTest("switch on an explicitly truncated f32 dispatches on the integer value", () => {
     const wat = compile(`
       export fn run(x: f32): i32 {
-        switch (x) {
+        switch (x as i32) {
           case 1: { return 100; }
           case 2: { return 200; }
           default: { return 0; }
@@ -2831,7 +2840,7 @@ describe("trap semantics", () => {
   maybeTest("in-range float truncation returns the truncated value", () => {
     const wat = compile(`
       export fn fromF32(): i32 { return 3.75 as i32; }
-      export fn fromF64(): i32 { return (0.0 - (3.75 as f64)) as i32; }
+      export fn fromF64(): i32 { return ((0.0 as f64) - (3.75 as f64)) as i32; }
     `);
     assert.equal(runExport(wat, "fromF32"), 3);
     assert.equal(runExport(wat, "fromF64"), -3);

@@ -1,6 +1,7 @@
 // biome-ignore-all lint/suspicious/noThenProperty: IR branch nodes intentionally use `then`.
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { printValidatedModule } from "../src/compiler/compiler";
 import type { ConvOp, Expr, IrModule, IrType, Stmt } from "../src/ir/ir";
 import { validateModule } from "../src/ir/validate";
 
@@ -142,6 +143,20 @@ function expectError(expected: string, mutate: (module: IrModule) => void): void
 }
 
 describe("IR validator: valid modules", () => {
+  test("the backend validates after running its pass hook", () => {
+    assert.throws(
+      () =>
+        printValidatedModule(validModule(), [
+          (module) => {
+            module.memory.initialPages = 0;
+          },
+        ]),
+      {
+        message: /IR validation failed:\nmemory initialPages must be at least 1/,
+      },
+    );
+  });
+
   test("accepts arithmetic, exports, data, a populated table, and start", () => {
     assert.deepEqual(validateModule(validModule()), []);
   });

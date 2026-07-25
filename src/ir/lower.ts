@@ -828,18 +828,24 @@ class FunctionLowerer {
     resolvedType(expression);
     const layout = this.layouts.get(expression.name);
     const offset = this.frame.offsets.get(statement);
-    if (!layout || offset === undefined || this.stackPointer === undefined) unsupported(expression);
+    if (!layout || offset === undefined) unsupported(expression);
     const id = this.local("i32", statement.resolvedName ?? name);
-    const pointer =
-      offset === 0
-        ? this.fn.globalGet(this.stackPointer)
-        : this.fn.binop(
-            "add",
-            "i32",
-            false,
-            this.fn.globalGet(this.stackPointer),
-            this.fn.constant("i32", offset),
-          );
+    let pointer: Expr;
+    if (layout.size === 0) {
+      pointer = this.fn.constant("i32", 0);
+    } else {
+      if (this.stackPointer === undefined) unsupported(expression);
+      pointer =
+        offset === 0
+          ? this.fn.globalGet(this.stackPointer)
+          : this.fn.binop(
+              "add",
+              "i32",
+              false,
+              this.fn.globalGet(this.stackPointer),
+              this.fn.constant("i32", offset),
+            );
+    }
     this.fn.localSet(id, pointer);
     for (const member of layout.members) {
       const value = expression.members[member.name];

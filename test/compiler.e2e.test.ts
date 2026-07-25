@@ -102,9 +102,9 @@ function call(instance: WebAssembly.Instance, name: string, ...args: number[]): 
  */
 describe("host surface (WAT-structural)", () => {
   function wiredHeapBase(wat: string): number {
-    const values = [...wat.matchAll(/\(call \$[^\s()]*heap_init \(i32\.const (\d+)\)\)/g)].map(
-      (match) => Number(match[1]),
-    );
+    const values = [
+      ...wat.matchAll(/\(call \$[^\s()]*heap_init(?:_\d+)? \(i32\.const (\d+)\)\)/g),
+    ].map((match) => Number(match[1]));
     const generated = values.find((value) => value !== 131072);
     assert(generated !== undefined, "missing generated heap_init call");
     return generated;
@@ -134,7 +134,7 @@ describe("host surface (WAT-structural)", () => {
       "d.maple": "export fn base(): i32 { return 10; }",
     });
 
-    assert.equal(wat.match(/\(func\s+\$[^\s()]*\$\$base\b/g)?.length, 1);
+    assert.equal(wat.match(/\(func\s+\$[^\s()]*\$\$base(?:_\d+)?(?=\s|\))/g)?.length, 1);
   });
 
   maybeTest("retains the function-reference table, element, and trampoline", async () => {
@@ -149,10 +149,13 @@ describe("host surface (WAT-structural)", () => {
       "ops.maple": "export fn add(a: i32, b: i32): i32 { return a + b; }",
     });
 
-    assert.match(wat, /\(func\s+\$[^\s()]*\$\$add\b/);
-    assert.match(wat, /\(func\s+\$[^\s()]*\$\$__indirect_add\b/);
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$add(?:_\d+)?(?=\s|\))/);
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$__indirect_add(?:_\d+)?(?=\s|\))/);
     assert.match(wat, /\(table\s+\$[^\s()]*fn_table\b\s+1\s+1\s+funcref\s*\)/);
-    assert.match(wat, /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add\b\s*\)/);
+    assert.match(
+      wat,
+      /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add(?:_\d+)?\s*\)/,
+    );
     assert(WebAssembly.Module.exports(module).every((entry) => !entry.name.includes("indirect")));
   });
 
@@ -169,8 +172,8 @@ describe("host surface (WAT-structural)", () => {
       `,
     });
 
-    assert.match(wat, /\(func\s+\$[^\s()]*\$\$used\b/);
-    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$unused_(?:private|export)\b/);
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$used(?:_\d+)?(?=\s|\))/);
+    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$unused_(?:private|export)(?:_\d+)?(?=\s|\))/);
   });
 
   maybeTest("does not create a table for unreachable function references", async () => {
@@ -185,7 +188,7 @@ describe("host surface (WAT-structural)", () => {
       `,
     });
 
-    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$(?:target|unused)\b/);
+    assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$(?:target|unused)(?:_\d+)?(?=\s|\))/);
     assert.doesNotMatch(wat, /\(table\s+\$[^\s()]*fn_table\b/);
   });
 
@@ -198,7 +201,7 @@ describe("host surface (WAT-structural)", () => {
       `,
     });
 
-    assert.match(wat, /\(func\s+\$[^\s()]*\$\$seed\b/);
+    assert.match(wat, /\(func\s+\$[^\s()]*\$\$seed(?:_\d+)?(?=\s|\))/);
   });
 
   maybeTest("filters unused stdlib function chains", async () => {
@@ -223,9 +226,9 @@ describe("host surface (WAT-structural)", () => {
       `,
     });
 
-    assert.doesNotMatch(unused.wat, /\(func\s+\$[^\s()]*\$\$(?:sqrt|sin)\b/);
-    assert.match(used.wat, /\(func\s+\$[^\s()]*\$\$sqrt\b/);
-    assert.doesNotMatch(used.wat, /\(func\s+\$[^\s()]*\$\$sin\b/);
+    assert.doesNotMatch(unused.wat, /\(func\s+\$[^\s()]*\$\$(?:sqrt|sin)(?:_\d+)?(?=\s|\))/);
+    assert.match(used.wat, /\(func\s+\$[^\s()]*\$\$sqrt(?:_\d+)?(?=\s|\))/);
+    assert.doesNotMatch(used.wat, /\(func\s+\$[^\s()]*\$\$sin(?:_\d+)?(?=\s|\))/);
   });
 
   maybeTest("emits deterministic WAT before and after filtering", async () => {
@@ -242,7 +245,7 @@ describe("host surface (WAT-structural)", () => {
     const second = await compileProject(project);
 
     assert.equal(first.wat, second.wat);
-    assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused\b/);
+    assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused(?:_\d+)?(?=\s|\))/);
   });
 
   maybeTest("shakes dead literal data before laying out the heap", async () => {
@@ -276,7 +279,7 @@ describe("host surface (WAT-structural)", () => {
     );
     assert.match(
       "(elem\n (i32.const 0)\n func\n $prefix$$__indirect_add)",
-      /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add\b\s*\)/,
+      /\(elem\s+\(i32\.const\s+0\)\s+func\s+\$[^\s()]*\$\$__indirect_add(?:_\d+)?\s*\)/,
     );
   });
 });
@@ -585,6 +588,38 @@ describe("Compiler: merged whole-program emission", () => {
     });
 
     assert.equal(call(instance, "run"), 42);
+  });
+
+  maybeTest(
+    "makes dependency-ordered globals readable immediately after instantiation",
+    async () => {
+      const { instance } = await compileProject({
+        "main.maple": `
+        import base from "./dependency.maple"
+        export const answer: i32 = base + 1;
+      `,
+        "dependency.maple": `
+        fn seed(): i32 { return 41; }
+        export let base: i32 = seed();
+      `,
+      });
+
+      assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
+    },
+  );
+
+  maybeTest("surfaces deferred initializer traps during instantiation", async () => {
+    await assert.rejects(
+      () =>
+        compileProject({
+          "main.maple": `
+            struct Box { value: i32 }
+            let box: Box = { value = [1][2] };
+            export fn run(): i32 { return box.value; }
+          `,
+        }),
+      WebAssembly.RuntimeError,
+    );
   });
 
   maybeTest("does not require a linker executable on PATH", async () => {

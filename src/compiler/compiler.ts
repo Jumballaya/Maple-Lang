@@ -1,12 +1,17 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { IrModule } from "../ir/ir";
+import { lowerModule } from "../ir/lower";
+import { type IrPass, runPasses } from "../ir/passes";
+import { printWat } from "../ir/print-wat";
+import { validateModule } from "../ir/validate";
 import type { ASTProgram } from "../parser/ast/ASTProgram";
 import { Parser } from "../parser/Parser";
 import { extractLinkedStructGlobals } from "./emitters/emit.data";
 import { canonicalFnType, parseFnType } from "./emitters/emit.types";
 import type { ModuleMeta } from "./emitters/emitter.types";
-import { emitMergedProgram } from "./emitters/merge";
+import { buildMergedLoweringInput } from "./emitters/merge";
 import { buildMergedProgram } from "./emitters/merge-model";
 import { extractModuleMeta } from "./emitters/module";
 import {
@@ -25,6 +30,15 @@ export { resolveImportModule };
 export type CompilerOptions = {
   importMemory: boolean;
 };
+
+export function printValidatedModule(module: IrModule, passes: readonly IrPass[]): string {
+  runPasses(module, passes);
+  const errors = validateModule(module);
+  if (errors.length > 0) {
+    throw new Error(`IR validation failed:\n${errors.join("\n")}`);
+  }
+  return printWat(module);
+}
 
 function resolveLinkedType(graph: ModuleGraph, module: ModuleRecord, type: string): string {
   if (type.startsWith("*")) return `*${resolveLinkedType(graph, module, type.slice(1))}`;
@@ -66,6 +80,13 @@ export function linkStdlibImports(meta: ModuleMeta): void {
     }
     imp.info = entry;
     imp.resolved = true;
+    if (entry.kind === "func") {
+      const target = stdMod.functions[imp.name];
+      if (target) {
+        imp.mapleParams = target.params.map((param) => param.type);
+        imp.mapleResults = [...target.mapleResults];
+      }
+    }
   }
 }
 
@@ -82,7 +103,7 @@ export function linkStdlibImports(meta: ModuleMeta): void {
 //  3) Validation pass
 //     - run typeCheck() over each module before emission
 //
-//  4) Build the whole-program model and emit one WAT module
+//  4) Build the whole-program model, lower it to IR, and print one WAT module
 //
 //  5) Assemble the final WebAssembly module with wat2wasm
 //
@@ -202,7 +223,16 @@ export async function compiler(
   // @TODO: Optimization pass
 
   const model = buildMergedProgram(graph);
-  const wat = emitMergedProgram(model, options);
+  const loweringInput = buildMergedLoweringInput(model);
+  const result = lowerModule(loweringInput.ast, loweringInput.meta, {
+    importMemory: options.importMemory,
+    exportMap: loweringInput.exportMap,
+    ...(loweringInput.allocator === undefined ? {} : { allocator: loweringInput.allocator }),
+  });
+  if (result.pendingInits.length > 0) {
+    throw new Error(`lowering left ${result.pendingInits.length} pending initializer(s)`);
+  }
+  const wat = printValidatedModule(result.module, []);
   const outputDir = path.dirname(outputPath);
   await mkdir(outputDir, { recursive: true });
   const watPath = outputPath.endsWith(".wasm")

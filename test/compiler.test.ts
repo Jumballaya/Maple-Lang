@@ -3,7 +3,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { compiler, linkStdlibImports, resolveImportModule } from "../src/compiler/compiler";
+import {
+  compiler,
+  linkStdlibImports,
+  printValidatedModule,
+  resolveImportModule,
+} from "../src/compiler/compiler";
 import type { ExportMeta } from "../src/compiler/emitters/emitter.types";
 import { emitExpression } from "../src/compiler/emitters/expression/expression";
 import { resolveStructMember } from "../src/compiler/emitters/expression/member";
@@ -15,6 +20,7 @@ import {
 import { MapleError } from "../src/compiler/errors";
 import { ModuleEmitter } from "../src/compiler/ModuleEmitter";
 import { typeCheck } from "../src/compiler/TypeChecker";
+import { lowerModule } from "../src/ir/lower";
 import type { Token } from "../src/lexer/token.types";
 import { InfixExpression } from "../src/parser/ast/expressions/InfixExpression";
 import { IntegerLiteralExpression } from "../src/parser/ast/expressions/IntegerLiteral";
@@ -24,21 +30,9 @@ import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
 import { maybeTest, runExport, runMergedExport } from "./helpers";
 
-function compile(src: string) {
-  const p = new Parser(src);
-  const ast = p.parse("test");
-  assert.equal(p.errors.length, 0, `Parse errors: ${p.errors.map((e) => e.message).join(", ")}`);
-  const meta = extractModuleMeta(ast);
-  collectFnReferences(ast, meta);
-  linkStdlibImports(meta);
-  const mod = emitModule(ast, meta);
-  const wat = mod.buildWat();
-  return { ast, meta, mod, wat };
-}
-
-function checkedCompile(src: string) {
-  const parser = new Parser(src, "behavioralization.maple");
-  const ast = parser.parse("behavioralization");
+function compileWithIr(src: string, moduleName: string, fileName?: string) {
+  const parser = new Parser(src, fileName);
+  const ast = parser.parse(moduleName);
   assert.deepEqual(
     parser.errors.map((error) => error.message),
     [],
@@ -50,9 +44,18 @@ function checkedCompile(src: string) {
     typeCheck(ast, meta).map((error) => error.message),
     [],
   );
-  const mod = emitModule(ast, meta);
-  const wat = mod.buildWat();
-  return { ast, meta, mod, wat };
+  const result = lowerModule(ast, meta);
+  assert.deepEqual(result.pendingInits, []);
+  const wat = printValidatedModule(result.module, []);
+  return { ast, meta, mod: result.module, wat };
+}
+
+function compile(src: string) {
+  return compileWithIr(src, "test");
+}
+
+function checkedCompile(src: string) {
+  return compileWithIr(src, "behavioralization", "behavioralization.maple");
 }
 
 function checkerMessages(src: string): string[] {
@@ -551,6 +554,21 @@ describe("Emission: 64-bit widths and unsigned ops", () => {
 });
 
 describe("legacy emitter unit (dies with T38)", () => {
+  function legacyCompile(src: string) {
+    const parser = new Parser(src);
+    const ast = parser.parse("test");
+    assert.equal(
+      parser.errors.length,
+      0,
+      `Parse errors: ${parser.errors.map((error) => error.message).join(", ")}`,
+    );
+    const meta = extractModuleMeta(ast);
+    collectFnReferences(ast, meta);
+    linkStdlibImports(meta);
+    const mod = emitModule(ast, meta);
+    return { ast, meta, mod, wat: mod.buildWat() };
+  }
+
   test("resolved import with I_I emits i64 param and result in type", () => {
     const p = new Parser(`
       import callee from "m"
@@ -628,7 +646,7 @@ describe("legacy emitter unit (dies with T38)", () => {
 
   test("expression elements throw instead of silently encoding zero", () => {
     assert.throws(
-      () => compile("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }"),
+      () => legacyCompile("fn f(): void { let x: i32 = 1; let a: i32[] = [x]; }"),
       /array literal element must be a literal/,
     );
   });
@@ -636,7 +654,7 @@ describe("legacy emitter unit (dies with T38)", () => {
   test("void function with local struct and value return does not reference $__ret_tmp", () => {
     // Emitter robustness path: type checker would reject this program, but
     // emitter-only compile should not emit undeclared $__ret_tmp references.
-    const { wat } = compile(`
+    const { wat } = legacyCompile(`
       struct Point { x: i32, y: i32 }
       fn test(): void {
         let p: Point = { x = 1, y = 2 };
@@ -2437,7 +2455,7 @@ describe("Emission: extractGlobalData — local struct skipped", () => {
 describe("host surface (WAT-structural)", () => {
   test("exports functions and owns memory by default", () => {
     const { wat } = compile("export fn run(): i32 { return 1; }");
-    const exportPattern = /\(\s*func\s+\$run\s+\(\s*export\s+"run"\s*\)/;
+    const exportPattern = /\(\s*func\s+\$run(?:_\d+)?\s+\(\s*export\s+"run"\s*\)/;
     const memoryPattern = /\(\s*memory\s+\(\s*export\s+"memory"\s*\)\s+2\s*\)/;
     assert.match(wat, exportPattern);
     assert.match(wat, memoryPattern);
@@ -2449,7 +2467,7 @@ describe("host surface (WAT-structural)", () => {
       import PI, sqrt, floor, abs_f32, sqrt_f64, abs_i32, sin, atan2, pow, fmod from "math"
       export fn run(): f32 { return PI; }
     `);
-    assert.match(wat, /\(\s*import\s+"math"\s+"PI"\s+\(\s*global\s+\$PI\s+f32\s*\)\s*\)/);
+    assert.match(wat, /\(\s*import\s+"math"\s+"PI"\s+\(\s*global\s+\$PI(?:_\d+)?\s+f32\s*\)\s*\)/);
     for (const name of [
       "sqrt",
       "floor",
@@ -2474,10 +2492,13 @@ describe("host surface (WAT-structural)", () => {
       }
     `);
     assert.match(wat, /\(\s*table\s+\$__fn_table\s+1\s+1\s+funcref\s*\)/);
-    assert.match(wat, /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_add\s*\)/);
     assert.match(
       wat,
-      /\(\s*type\s+\$sig_fn_i32_i32__i32\s+\(\s*func\s+\(\s*param\s+i32\s*\)\s+\(\s*param\s+i32\s*\)\s+\(\s*param\s+i32\s*\)\s+\(\s*result\s+i32\s*\)\s*\)\s*\)/,
+      /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_add(?:_\d+)?\s*\)/,
+    );
+    assert.match(
+      wat,
+      /\(\s*type\s+\$[^\s()]+\s+\(\s*func\s+(?:(?:\(\s*param\s+i32\s*\)\s*){3}|\(\s*param\s+i32\s+i32\s+i32\s*\)\s*)\(\s*result\s+i32\s*\)\s*\)\s*\)/,
     );
     assert.match(wat, /\(\s*import\s+"memory"\s+"malloc"\s+\(\s*func\b/);
     assert.doesNotMatch(wat, /\(\s*export\s+"[^"]*"\s+\(\s*func\s+\$__indirect_/);
@@ -2498,11 +2519,14 @@ describe("host surface (WAT-structural)", () => {
     assert.match(wat, /\(\s*table\s+\$__fn_table\s+2\s+2\s+funcref\s*\)/);
     assert.match(
       wat,
-      /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_sub\s+\$__indirect_add\s*\)/,
+      /\(\s*elem\s+\(\s*i32\.const\s+0\s*\)\s+func\s+\$__indirect_sub(?:_\d+)?\s+\$__indirect_add(?:_\d+)?\s*\)/,
     );
     assert.equal(
-      (wat.match(/\(\s*type\s+\$sig_fn_i32_i32__i32\s+\(\s*func\s+\(\s*param\s+i32\s*\)/g) ?? [])
-        .length,
+      (
+        wat.match(
+          /\(\s*type\s+\$[^\s()]+\s+\(\s*func\s+(?:(?:\(\s*param\s+i32\s*\)\s*){3}|\(\s*param\s+i32\s+i32\s+i32\s*\)\s*)\(\s*result\s+i32\s*\)\s*\)\s*\)/g,
+        ) ?? []
+      ).length,
       1,
     );
   });
@@ -2519,7 +2543,7 @@ describe("host surface (WAT-structural)", () => {
       fn noop(): void {}
       export fn run(): void { let cb: fn():void = noop; cb(); }
     `);
-    assert.match(wat, /\(\s*type\s+\$sig_fn___void\s+\(\s*func\s+\(\s*param\s+i32\s*\)\s*\)\s*\)/);
+    assert.match(wat, /\(\s*type\s+\$[^\s()]+\s+\(\s*func\s+\(\s*param\s+i32\s*\)\s*\)\s*\)/);
   });
 
   test("module-surface regexes tolerate equivalent reformatting", () => {
@@ -2537,27 +2561,20 @@ describe("host surface (WAT-structural)", () => {
     );
   });
 
-  // transitional: T37 flips these to guard-ABSENCE
-  test("global expression field emits init guard and i32.store", () => {
+  test("global expression fields initialize through start without legacy guards", () => {
     const { wat } = compile(`
       let offset: i32 = 9;
       struct Point { x: i32, y: i32 }
       let g: Point = { x = offset, y = 0 };
       export fn run(): i32 { return g.x; }
     `);
-    assert(
-      wat.includes("(global $__globals_inited (mut i32) (i32.const 0))"),
-      `Missing $__globals_inited global:\n${wat}`,
-    );
-    assert(
-      wat.includes("(if (i32.eqz (global.get $__globals_inited)) (then"),
-      `Missing init guard if-block:\n${wat}`,
-    );
-    assert(wat.includes("i32.store"), `Missing i32.store in init block:\n${wat}`);
-    assert(wat.includes("global.get $offset"), `Missing global source for init store:\n${wat}`);
+    assert.equal((wat.match(/\(\s*start\b/g) ?? []).length, 1, wat);
+    assert.doesNotMatch(wat, /\b__globals_inited\b|\b__fn_table_inited\b/);
+    assert.match(wat, /\bi32\.store\b/);
+    assert.match(wat, /\bglobal\.get\s+\$offset(?:_\d+)?\b/);
   });
 
-  test("init guard emits in exported function only", () => {
+  test("start is emitted once instead of guards in exported functions", () => {
     const { wat } = compile(`
       let offset: i32 = 9;
       struct Point { x: i32, y: i32 }
@@ -2565,29 +2582,33 @@ describe("host surface (WAT-structural)", () => {
       fn helper(): i32 { return g.x; }
       export fn run(): i32 { return helper(); }
     `);
-    const helperStart = wat.indexOf("(func $helper");
-    const runStart = wat.indexOf("(func $run");
-    const guard = "(if (i32.eqz (global.get $__globals_inited)) (then";
-    const helperBody = wat.slice(helperStart, runStart);
-    const runBody = wat.slice(runStart);
-    assert(!helperBody.includes(guard), `Non-exported helper must not include init guard:\n${wat}`);
-    assert(runBody.includes(guard), `Exported function must include init guard:\n${wat}`);
+    assert.equal((wat.match(/\(\s*start\b/g) ?? []).length, 1, wat);
+    assert.doesNotMatch(wat, /\b__globals_inited\b|\b__fn_table_inited\b/);
   });
 
-  test("literal-only global structs do not emit init guard global", () => {
+  test("start exists exactly when runtime initializers exist", () => {
+    const initialized = compile(`
+      fn seed(): i32 { return 9; }
+      let value: i32 = seed();
+      export fn run(): i32 { return value; }
+    `).wat;
+    const literalOnly = compile(`
+      struct Point { x: i32, y: i32 }
+      let g: Point = { x = 2, y = 3 };
+      export fn run(): i32 { return g.x; }
+    `).wat;
+    assert.equal((initialized.match(/\(\s*start\b/g) ?? []).length, 1, initialized);
+    assert.doesNotMatch(literalOnly, /\(\s*start\b/);
+  });
+
+  test("literal-only global structs emit neither start nor legacy guards", () => {
     const { wat } = compile(`
       struct Point { x: i32, y: i32 }
       let g: Point = { x = 2, y = 3 };
       export fn run(): i32 { return g.x; }
     `);
-    assert(
-      !wat.includes("$__globals_inited"),
-      `Literal-only globals must not emit init flag:\n${wat}`,
-    );
-    assert(
-      !wat.includes("i32.eqz (global.get $__globals_inited)"),
-      `Unexpected init guard:\n${wat}`,
-    );
+    assert.doesNotMatch(wat, /\(\s*start\b/);
+    assert.doesNotMatch(wat, /\b__globals_inited\b|\b__fn_table_inited\b/);
   });
 
   test("f32 expression field uses f32.store in init block", () => {
@@ -2597,8 +2618,8 @@ describe("host surface (WAT-structural)", () => {
       let v: Vec2 = { x = seed, y = 0.0 };
       export fn run(): f32 { return v.x; }
     `);
-    assert(wat.includes("f32.store"), `Missing f32.store for f32 expression field:\n${wat}`);
-    assert(wat.includes("global.get $seed"), `Missing global.get $seed for init:\n${wat}`);
+    assert.match(wat, /\bf32\.store\b/);
+    assert.match(wat, /\bglobal\.get\s+\$seed(?:_\d+)?\b/);
   });
 
   test("mixed literal and expression fields emit one deferred store", () => {
@@ -2608,7 +2629,7 @@ describe("host surface (WAT-structural)", () => {
       let g: Point = { x = offset, y = 7 };
       export fn run(): i32 { return g.y; }
     `);
-    const storeCount = (wat.match(/i32\.store/g) || []).length;
+    const storeCount = (wat.match(/\bi32\.store\b/g) || []).length;
     assert.equal(
       storeCount,
       1,
@@ -2625,7 +2646,7 @@ describe("host surface (WAT-structural)", () => {
       let g2: Point = { x = b, y = 0 };
       export fn run(): i32 { return g1.x + g2.x; }
     `);
-    const storeCount = (wat.match(/i32\.store/g) || []).length;
+    const storeCount = (wat.match(/\bi32\.store\b/g) || []).length;
     assert.equal(storeCount, 2, `Expected two deferred i32.store ops, got ${storeCount}:\n${wat}`);
   });
 
@@ -2635,10 +2656,7 @@ describe("host surface (WAT-structural)", () => {
       let g: Point = { y = 2, x = 1 };
       export fn run(): i32 { return g.x; }
     `);
-    assert(
-      wat.includes("(data (offset"),
-      `Expected data segment for global struct literal:\n${wat}`,
-    );
+    assert.match(wat, /\(\s*data\s+\(\s*(?:offset\s+)?\(\s*i32\.const\b/);
     assert(
       wat.includes("\\01\\00\\00\\00\\02\\00\\00\\00"),
       `Expected x then y byte ordering in data segment:\n${wat}`,
