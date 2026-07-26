@@ -1,75 +1,11 @@
 // biome-ignore-all lint/suspicious/noThenProperty: IR branch nodes intentionally use `then`.
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type {
-  BinOp,
-  ConvOp,
-  Expr,
-  Func,
-  IrGlobal,
-  IrModule,
-  IrType,
-  Stmt,
-  UnOp,
-} from "../src/ir/ir";
+import type { BinOp, ConvOp, Expr, IrModule, IrType, Stmt, UnOp } from "../src/ir/ir";
 import { printWat } from "../src/ir/print-wat";
 import { validateModule } from "../src/ir/validate";
 import { hasWat2Wasm, maybeTest, runExport, validateWithWat2Wasm } from "./helpers";
-
-function constant(type: IrType, value: number | bigint = type === "i64" ? 0n : 0): Expr {
-  return { k: "const", type, value };
-}
-
-function moduleWith(options: {
-  types?: IrModule["types"];
-  funcImports?: IrModule["funcImports"];
-  globalImports?: IrModule["globalImports"];
-  funcs?: Func[];
-  globals?: IrGlobal[];
-  memory?: IrModule["memory"];
-  table?: IrModule["table"];
-  data?: IrModule["data"];
-  dataEnd?: number;
-  start?: number;
-  funcNames?: Array<[number, string]>;
-  globalNames?: Array<[number, string]>;
-  localNames?: Array<[number, Array<[number, string]>]>;
-}): IrModule {
-  const module: IrModule = {
-    types: options.types ?? [{ params: [], results: [] }],
-    funcImports: options.funcImports ?? [],
-    globalImports: options.globalImports ?? [],
-    funcs: options.funcs ?? [],
-    globals: options.globals ?? [],
-    memory: options.memory ?? { initialPages: 1, mode: "owned" },
-    data: options.data ?? [],
-    dataEnd: options.dataEnd ?? 65_536,
-    structLayouts: new Map(),
-    names: {
-      funcs: new Map(options.funcNames ?? []),
-      globals: new Map(options.globalNames ?? []),
-      locals: new Map((options.localNames ?? []).map(([fn, names]) => [fn, new Map(names)])),
-    },
-  };
-  if (options.table !== undefined) module.table = options.table;
-  if (options.start !== undefined) module.start = options.start;
-  return module;
-}
-
-function expressionModule(expression: Expr, result: IrType): IrModule {
-  return moduleWith({
-    types: [{ params: [], results: [result] }],
-    funcs: [{ sig: 0, locals: [], body: [{ k: "return", values: [expression] }], export: "run" }],
-    funcNames: [[0, "run"]],
-  });
-}
-
-function statementModule(statement: Stmt, locals: IrType[] = []): IrModule {
-  return moduleWith({
-    funcs: [{ sig: 0, locals, body: [statement] }],
-    funcNames: [[0, "run"]],
-  });
-}
+import { constant, expressionModule, moduleWith, statementModule } from "./ir-fixtures";
 
 function printed(module: IrModule): string {
   assert.deepEqual(validateModule(module), []);
