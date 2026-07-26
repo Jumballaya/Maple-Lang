@@ -258,17 +258,24 @@ describe("IR validator: valid modules", () => {
     assert.deepEqual(validateModule(module), []);
   });
 
-  test("accepts a result function ending in a fully terminating if", () => {
-    const module = validModule();
-    module.funcs[0]!.body = [
+  test("B13 accepts return and unreachable finals and leaves void functions unaffected", () => {
+    const returned = validModule();
+    assert.deepEqual(validateModule(returned), []);
+
+    const unreachable = validModule();
+    unreachable.funcs[0]!.body = [{ k: "unreachable" }];
+    assert.deepEqual(validateModule(unreachable), []);
+
+    const voidFunction = validModule();
+    voidFunction.funcs[1]!.body = [
       {
         k: "if",
         cond: i32(1),
-        then: [{ k: "return", values: [i32(1)] }],
+        then: [{ k: "return", values: [] }],
         else: [{ k: "unreachable" }],
       },
     ];
-    assert.deepEqual(validateModule(module), []);
+    assert.deepEqual(validateModule(voidFunction), []);
   });
 });
 
@@ -391,6 +398,23 @@ describe("IR validator: index spaces and labels", () => {
   ];
 
   for (const row of rows) test(row.name, () => expectError(row.expected, row.mutate));
+
+  test("B16 validates every names-map value and accepts the full WAT idchar set", () => {
+    const invalidCases: Array<(module: IrModule) => void> = [
+      (module) => module.names.funcs.set(0, "a b"),
+      (module) => module.names.globals.set(0, "a b"),
+      (module) => module.names.locals.get(2)!.set(0, "a b"),
+    ];
+    for (const mutate of invalidCases) {
+      assert.deepEqual(errorsAfter(mutate), ["name not WAT-safe: a b"]);
+    }
+
+    const module = validModule();
+    module.names.funcs.set(0, "");
+    module.names.globals.set(0, "safe$name");
+    module.names.locals.get(2)!.set(0, "0A!#$%&'*+-./:<=>?@\\^_`|~");
+    assert.deepEqual(validateModule(module), []);
+  });
 });
 
 describe("IR validator: expression typing", () => {
@@ -758,6 +782,20 @@ describe("IR validator: statements and function results", () => {
       },
     },
     {
+      name: "B13 rejects a result function ending in an if with two terminating arms",
+      expected: "function with results must end in a terminating statement",
+      mutate: (module) => {
+        module.funcs[0]!.body = [
+          {
+            k: "if",
+            cond: i32(1),
+            then: [{ k: "return", values: [i32(1)] }],
+            else: [{ k: "unreachable" }],
+          },
+        ];
+      },
+    },
+    {
       name: "rejects non-i32 if conditions",
       expected: "if condition must be i32, got f32",
       mutate: (module) => {
@@ -797,6 +835,21 @@ describe("IR validator: statements and function results", () => {
   ];
 
   for (const row of rows) test(row.name, () => expectError(row.expected, row.mutate));
+
+  test("B15 reports unknown statement and expression kinds", () => {
+    assert.deepEqual(
+      errorsAfter((module) => {
+        module.funcs[1]!.body = [{ k: "mystery" } as never];
+      }),
+      ["validate: unknown IR statement kind: mystery"],
+    );
+    assert.deepEqual(
+      errorsAfter((module) => {
+        module.funcs[1]!.body = [{ k: "drop", e: { k: "mystery" } as never }];
+      }),
+      ["validate: unknown IR expression kind: mystery"],
+    );
+  });
 });
 
 describe("IR validator: memory access", () => {
@@ -944,6 +997,20 @@ describe("IR validator: memory access", () => {
   ];
 
   for (const row of rows) test(row.name, () => expectError(row.expected, row.mutate));
+
+  test("B17 rejects data addresses above u32 and accepts the exact upper bound", () => {
+    const rejected = validModule();
+    rejected.memory.initialPages = 65_536;
+    rejected.data = [{ addr: 0x1_0000_0000, bytes: new Uint8Array() }];
+    rejected.dataEnd = 0x1_0000_0000;
+    assert.deepEqual(validateModule(rejected), ["data segment addr out of u32 range: 4294967296"]);
+
+    const accepted = validModule();
+    accepted.memory.initialPages = 65_536;
+    accepted.data = [{ addr: 0xffff_ffff, bytes: new Uint8Array() }];
+    accepted.dataEnd = 0xffff_ffff;
+    assert.deepEqual(validateModule(accepted), []);
+  });
 });
 
 describe("IR validator: module shape", () => {
@@ -1004,6 +1071,35 @@ describe("IR validator: module shape", () => {
   ];
 
   for (const row of rows) test(row.name, () => expectError(row.expected, row.mutate));
+
+  test("B14 requires f32 consts to be fround-exact without narrowing f64", () => {
+    assert.deepEqual(
+      errorsAfter((module) => {
+        setResultExpr(module, { k: "const", type: "f32", value: 1.1 });
+        module.types[1]!.results = ["f32"];
+      }),
+      ["f32 const value must be fround-exact: 1.1"],
+    );
+    assert.deepEqual(
+      errorsAfter((module) => {
+        module.globals[0]!.type = "f32";
+        module.globals[0]!.init = { k: "const", type: "f32", value: 1.1 };
+      }),
+      ["f32 const value must be fround-exact: 1.1"],
+    );
+
+    const acceptedValues: Array<Extract<Expr, { k: "const" }>> = [
+      { k: "const", type: "f32", value: Math.fround(1.1) },
+      { k: "const", type: "f32", value: Number.NaN },
+      { k: "const", type: "f64", value: 1.1 },
+    ];
+    for (const expression of acceptedValues) {
+      const module = validModule();
+      setResultExpr(module, expression);
+      module.types[1]!.results = [expression.type];
+      assert.deepEqual(validateModule(module), []);
+    }
+  });
 });
 
 describe("IR validator: data and memory bounds", () => {

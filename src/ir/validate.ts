@@ -18,6 +18,7 @@ const INTEGER_BINOPS = new Set(["rem", "and", "or", "xor", "shl", "shr"]);
 const FLOAT_UNOPS = new Set(["neg", "abs", "sqrt", "floor", "ceil", "trunc", "nearest"]);
 const U32_MAX = 0xffff_ffff;
 const WASM_PAGE_SIZE = 65_536;
+const WAT_SAFE_NAME = /^[0-9A-Za-z!#$%&'*+\-./:<=>?@\\^_`|~]*$/;
 
 const CONVERSIONS: Record<ConvOp, { source: IrType; result: IrType }> = {
   "i32.wrap_i64": { source: "i64", result: "i32" },
@@ -208,6 +209,9 @@ class Validator {
         this.add("data segment address must be a non-negative integer");
         continue;
       }
+      if (segment.addr > U32_MAX) {
+        this.add(`data segment addr out of u32 range: ${segment.addr}`);
+      }
       const end = segment.addr + segment.bytes.byteLength;
       validSegments.push({ addr: segment.addr, end });
       greatestEnd = Math.max(greatestEnd, end);
@@ -281,13 +285,16 @@ class Validator {
   private validateNames(): void {
     const functionCount = this.module.funcImports.length + this.module.funcs.length;
     const globalCount = this.module.globalImports.length + this.module.globals.length;
-    for (const id of this.module.names.funcs.keys()) {
+    for (const [id, name] of this.module.names.funcs) {
       if (!this.validIndex(id, functionCount)) this.add(`function id ${id} is out of range`);
+      this.validateName(name);
     }
-    for (const id of this.module.names.globals.keys()) {
+    for (const [id, name] of this.module.names.globals) {
       if (!this.validIndex(id, globalCount)) this.add(`global id ${id} is out of range`);
+      this.validateName(name);
     }
     for (const [fnId, locals] of this.module.names.locals) {
+      for (const name of locals.values()) this.validateName(name);
       const sig = this.getFuncSig(fnId);
       if (!sig) continue;
       const definedIndex = fnId - this.module.funcImports.length;
@@ -300,6 +307,10 @@ class Validator {
       };
       for (const localId of locals.keys()) this.getLocalType(localId, context);
     }
+  }
+
+  private validateName(name: string): void {
+    if (!WAT_SAFE_NAME.test(name)) this.add(`name not WAT-safe: ${name}`);
   }
 
   private validateStatements(
@@ -399,7 +410,10 @@ class Validator {
         this.expectType(dest, "i32", "memory.copy dest");
         this.expectType(src, "i32", "memory.copy src");
         this.expectType(len, "i32", "memory.copy len");
+        return;
       }
+      default:
+        this.unknownStatement(statement);
     }
   }
 
@@ -458,14 +472,7 @@ class Validator {
 
   private statementsTerminate(statements: Stmt[]): boolean {
     const last = statements.at(-1);
-    if (!last) return false;
-    if (last.k === "return" || last.k === "unreachable") return true;
-    return (
-      last.k === "if" &&
-      last.else !== undefined &&
-      this.statementsTerminate(last.then) &&
-      this.statementsTerminate(last.else)
-    );
+    return last?.k === "return" || last?.k === "unreachable";
   }
 
   private validateExpr(
@@ -568,6 +575,9 @@ class Validator {
         this.expectType(pages, "i32", "memory.grow pages");
         return "i32";
       }
+      default:
+        this.unknownExpression(expression);
+        return undefined;
     }
   }
 
@@ -611,9 +621,15 @@ class Validator {
         }
         break;
       case "f32":
+        if (typeof expression.value !== "number") {
+          this.add("f32 const value must be a number");
+        } else if (!Object.is(Math.fround(expression.value), expression.value)) {
+          this.add(`f32 const value must be fround-exact: ${expression.value}`);
+        }
+        break;
       case "f64":
         if (typeof expression.value !== "number") {
-          this.add(`${expression.type} const value must be a number`);
+          this.add("f64 const value must be a number");
         }
     }
     return expression.type;
@@ -646,6 +662,14 @@ class Validator {
     if (actual !== undefined && expected !== undefined && actual !== expected) {
       this.add(`${subject} must be ${expected}, got ${actual}`);
     }
+  }
+
+  private unknownExpression(expression: never): void {
+    this.add(`validate: unknown IR expression kind: ${(expression as { k?: unknown }).k}`);
+  }
+
+  private unknownStatement(statement: never): void {
+    this.add(`validate: unknown IR statement kind: ${(statement as { k?: unknown }).k}`);
   }
 }
 

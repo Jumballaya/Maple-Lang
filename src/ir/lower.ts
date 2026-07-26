@@ -210,7 +210,9 @@ function constantInitializer(expression: ASTExpression, targetType: string): num
   if (expression instanceof IntegerLiteralExpression) {
     return targetLane === "i64" ? signedI64(expression.bigValue) : signedI32(expression.bigValue);
   }
-  if (expression instanceof FloatLiteralExpression) return expression.value;
+  if (expression instanceof FloatLiteralExpression) {
+    return targetLane === "f32" ? Math.fround(expression.value) : expression.value;
+  }
   if (expression instanceof BooleanLiteralExpression) return expression.value ? 1 : 0;
   if (expression instanceof CharLiteralExpression) return expression.value;
   if (expression instanceof PrefixExpression && expression.right) {
@@ -1127,7 +1129,11 @@ class FunctionLowerer {
       );
     }
     if (expression instanceof FloatLiteralExpression) {
-      return this.fn.constant(lane(resolvedType(expression)), expression.value);
+      const type = lane(resolvedType(expression));
+      return this.fn.constant(
+        type,
+        type === "f32" ? Math.fround(expression.value) : expression.value,
+      );
     }
     if (expression instanceof BooleanLiteralExpression) {
       resolvedType(expression);

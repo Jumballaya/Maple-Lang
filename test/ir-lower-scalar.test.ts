@@ -142,6 +142,50 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.equal(differential(source, "maximum"), 9_223_372_036_854_775_807n);
     assert.equal(differential(source, "negativeZero"), Number.NEGATIVE_INFINITY);
   });
+
+  test("B14 frounds expression and global f32 literals at construction", () => {
+    const { module } = lowered(`
+      let positiveGlobal: f32 = 1.1;
+      let negativeGlobal: f32 = -1.1;
+      let negativeZeroGlobal: f32 = -0.0;
+      export fn positiveExpr(): f32 { return 1.1; }
+      export fn negativeExpr(): f32 { return -1.1; }
+      export fn negativeZeroExpr(): f32 { return -0.0; }
+    `);
+
+    const globalValue = (name: string): number => {
+      const id = [...module.names.globals].find(([, candidate]) => candidate === name)?.[0];
+      assert.notEqual(id, undefined);
+      return module.globals[id! - module.globalImports.length]!.init.value as number;
+    };
+    assert.equal(globalValue("positiveGlobal"), Math.fround(1.1));
+    assert.equal(globalValue("negativeGlobal"), Math.fround(-1.1));
+    assert(Object.is(globalValue("negativeZeroGlobal"), -0));
+
+    const returnValue = (name: string) => {
+      const id = [...module.names.funcs].find(([, candidate]) => candidate === name)?.[0];
+      assert.notEqual(id, undefined);
+      const statement = module.funcs[id! - module.funcImports.length]!.body[0]!;
+      assert.equal(statement.k, "return");
+      if (statement.k !== "return") assert.fail("expected return");
+      return statement.values[0]!;
+    };
+
+    const positive = returnValue("positiveExpr");
+    assert.equal(positive.k, "const");
+    if (positive.k !== "const") assert.fail("expected const");
+    assert.equal(positive.value, Math.fround(1.1));
+
+    const negative = returnValue("negativeExpr");
+    assert.equal(negative.k, "const");
+    if (negative.k !== "const") assert.fail("expected const");
+    assert.equal(negative.value, Math.fround(-1.1));
+
+    const negativeZero = returnValue("negativeZeroExpr");
+    assert.equal(negativeZero.k, "const");
+    if (negativeZero.k !== "const") assert.fail("expected const");
+    assert(Object.is(negativeZero.value, -0));
+  });
 });
 
 describe("IR scalar lowering: expression evaluation", () => {
