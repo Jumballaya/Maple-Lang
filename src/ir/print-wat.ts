@@ -1,6 +1,5 @@
-import type { BinOp, Expr, FuncId, IrModule, IrType, LabelId, LocalId, Sig, Stmt } from "./ir";
-
-const INTEGER_TYPES = new Set<IrType>(["i32", "i64"]);
+import { binOpcode, exprType, loadOpcode, storeOpcode } from "./expr-info";
+import type { Expr, FuncId, IrModule, IrType, LabelId, LocalId, Sig, Stmt } from "./ir";
 
 type FunctionContext = {
   funcId: FuncId;
@@ -77,7 +76,7 @@ class WatPrinter {
     }
     for (let id = 0; id < this.module.funcImports.length; id += 1) {
       const imported = this.module.funcImports[id]!;
-      const sig = this.sig(imported.sig);
+      const sig = this.module.types[imported.sig]!;
       const params = sig.params.length === 0 ? "" : ` (param ${sig.params.join(" ")})`;
       lines.push(
         `  (import ${quoteWat(imported.module)} ${quoteWat(imported.name)} (func ${this.funcName(id)}${params}${resultClause(sig.results)}))`,
@@ -121,7 +120,7 @@ class WatPrinter {
     for (let index = 0; index < this.module.funcs.length; index += 1) {
       const fn = this.module.funcs[index]!;
       const funcId = firstId + index;
-      const sig = this.sig(fn.sig);
+      const sig = this.module.types[fn.sig]!;
       const exported = fn.export === undefined ? "" : ` (export ${quoteWat(fn.export)})`;
       const params = sig.params
         .map((type, id) => ` (param ${this.localName(funcId, id)} ${type})`)
@@ -174,7 +173,7 @@ class WatPrinter {
         ];
       case "store":
         return [
-          fold(`${this.storeOpcode(statement.type, statement.width)} offset=${statement.offset}`, [
+          fold(`${storeOpcode(statement.type, statement.width)} offset=${statement.offset}`, [
             this.printExpr(statement.addr, context),
             this.printExpr(statement.value, context),
           ]),
@@ -247,7 +246,11 @@ class WatPrinter {
     let sig: Sig;
     if (statement.callee.kind === "func") {
       call = this.printDirectCall(statement.callee.fn, statement.args, context);
-      sig = this.funcSig(statement.callee.fn);
+      const fn =
+        statement.callee.fn < this.module.funcImports.length
+          ? this.module.funcImports[statement.callee.fn]!
+          : this.module.funcs[statement.callee.fn - this.module.funcImports.length]!;
+      sig = this.module.types[fn.sig]!;
     } else {
       call = this.printIndirectCall(
         statement.callee.sig,
@@ -255,7 +258,7 @@ class WatPrinter {
         statement.args,
         context,
       );
-      sig = this.sig(statement.callee.sig);
+      sig = this.module.types[statement.callee.sig]!;
     }
     const output = [call];
     if (statement.targets === null) {
@@ -277,7 +280,7 @@ class WatPrinter {
       case "global.get":
         return fold(`global.get ${this.globalName(expression.id)}`, []);
       case "binop":
-        return fold(this.binOpcode(expression.op, expression.type, expression.signed), [
+        return fold(binOpcode(expression.op, expression.type, expression.signed), [
           this.printExpr(expression.l, context),
           this.printExpr(expression.r, context),
         ]);
@@ -287,7 +290,7 @@ class WatPrinter {
         return fold(expression.op, [this.printExpr(expression.e, context)]);
       case "load":
         return fold(
-          `${this.loadOpcode(expression.type, expression.width, expression.signed)} offset=${expression.offset}`,
+          `${loadOpcode(expression.type, expression.width, expression.signed)} offset=${expression.offset}`,
           [this.printExpr(expression.addr, context)],
         );
       case "call":
@@ -301,7 +304,7 @@ class WatPrinter {
           fold("else", [this.printExpr(expression.else, context)]),
         ]);
       case "seq": {
-        const type = this.exprType(expression.value, context);
+        const type = exprType(this.module, context.localTypes, expression.value);
         return fold(`block (result ${type})`, [
           ...this.printStatementsInline(expression.stmts, context),
           this.printExpr(expression.value, context),
@@ -343,107 +346,6 @@ class WatPrinter {
     ]);
   }
 
-  private binOpcode(op: BinOp, type: IrType, signed: boolean): string {
-    switch (op) {
-      case "div":
-      case "rem":
-        return INTEGER_TYPES.has(type) ? `${type}.${op}_${signed ? "s" : "u"}` : `${type}.${op}`;
-      case "shr":
-        return `${type}.shr_${signed ? "s" : "u"}`;
-      case "lt":
-      case "le":
-      case "gt":
-      case "ge":
-        return INTEGER_TYPES.has(type) ? `${type}.${op}_${signed ? "s" : "u"}` : `${type}.${op}`;
-      case "add":
-      case "sub":
-      case "mul":
-      case "and":
-      case "or":
-      case "xor":
-      case "shl":
-      case "eq":
-      case "ne":
-      case "copysign":
-        return `${type}.${op}`;
-      default:
-        return this.unknownBinop(op);
-    }
-  }
-
-  private loadOpcode(type: IrType, width: 8 | 16 | undefined, signed: boolean | undefined): string {
-    return width === undefined ? `${type}.load` : `${type}.load${width}_${signed ? "s" : "u"}`;
-  }
-
-  private storeOpcode(type: IrType, width: 8 | 16 | undefined): string {
-    return width === undefined ? `${type}.store` : `${type}.store${width}`;
-  }
-
-  private exprType(expression: Expr, context: FunctionContext): IrType {
-    switch (expression.k) {
-      case "const":
-      case "binop":
-      case "unop":
-      case "load":
-      case "if_val":
-        if (
-          (expression.k === "binop" &&
-            ["eq", "ne", "lt", "le", "gt", "ge"].includes(expression.op)) ||
-          (expression.k === "unop" && expression.op === "eqz")
-        ) {
-          return "i32";
-        }
-        return expression.type;
-      case "local.get":
-        return context.localTypes[expression.id]!;
-      case "global.get":
-        return this.globalType(expression.id);
-      case "convert": {
-        const result = expression.op.slice(0, 3);
-        if (result === "i32" || result === "i64" || result === "f32" || result === "f64") {
-          return result;
-        }
-        throw new Error(`unknown IR conversion: ${expression.op}`);
-      }
-      case "call":
-        return this.funcSig(expression.fn).results[0]!;
-      case "call_indirect":
-        return this.sig(expression.sig).results[0]!;
-      case "seq":
-        return this.exprType(expression.value, context);
-      case "memory.size":
-      case "memory.grow":
-        return "i32";
-      default:
-        return this.unknownExpression(expression);
-    }
-  }
-
-  private sig(id: number): Sig {
-    const sig = this.module.types[id];
-    if (!sig) throw new Error(`unknown IR signature id: ${id}`);
-    return sig;
-  }
-
-  private funcSig(id: FuncId): Sig {
-    const sigId =
-      id < this.module.funcImports.length
-        ? this.module.funcImports[id]?.sig
-        : this.module.funcs[id - this.module.funcImports.length]?.sig;
-    if (sigId === undefined) throw new Error(`unknown IR function id: ${id}`);
-    return this.sig(sigId);
-  }
-
-  private globalType(id: number): IrType {
-    if (id < this.module.globalImports.length) {
-      const imported = this.module.globalImports[id];
-      if (imported) return imported.type;
-    }
-    const global = this.module.globals[id - this.module.globalImports.length];
-    if (!global) throw new Error(`unknown IR global id: ${id}`);
-    return global.type;
-  }
-
   private funcName(id: FuncId): string {
     const name = this.module.names.funcs.get(id);
     return name === undefined ? `$f${id}` : `$${name}_${id}`;
@@ -471,10 +373,6 @@ class WatPrinter {
 
   private unknownStatement(statement: never): never {
     throw new Error(`unknown IR statement kind: ${(statement as { k?: unknown }).k}`);
-  }
-
-  private unknownBinop(op: never): never {
-    throw new Error(`unknown IR binop: ${op}`);
   }
 }
 
