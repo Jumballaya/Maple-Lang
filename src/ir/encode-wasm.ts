@@ -279,8 +279,48 @@ function writeLocals(writer: ByteWriter, locals: readonly IrType[]): void {
   }
 }
 
+function sortedNameEntries(names: ReadonlyMap<number, string>): Array<[number, string]> {
+  return [...names].sort(([left], [right]) => left - right);
+}
+
+function writeNameMap(writer: ByteWriter, entries: readonly [number, string][]): void {
+  writer.u32(entries.length);
+  for (const [index, name] of entries) {
+    writer.u32(index);
+    writer.name(name);
+  }
+}
+
+function writeNameSection(writer: ByteWriter, module: IrModule): void {
+  const funcs = sortedNameEntries(module.names.funcs);
+  const locals = [...module.names.locals]
+    .map(([func, names]) => [func, sortedNameEntries(names)] as const)
+    .filter((entry) => entry[1].length > 0)
+    .sort(([left], [right]) => left - right);
+  const globals = sortedNameEntries(module.names.globals);
+  if (funcs.length === 0 && locals.length === 0 && globals.length === 0) return;
+
+  writer.section(SECTION.custom, (custom) => {
+    custom.name("name");
+    if (funcs.length > 0) {
+      custom.section(1, (subsection) => writeNameMap(subsection, funcs));
+    }
+    if (locals.length > 0) {
+      custom.section(2, (subsection) => {
+        subsection.u32(locals.length);
+        for (const [func, names] of locals) {
+          subsection.u32(func);
+          writeNameMap(subsection, names);
+        }
+      });
+    }
+    if (globals.length > 0) {
+      custom.section(7, (subsection) => writeNameMap(subsection, globals));
+    }
+  });
+}
+
 export function encodeWasm(module: IrModule, options: { strip?: boolean } = {}): Uint8Array {
-  void options;
   const writer = new ByteWriter();
   writer.bytes(MAGIC);
   writer.bytes(VERSION);
@@ -451,6 +491,8 @@ export function encodeWasm(module: IrModule, options: { strip?: boolean } = {}):
       }
     });
   }
+
+  if (!options.strip) writeNameSection(writer, module);
 
   return writer.toUint8Array();
 }

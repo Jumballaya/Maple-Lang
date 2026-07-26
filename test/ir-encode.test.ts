@@ -1737,7 +1737,161 @@ test("emits every applicable standard section in ascending id order", () => {
   );
 });
 
-test("ignores strip and compile-time metadata while encoding deterministically without mutation", () => {
+test("emits the exact sorted sparse name-section payload", () => {
+  const module = moduleWith({
+    types: [
+      { params: ["i32", "i64"], results: [] },
+      { params: [], results: [] },
+    ],
+    funcImports: [{ module: "host", name: "callback", sig: 0 }],
+    globalImports: [{ module: "host", name: "seed", type: "i32" }],
+    funcs: [
+      { sig: 0, locals: ["f32"], body: [] },
+      { sig: 1, locals: [], body: [] },
+    ],
+    globals: [
+      {
+        type: "i32",
+        mutable: false,
+        init: { k: "const", type: "i32", value: 0 },
+      },
+      {
+        type: "i32",
+        mutable: false,
+        init: { k: "const", type: "i32", value: 1 },
+      },
+    ],
+    funcNames: [
+      [1, "definedFn"],
+      [0, "importedFn"],
+    ],
+    globalNames: [
+      [1, "definedGlobal"],
+      [0, "importedGlobal"],
+    ],
+    localNames: [
+      [2, []],
+      [
+        1,
+        [
+          [2, "local"],
+          [1, ""],
+          [0, "param"],
+        ],
+      ],
+      [0, [[0, "importedParam"]]],
+    ],
+  });
+  const compiled = compileWasm(encoded(module));
+  const customSections = WebAssembly.Module.customSections(compiled, "name");
+
+  assert.equal(customSections.length, 1);
+  assert.deepEqual(
+    new Uint8Array(customSections[0]!),
+    Uint8Array.of(
+      0x01,
+      0x18,
+      0x02,
+      0x00,
+      0x0a,
+      0x69,
+      0x6d,
+      0x70,
+      0x6f,
+      0x72,
+      0x74,
+      0x65,
+      0x64,
+      0x46,
+      0x6e,
+      0x01,
+      0x09,
+      0x64,
+      0x65,
+      0x66,
+      0x69,
+      0x6e,
+      0x65,
+      0x64,
+      0x46,
+      0x6e,
+      0x02,
+      0x24,
+      0x02,
+      0x00,
+      0x01,
+      0x00,
+      0x0d,
+      0x69,
+      0x6d,
+      0x70,
+      0x6f,
+      0x72,
+      0x74,
+      0x65,
+      0x64,
+      0x50,
+      0x61,
+      0x72,
+      0x61,
+      0x6d,
+      0x01,
+      0x03,
+      0x00,
+      0x05,
+      0x70,
+      0x61,
+      0x72,
+      0x61,
+      0x6d,
+      0x01,
+      0x00,
+      0x02,
+      0x05,
+      0x6c,
+      0x6f,
+      0x63,
+      0x61,
+      0x6c,
+      0x07,
+      0x20,
+      0x02,
+      0x00,
+      0x0e,
+      0x69,
+      0x6d,
+      0x70,
+      0x6f,
+      0x72,
+      0x74,
+      0x65,
+      0x64,
+      0x47,
+      0x6c,
+      0x6f,
+      0x62,
+      0x61,
+      0x6c,
+      0x01,
+      0x0d,
+      0x64,
+      0x65,
+      0x66,
+      0x69,
+      0x6e,
+      0x65,
+      0x64,
+      0x47,
+      0x6c,
+      0x6f,
+      0x62,
+      0x61,
+      0x6c,
+    ),
+  );
+});
+
+test("strip removes only the final name section and preserves compile-time hygiene", () => {
   const module = moduleWith({
     memory: { initialPages: 2, mode: "owned" },
     dataEnd: 65_536,
@@ -1771,11 +1925,94 @@ test("ignores strip and compile-time metadata while encoding deterministically w
   const second = encodeWasm(module);
   const stripped = encodeWasm(module, { strip: true });
   assert.deepEqual(first, second);
-  assert.deepEqual(first, stripped);
   assert.deepEqual(first, encodeWasm(metadataVariant));
+  assert.equal(stripped.length < first.length, true);
+  assert.deepEqual(first.subarray(0, stripped.length), stripped);
+  assert.equal(first[stripped.length], 0x00);
+
+  const [customSize, customPayloadStart] = readU32(first, stripped.length + 1);
+  assert.equal(customPayloadStart + customSize, first.length);
+  const [sectionNameLength, sectionNameStart] = readU32(first, customPayloadStart);
+  const sectionNameEnd = sectionNameStart + sectionNameLength;
+  assert.equal(new TextDecoder().decode(first.subarray(sectionNameStart, sectionNameEnd)), "name");
+  assert.equal(sectionNameEnd < first.length, true);
+  assert.deepEqual(
+    sections(first)
+      .map(({ id }) => id)
+      .at(-1),
+    0,
+  );
+  assert.equal(WebAssembly.Module.customSections(compileWasm(first), "name").length, 1);
+  assert.equal(WebAssembly.Module.customSections(compileWasm(stripped), "name").length, 0);
+  assert.deepEqual(module, snapshot);
+});
+
+test("omits the whole name section when every name map is empty", () => {
+  const module = moduleWith({
+    funcs: [{ sig: 0, locals: [], body: [] }],
+    localNames: [[0, []]],
+  });
+  const full = encoded(module);
+  const stripped = encodeWasm(module, { strip: true });
+
+  assert.deepEqual(full, stripped);
   assert.equal(
-    sections(first).some(({ id }) => id === 0),
+    sections(full).some(({ id }) => id === 0),
     false,
   );
-  assert.deepEqual(module, snapshot);
+  assert.deepEqual(WebAssembly.Module.customSections(compileWasm(full), "name"), []);
+});
+
+test("sorts outer and inner name maps independently of insertion order", () => {
+  function namedModule(reverse: boolean) {
+    const ordered = <T>(entries: T[]): T[] => (reverse ? entries.reverse() : entries);
+    return moduleWith({
+      types: [{ params: ["i32"], results: [] }],
+      funcs: [
+        { sig: 0, locals: ["i32"], body: [] },
+        { sig: 0, locals: ["i32"], body: [] },
+      ],
+      globals: [
+        {
+          type: "i32",
+          mutable: false,
+          init: { k: "const", type: "i32", value: 0 },
+        },
+        {
+          type: "i32",
+          mutable: false,
+          init: { k: "const", type: "i32", value: 1 },
+        },
+      ],
+      funcNames: ordered([
+        [0, "firstFn"],
+        [1, "secondFn"],
+      ]),
+      globalNames: ordered([
+        [0, "firstGlobal"],
+        [1, "secondGlobal"],
+      ]),
+      localNames: ordered([
+        [
+          0,
+          ordered([
+            [0, "firstParam"],
+            [1, "firstLocal"],
+          ]),
+        ],
+        [
+          1,
+          ordered([
+            [0, "secondParam"],
+            [1, "secondLocal"],
+          ]),
+        ],
+      ]),
+    });
+  }
+
+  const forward = namedModule(false);
+  const reverse = namedModule(true);
+  assert.deepEqual(forward, reverse);
+  assert.deepEqual(encoded(forward), encoded(reverse));
 });
