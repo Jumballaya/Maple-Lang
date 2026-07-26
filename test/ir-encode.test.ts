@@ -1,9 +1,23 @@
 // biome-ignore-all lint/suspicious/noThenProperty: IR branch nodes intentionally use `then`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { EXPR_KINDS, OPCODES, STMT_KINDS, UNOP_LANES } from "../src/ir/encode-constants";
 import { encodeWasm } from "../src/ir/encode-wasm";
+import { binOpcode, loadOpcode, storeOpcode } from "../src/ir/expr-info";
+import type { Expr, Func, IrType, Stmt, UnOp } from "../src/ir/ir";
 import { validateModule } from "../src/ir/validate";
-import { moduleWith } from "./ir-fixtures";
+import {
+  binopCases,
+  constant,
+  conversionCases,
+  encoded,
+  expressionModule,
+  memoryAccessCases,
+  mergeImports,
+  moduleWith,
+  runEncoded,
+  unopCases,
+} from "./ir-fixtures";
 
 type Section = { id: number; payload: Uint8Array };
 
@@ -33,6 +47,1181 @@ function sections(bytes: Uint8Array): Section[] {
 function compileWasm(bytes: Uint8Array): WebAssembly.Module {
   return new WebAssembly.Module(bytes as Uint8Array<ArrayBuffer>);
 }
+
+function functionBodies(bytes: Uint8Array): Uint8Array[] {
+  const payload = sections(bytes).find(({ id }) => id === 10)!.payload;
+  const [count, firstBody] = readU32(payload, 0);
+  const bodies: Uint8Array[] = [];
+  let offset = firstBody;
+  for (let index = 0; index < count; index += 1) {
+    const [size, bodyStart] = readU32(payload, offset);
+    bodies.push(payload.slice(bodyStart, bodyStart + size));
+    offset = bodyStart + size;
+  }
+  return bodies;
+}
+
+test("executes an encoded constant-return function", () => {
+  assert.equal(runEncoded(expressionModule(constant("i32", 42), "i32"), "run"), 42);
+});
+
+test("executes scalar expression and variable statement kinds", () => {
+  assert.equal(
+    runEncoded(
+      expressionModule(
+        {
+          k: "binop",
+          op: "add",
+          type: "i32",
+          signed: true,
+          l: constant("i32", 19),
+          r: constant("i32", 23),
+        },
+        "i32",
+      ),
+      "run",
+    ),
+    42,
+  );
+  assert.equal(
+    runEncoded(
+      expressionModule({ k: "unop", op: "neg", type: "f64", e: constant("f64", 3.5) }, "f64"),
+      "run",
+    ),
+    -3.5,
+  );
+  assert.equal(
+    runEncoded(
+      expressionModule(
+        { k: "convert", op: "i32.wrap_i64", e: constant("i64", 4_294_967_303n) },
+        "i32",
+      ),
+      "run",
+    ),
+    7,
+  );
+  assert.equal(
+    runEncoded(
+      expressionModule(
+        {
+          k: "if_val",
+          cond: constant("i32", 1),
+          then: constant("i32", 5),
+          else: constant("i32", 9),
+          type: "i32",
+        },
+        "i32",
+      ),
+      "run",
+    ),
+    5,
+  );
+
+  const variables = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    globals: [
+      {
+        type: "i32",
+        mutable: true,
+        init: { k: "const", type: "i32", value: 0 },
+      },
+    ],
+    funcs: [
+      {
+        sig: 0,
+        locals: ["i32"],
+        body: [
+          { k: "global.set", id: 0, e: constant("i32", 11) },
+          {
+            k: "return",
+            values: [
+              {
+                k: "seq",
+                stmts: [
+                  { k: "local.set", id: 0, e: { k: "global.get", id: 0 } },
+                  { k: "drop", e: constant("i32", 99) },
+                ],
+                value: { k: "local.get", id: 0 },
+              },
+            ],
+          },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(variables, "run"), 11);
+});
+
+test("executes calls and memory expression and statement kinds", () => {
+  const direct = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [constant("i32", 17)] }],
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "call", fn: 0, args: [] }] }],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(direct, "run"), 17);
+
+  const indirect = structuredClone(direct);
+  indirect.table = { entries: [0] };
+  indirect.funcs[1]!.body = [
+    {
+      k: "return",
+      values: [{ k: "call_indirect", sig: 0, index: constant("i32", 0), args: [] }],
+    },
+  ];
+  assert.equal(runEncoded(indirect, "run"), 17);
+
+  const memory = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "store",
+            type: "i32",
+            addr: constant("i32", 0),
+            value: constant("i32", 0x1234_5678),
+            offset: 0,
+          },
+          {
+            k: "memory.copy",
+            dest: constant("i32", 4),
+            src: constant("i32", 0),
+            len: constant("i32", 4),
+          },
+          {
+            k: "return",
+            values: [
+              {
+                k: "load",
+                type: "i32",
+                addr: constant("i32", 4),
+                offset: 0,
+              },
+            ],
+          },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(memory, "run"), 0x1234_5678);
+  assert.equal(runEncoded(expressionModule({ k: "memory.size" }, "i32"), "run"), 1);
+  assert.equal(
+    runEncoded(expressionModule({ k: "memory.grow", pages: constant("i32", 1) }, "i32"), "run"),
+    1,
+  );
+
+  const statementCalls = moduleWith({
+    types: [
+      { params: [], results: [] },
+      { params: [], results: ["i32"] },
+    ],
+    globals: [
+      {
+        type: "i32",
+        mutable: true,
+        init: { k: "const", type: "i32", value: 0 },
+      },
+    ],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "global.set", id: 0, e: constant("i32", 29) }],
+      },
+      {
+        sig: 1,
+        locals: [],
+        body: [
+          { k: "call", fn: 0, args: [] },
+          { k: "return", values: [{ k: "global.get", id: 0 }] },
+        ],
+        export: "direct",
+      },
+      {
+        sig: 1,
+        locals: [],
+        body: [
+          { k: "call_indirect", sig: 0, index: constant("i32", 0), args: [] },
+          { k: "return", values: [{ k: "global.get", id: 0 }] },
+        ],
+        export: "indirect",
+      },
+    ],
+    table: { entries: [0] },
+  });
+  assert.equal(runEncoded(statementCalls, "direct"), 29);
+  assert.equal(runEncoded(statementCalls, "indirect"), 29);
+});
+
+test("counts synthetic if frames in branch depths and encodes control statements", () => {
+  const module = moduleWith({
+    types: [{ params: ["i32"], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: ["i32"],
+        body: [
+          {
+            k: "block",
+            label: 10,
+            body: [
+              {
+                k: "if",
+                cond: { k: "local.get", id: 0 },
+                then: [{ k: "br", label: 10 }],
+                else: [],
+              },
+              { k: "local.set", id: 1, e: constant("i32", 5) },
+            ],
+          },
+          {
+            k: "block",
+            label: 20,
+            body: [
+              { k: "br_if", label: 20, cond: { k: "local.get", id: 0 } },
+              { k: "local.set", id: 1, e: constant("i32", 7) },
+            ],
+          },
+          { k: "return", values: [{ k: "local.get", id: 1 }] },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(module, "run", [1]), 0);
+  assert.equal(runEncoded(module, "run", [0]), 7);
+
+  const trapped = moduleWith({
+    funcs: [{ sig: 0, locals: [], body: [{ k: "unreachable" }], export: "run" }],
+  });
+  assert.throws(() => runEncoded(trapped, "run"), WebAssembly.RuntimeError);
+});
+
+test("executes both multi-call callee variants with targets and drops", () => {
+  const module = moduleWith({
+    types: [
+      { params: [], results: ["i32", "i64"] },
+      { params: [], results: ["i64"] },
+      { params: [], results: ["i32"] },
+    ],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [constant("i32", 3), constant("i64", 4n)] }],
+      },
+      {
+        sig: 1,
+        locals: ["i32", "i64"],
+        body: [
+          { k: "multi_call", callee: { kind: "func", fn: 0 }, args: [], targets: [0, 1] },
+          { k: "return", values: [{ k: "local.get", id: 1 }] },
+        ],
+        export: "directTargets",
+      },
+      {
+        sig: 2,
+        locals: [],
+        body: [
+          { k: "multi_call", callee: { kind: "func", fn: 0 }, args: [], targets: null },
+          { k: "return", values: [constant("i32", 7)] },
+        ],
+        export: "directDrops",
+      },
+      {
+        sig: 1,
+        locals: ["i32", "i64"],
+        body: [
+          {
+            k: "multi_call",
+            callee: { kind: "indirect", sig: 0, index: constant("i32", 0) },
+            args: [],
+            targets: [0, 1],
+          },
+          { k: "return", values: [{ k: "local.get", id: 1 }] },
+        ],
+        export: "indirectTargets",
+      },
+      {
+        sig: 2,
+        locals: [],
+        body: [
+          {
+            k: "multi_call",
+            callee: { kind: "indirect", sig: 0, index: constant("i32", 0) },
+            args: [],
+            targets: null,
+          },
+          { k: "return", values: [constant("i32", 9)] },
+        ],
+        export: "indirectDrops",
+      },
+    ],
+    table: { entries: [0] },
+  });
+
+  assert.equal(runEncoded(module, "directTargets"), 4n);
+  assert.equal(runEncoded(module, "directDrops"), 7);
+  assert.equal(runEncoded(module, "indirectTargets"), 4n);
+  assert.equal(runEncoded(module, "indirectDrops"), 9);
+});
+
+test("executes every generated operation and memory-access case", () => {
+  const cases = [...binopCases(), ...unopCases(), ...conversionCases(), ...memoryAccessCases()];
+  for (const entry of cases) {
+    assert.deepEqual(runEncoded(entry.module, entry.entry, entry.args), entry.expected, entry.name);
+  }
+  assert.equal(Object.keys(OPCODES).length, 152);
+});
+
+test("keeps encoder case tables and mnemonic selectors mechanically complete", () => {
+  const expressionCases: Record<Expr["k"], true> = {
+    const: true,
+    "local.get": true,
+    "global.get": true,
+    binop: true,
+    unop: true,
+    convert: true,
+    load: true,
+    call: true,
+    call_indirect: true,
+    if_val: true,
+    seq: true,
+    "memory.size": true,
+    "memory.grow": true,
+  };
+  const statementCases: Record<Stmt["k"], true> = {
+    "local.set": true,
+    "global.set": true,
+    store: true,
+    call: true,
+    drop: true,
+    multi_call: true,
+    call_indirect: true,
+    if: true,
+    block: true,
+    loop: true,
+    br: true,
+    br_if: true,
+    return: true,
+    unreachable: true,
+    "memory.copy": true,
+  };
+  assert.deepEqual(Object.keys(expressionCases).sort(), Object.keys(EXPR_KINDS).sort());
+  assert.deepEqual(Object.keys(statementCases).sort(), Object.keys(STMT_KINDS).sort());
+
+  for (const entry of binopCases()) {
+    const statement = entry.module.funcs[0]!.body[0] as Extract<Stmt, { k: "return" }>;
+    const expression = statement.values[0] as Extract<Expr, { k: "binop" }>;
+    assert.equal(
+      binOpcode(expression.op, expression.type, expression.signed) in OPCODES,
+      true,
+      entry.name,
+    );
+  }
+  for (const [op, lanes] of Object.entries(UNOP_LANES) as Array<[UnOp, readonly IrType[]]>) {
+    for (const lane of lanes) assert.equal(`${lane}.${op}` in OPCODES, true);
+  }
+  const generatedUnopLanes = Object.fromEntries(
+    Object.keys(UNOP_LANES).map((op) => [op, [] as IrType[]]),
+  ) as Record<UnOp, IrType[]>;
+  for (const entry of unopCases()) {
+    const statement = entry.module.funcs[0]!.body[0] as Extract<Stmt, { k: "return" }>;
+    const expression = statement.values[0] as Extract<Expr, { k: "unop" }>;
+    generatedUnopLanes[expression.op].push(expression.type);
+  }
+  assert.deepEqual(generatedUnopLanes, UNOP_LANES);
+  for (const type of ["i32", "i64", "f32", "f64"] as const) {
+    assert.equal(loadOpcode(type, undefined, undefined) in OPCODES, true);
+    assert.equal(storeOpcode(type, undefined) in OPCODES, true);
+  }
+  for (const type of ["i32", "i64"] as const) {
+    for (const width of [8, 16] as const) {
+      for (const signed of [true, false]) {
+        assert.equal(loadOpcode(type, width, signed) in OPCODES, true);
+      }
+      assert.equal(storeOpcode(type, width) in OPCODES, true);
+    }
+  }
+});
+
+test("throws the two pinned mystery-kind encoder guards", () => {
+  const expression = expressionModule({ k: "mystery" } as never, "i32");
+  const statement = moduleWith({
+    funcs: [{ sig: 0, locals: [], body: [{ k: "mystery" } as never] }],
+  });
+  assert.throws(
+    () => encodeWasm(expression),
+    (error) =>
+      error instanceof Error && error.message === "encode: unknown IR expression kind: mystery",
+  );
+  assert.throws(
+    () => encodeWasm(statement),
+    (error) =>
+      error instanceof Error && error.message === "encode: unknown IR statement kind: mystery",
+  );
+});
+
+test("executes the complete structured depth ladder", () => {
+  const nestedIfs = moduleWith({
+    types: [{ params: ["i32"], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "block",
+            label: 1,
+            body: [
+              {
+                k: "if",
+                cond: { k: "local.get", id: 0 },
+                then: [
+                  {
+                    k: "if",
+                    cond: { k: "local.get", id: 0 },
+                    then: [{ k: "br", label: 1 }],
+                  },
+                ],
+              },
+              { k: "local.set", id: 0, e: constant("i32", 99) },
+            ],
+          },
+          { k: "return", values: [{ k: "local.get", id: 0 }] },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(nestedIfs, "run", [1]), 1);
+
+  const loopAndBlock = moduleWith({
+    types: [{ params: ["i32"], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "loop",
+            label: 2,
+            body: [
+              {
+                k: "local.set",
+                id: 0,
+                e: {
+                  k: "binop",
+                  op: "sub",
+                  type: "i32",
+                  signed: true,
+                  l: { k: "local.get", id: 0 },
+                  r: constant("i32", 1),
+                },
+              },
+              { k: "br_if", label: 2, cond: { k: "local.get", id: 0 } },
+            ],
+          },
+          {
+            k: "block",
+            label: 3,
+            body: [
+              { k: "br", label: 3 },
+              { k: "local.set", id: 0, e: constant("i32", 99) },
+            ],
+          },
+          { k: "return", values: [{ k: "local.get", id: 0 }] },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(loopAndBlock, "run", [3]), 0);
+
+  const confined = expressionModule(
+    {
+      k: "if_val",
+      cond: constant("i32", 1),
+      then: {
+        k: "seq",
+        stmts: [
+          {
+            k: "block",
+            label: 4,
+            body: [
+              {
+                k: "if",
+                cond: constant("i32", 1),
+                then: [{ k: "br", label: 4 }],
+              },
+              { k: "unreachable" },
+            ],
+          },
+        ],
+        value: constant("i32", 7),
+      },
+      else: constant("i32", 0),
+      type: "i32",
+    },
+    "i32",
+  );
+  assert.equal(runEncoded(confined, "run"), 7);
+
+  const nestedReturn = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "block",
+            label: 5,
+            body: [
+              {
+                k: "if",
+                cond: constant("i32", 1),
+                then: [{ k: "return", values: [constant("i32", 13)] }],
+              },
+            ],
+          },
+          { k: "return", values: [constant("i32", 0)] },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(nestedReturn, "run"), 13);
+
+  const nestedTrap = moduleWith({
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "block",
+            label: 6,
+            body: [
+              {
+                k: "if",
+                cond: constant("i32", 1),
+                then: [{ k: "unreachable" }],
+              },
+            ],
+          },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.throws(() => runEncoded(nestedTrap, "run"), WebAssembly.RuntimeError);
+});
+
+test("merges automatic and caller imports per namespace with fresh memory", () => {
+  const module = moduleWith({
+    memory: { initialPages: 2, mode: "imported" },
+  });
+  const hostFunction = () => 7;
+  const first = mergeImports(module, {
+    runtime: { clock: hostFunction },
+    host: { value: 3 },
+  });
+  const second = mergeImports(module, {
+    runtime: { clock: hostFunction },
+    host: { value: 3 },
+  });
+
+  assert.ok(first.runtime!.memory instanceof WebAssembly.Memory);
+  assert.ok(second.runtime!.memory instanceof WebAssembly.Memory);
+  assert.notEqual(first.runtime!.memory, second.runtime!.memory);
+  assert.equal(first.runtime!.clock, hostFunction);
+  assert.equal(first.host!.value, 3);
+
+  const callerMemory = new WebAssembly.Memory({ initial: 2 });
+  const overridden = mergeImports(module, {
+    runtime: { memory: callerMemory, clock: hostFunction },
+  });
+  assert.equal(overridden.runtime!.memory, callerMemory);
+  assert.equal(overridden.runtime!.clock, hostFunction);
+});
+
+test("preserves combined function and global index spaces and raw reflection order", () => {
+  const module = moduleWith({
+    types: [
+      { params: [], results: ["i32"] },
+      { params: [], results: [] },
+    ],
+    funcImports: [{ module: "host", name: "imported", sig: 0 }],
+    globalImports: [{ module: "host", name: "importedGlobal", type: "i32" }],
+    globals: [
+      {
+        type: "i32",
+        mutable: true,
+        init: { k: "const", type: "i32", value: 5 },
+        export: "definedGlobal",
+      },
+    ],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [constant("i32", 20)] }],
+        export: "defined",
+      },
+      {
+        sig: 1,
+        locals: [],
+        body: [{ k: "global.set", id: 1, e: constant("i32", 77) }],
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "global.get", id: 1 }] }],
+        export: "started",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "call", fn: 0, args: [] }] }],
+        export: "callImported",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "return",
+            values: [{ k: "call_indirect", sig: 0, args: [], index: constant("i32", 0) }],
+          },
+        ],
+        export: "tableImported",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "return",
+            values: [{ k: "call_indirect", sig: 0, args: [], index: constant("i32", 1) }],
+          },
+        ],
+        export: "tableDefined",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "global.get", id: 0 }] }],
+        export: "readImported",
+      },
+    ],
+    table: { entries: [0, 1] },
+    start: 2,
+    funcNames: [
+      [0, "imported"],
+      [1, "defined"],
+      [2, "start"],
+      [3, "started"],
+      [4, "callImported"],
+      [5, "tableImported"],
+      [6, "tableDefined"],
+      [7, "readImported"],
+    ],
+    globalNames: [
+      [0, "importedGlobal"],
+      [1, "definedGlobal"],
+    ],
+  });
+  const compiled = compileWasm(encoded(module));
+  assert.deepEqual(WebAssembly.Module.imports(compiled), [
+    { module: "host", name: "imported", kind: "function" },
+    { module: "host", name: "importedGlobal", kind: "global" },
+  ]);
+  assert.deepEqual(WebAssembly.Module.exports(compiled), [
+    { name: "memory", kind: "memory" },
+    { name: "definedGlobal", kind: "global" },
+    { name: "defined", kind: "function" },
+    { name: "started", kind: "function" },
+    { name: "callImported", kind: "function" },
+    { name: "tableImported", kind: "function" },
+    { name: "tableDefined", kind: "function" },
+    { name: "readImported", kind: "function" },
+  ]);
+
+  const instance = new WebAssembly.Instance(compiled, {
+    host: {
+      imported: () => 11,
+      importedGlobal: new WebAssembly.Global({ value: "i32" }, 33),
+    },
+  });
+  assert.deepEqual(Object.keys(instance.exports), [
+    "memory",
+    "definedGlobal",
+    "defined",
+    "started",
+    "callImported",
+    "tableImported",
+    "tableDefined",
+    "readImported",
+  ]);
+  const call = (name: string) => (instance.exports[name] as CallableFunction)();
+  assert.equal(call("defined"), 20);
+  assert.equal(call("started"), 77);
+  assert.equal(call("callImported"), 11);
+  assert.equal(call("tableImported"), 11);
+  assert.equal(call("tableDefined"), 20);
+  assert.equal(call("readImported"), 33);
+  assert.equal((instance.exports.definedGlobal as WebAssembly.Global).value, 77);
+});
+
+test("encodes locals as exact adjacent RLE runs and multi-byte indices", () => {
+  const module = moduleWith({
+    types: [
+      { params: [], results: [] },
+      { params: [], results: ["i32"] },
+    ],
+    funcs: [
+      { sig: 0, locals: [], body: [] },
+      { sig: 0, locals: ["i32"], body: [] },
+      { sig: 0, locals: ["i32", "i32", "f64"], body: [] },
+      { sig: 0, locals: ["i32", "i64", "i32"], body: [] },
+      {
+        sig: 1,
+        locals: Array<IrType>(129).fill("i32"),
+        body: [{ k: "return", values: [{ k: "local.get", id: 128 }] }],
+        export: "wide",
+      },
+    ],
+  });
+  assert.deepEqual(functionBodies(encoded(module)), [
+    Uint8Array.of(0x00, 0x0b),
+    Uint8Array.of(0x01, 0x01, 0x7f, 0x0b),
+    Uint8Array.of(0x02, 0x02, 0x7f, 0x01, 0x7c, 0x0b),
+    Uint8Array.of(0x03, 0x01, 0x7f, 0x01, 0x7e, 0x01, 0x7f, 0x0b),
+    Uint8Array.of(0x01, 0x81, 0x01, 0x7f, 0x20, 0x80, 0x01, 0x0f, 0x0b),
+  ]);
+  assert.equal(runEncoded(module, "wide"), 0);
+});
+
+test("emits exact natural memarg alignment exponents for every load and store", () => {
+  for (const entry of memoryAccessCases()) {
+    const statement = entry.module.funcs[0]!.body[0]!;
+    const access =
+      statement.k === "store"
+        ? statement
+        : ((statement as Extract<Stmt, { k: "return" }>).values[0] as Extract<Expr, { k: "load" }>);
+    const mnemonic =
+      access.k === "store"
+        ? storeOpcode(access.type, access.width)
+        : loadOpcode(access.type, access.width, access.signed);
+    const expectedAlignment =
+      access.width === 8
+        ? 0
+        : access.width === 16
+          ? 1
+          : access.type === "i64" || access.type === "f64"
+            ? 3
+            : 2;
+    const body = functionBodies(encoded(entry.module))[0]!;
+    const opcodeOffset = body.lastIndexOf(OPCODES[mnemonic]!);
+    assert.notEqual(opcodeOffset, -1, entry.name);
+    assert.equal(body[opcodeOffset + 1], expectedAlignment, entry.name);
+    assert.equal(body[opcodeOffset + 2], 0, entry.name);
+  }
+});
+
+test("distinguishes an absent statement else from an explicitly empty else", () => {
+  const absent = moduleWith({
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "if", cond: constant("i32", 0), then: [] }],
+      },
+    ],
+  });
+  const empty = moduleWith({
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "if", cond: constant("i32", 0), then: [], else: [] }],
+      },
+    ],
+  });
+  assert.deepEqual(
+    functionBodies(encoded(absent))[0],
+    Uint8Array.of(0x00, 0x41, 0x00, 0x04, 0x40, 0x0b, 0x0b),
+  );
+  assert.deepEqual(
+    functionBodies(encoded(empty))[0],
+    Uint8Array.of(0x00, 0x41, 0x00, 0x04, 0x40, 0x05, 0x0b, 0x0b),
+  );
+});
+
+test("executes boundary constants, all-lane blocktypes, and arithmetic traps", () => {
+  const constants: Array<{ type: IrType; value: number | bigint }> = [
+    { type: "i32", value: -0x8000_0000 },
+    { type: "i32", value: 0x7fff_ffff },
+    { type: "i64", value: -0x8000_0000_0000_0000n },
+    { type: "i64", value: 0x7fff_ffff_ffff_ffffn },
+    { type: "f32", value: -0 },
+    { type: "f32", value: Number.POSITIVE_INFINITY },
+    { type: "f32", value: Number.NEGATIVE_INFINITY },
+    { type: "f32", value: Number.NaN },
+    { type: "f64", value: -0 },
+    { type: "f64", value: Number.POSITIVE_INFINITY },
+    { type: "f64", value: Number.NEGATIVE_INFINITY },
+    { type: "f64", value: Number.NaN },
+  ];
+  for (const { type, value } of constants) {
+    const actual = runEncoded(expressionModule(constant(type, value), type), "run");
+    if (typeof value === "number" && Number.isNaN(value)) {
+      assert.equal(Number.isNaN(actual), true, `${type} NaN`);
+    } else {
+      assert.equal(Object.is(actual, value), true, `${type} ${String(value)}`);
+    }
+  }
+
+  const blockValues: Record<IrType, number | bigint> = {
+    i32: 17,
+    i64: 18n,
+    f32: 19.5,
+    f64: -20.25,
+  };
+  for (const type of ["i32", "i64", "f32", "f64"] as const) {
+    const value = blockValues[type];
+    assert.equal(
+      runEncoded(
+        expressionModule(
+          {
+            k: "if_val",
+            cond: constant("i32", 1),
+            then: constant(type, value),
+            else: constant(type, type === "i64" ? 0n : 0),
+            type,
+          },
+          type,
+        ),
+        "run",
+      ),
+      value,
+    );
+    assert.equal(
+      runEncoded(
+        expressionModule({ k: "seq", stmts: [], value: constant(type, value) }, type),
+        "run",
+      ),
+      value,
+    );
+  }
+
+  const divisionByZero = expressionModule(
+    {
+      k: "binop",
+      op: "div",
+      type: "i32",
+      signed: true,
+      l: constant("i32", 7),
+      r: constant("i32", 0),
+    },
+    "i32",
+  );
+  assert.throws(() => runEncoded(divisionByZero, "run"), WebAssembly.RuntimeError);
+});
+
+test("preserves the pinned canonical NaN payload bits for f32 and f64", () => {
+  const f32 = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "store",
+            type: "f32",
+            addr: constant("i32", 0),
+            value: constant("f32", Number.NaN),
+            offset: 0,
+          },
+          {
+            k: "return",
+            values: [{ k: "load", type: "i32", addr: constant("i32", 0), offset: 0 }],
+          },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  const f64 = moduleWith({
+    types: [{ params: [], results: ["i64"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "store",
+            type: "f64",
+            addr: constant("i32", 0),
+            value: constant("f64", Number.NaN),
+            offset: 0,
+          },
+          {
+            k: "return",
+            values: [{ k: "load", type: "i64", addr: constant("i32", 0), offset: 0 }],
+          },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(f32, "run"), 0x7fc0_0000);
+  assert.equal(runEncoded(f64, "run"), 0x7ff8_0000_0000_0000n);
+});
+
+test("instantiates legal extremes without encoder-owned range failures", () => {
+  let nested: Stmt = { k: "local.set", id: 128, e: constant("i32", 42) };
+  for (let label = 0; label < 140; label += 1) {
+    nested = { k: "block", label, body: [nested] };
+  }
+  const module = moduleWith({
+    types: [{ params: [], results: ["i32"] }],
+    funcs: [
+      {
+        sig: 0,
+        locals: Array<IrType>(129).fill("i32"),
+        body: [
+          { k: "drop", e: constant("i64", -0x8000_0000_0000_0000n) },
+          { k: "drop", e: constant("i64", 0x7fff_ffff_ffff_ffffn) },
+          {
+            k: "if",
+            cond: constant("i32", 0),
+            then: [
+              {
+                k: "store",
+                type: "i64",
+                addr: constant("i32", 0),
+                value: constant("i64", 1n),
+                offset: 0xffff_ffff,
+              },
+              {
+                k: "drop",
+                e: {
+                  k: "load",
+                  type: "i64",
+                  addr: constant("i32", 0),
+                  offset: 0xffff_ffff,
+                },
+              },
+            ],
+          },
+          nested,
+          { k: "return", values: [{ k: "local.get", id: 128 }] },
+        ],
+        export: "run",
+      },
+    ],
+  });
+  assert.equal(runEncoded(module, "run"), 42);
+});
+
+test("evaluates every postfix operand list left-to-right", () => {
+  function marker(digit: number): Func {
+    return {
+      sig: 0,
+      locals: [],
+      body: [
+        {
+          k: "global.set",
+          id: 0,
+          e: {
+            k: "binop",
+            op: "add",
+            type: "i32",
+            signed: true,
+            l: {
+              k: "binop",
+              op: "mul",
+              type: "i32",
+              signed: true,
+              l: { k: "global.get", id: 0 },
+              r: constant("i32", 10),
+            },
+            r: constant("i32", digit),
+          },
+        },
+        { k: "return", values: [constant("i32", 0)] },
+      ],
+    };
+  }
+
+  const mark = (fn: number): Expr => ({ k: "call", fn, args: [] });
+  const readOrder: Stmt = { k: "return", values: [{ k: "global.get", id: 0 }] };
+  const module = moduleWith({
+    types: [
+      { params: [], results: ["i32"] },
+      { params: ["i32", "i32"], results: ["i32"] },
+      { params: ["i32", "i32"], results: ["i32", "i32"] },
+      { params: [], results: ["i32", "i32"] },
+    ],
+    globals: [
+      {
+        type: "i32",
+        mutable: true,
+        init: { k: "const", type: "i32", value: 0 },
+      },
+    ],
+    funcs: [
+      marker(1),
+      marker(2),
+      marker(3),
+      {
+        sig: 1,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "global.get", id: 0 }] }],
+      },
+      {
+        sig: 2,
+        locals: [],
+        body: [
+          {
+            k: "return",
+            values: [
+              { k: "local.get", id: 0 },
+              { k: "local.get", id: 1 },
+            ],
+          },
+        ],
+      },
+      {
+        sig: 3,
+        locals: [],
+        body: [{ k: "return", values: [mark(0), mark(1)] }],
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "drop",
+            e: {
+              k: "binop",
+              op: "add",
+              type: "i32",
+              signed: true,
+              l: mark(0),
+              r: mark(1),
+            },
+          },
+          readOrder,
+        ],
+        export: "binop",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "store",
+            type: "i32",
+            addr: mark(0),
+            value: mark(1),
+            offset: 0,
+          },
+          readOrder,
+        ],
+        export: "store",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "return", values: [{ k: "call", fn: 3, args: [mark(0), mark(1)] }] }],
+        export: "direct",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "return",
+            values: [
+              {
+                k: "call_indirect",
+                sig: 1,
+                args: [mark(0), mark(1)],
+                index: mark(2),
+              },
+            ],
+          },
+        ],
+        export: "indirect",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          {
+            k: "multi_call",
+            callee: {
+              kind: "indirect",
+              sig: 2,
+              index: {
+                k: "seq",
+                stmts: [{ k: "drop", e: mark(2) }],
+                value: constant("i32", 1),
+              },
+            },
+            args: [mark(0), mark(1)],
+            targets: null,
+          },
+          readOrder,
+        ],
+        export: "indirectMulti",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [{ k: "memory.copy", dest: mark(0), src: mark(1), len: mark(2) }, readOrder],
+        export: "copy",
+      },
+      {
+        sig: 0,
+        locals: [],
+        body: [
+          { k: "multi_call", callee: { kind: "func", fn: 5 }, args: [], targets: null },
+          readOrder,
+        ],
+        export: "returns",
+      },
+    ],
+    table: { entries: [3, 4] },
+  });
+
+  assert.equal(runEncoded(module, "binop"), 12);
+  assert.equal(runEncoded(module, "store"), 12);
+  assert.equal(runEncoded(module, "direct"), 12);
+  assert.equal(runEncoded(module, "indirect"), 123);
+  assert.equal(runEncoded(module, "indirectMulti"), 123);
+  assert.equal(runEncoded(module, "copy"), 123);
+  assert.equal(runEncoded(module, "returns"), 12);
+});
 
 test("encodes the minimal owned-memory module", () => {
   const module = moduleWith({ types: [] });
