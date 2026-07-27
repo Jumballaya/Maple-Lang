@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maple is a statically-typed, compiled language that targets WebAssembly. The compiler lowers the merged source dependency graph through a typed intermediate representation (IR), prints one `.wat` (WebAssembly Text Format) module, and assembles it into the final `.wasm` binary with the project-local `wat2wasm` installed by npm. No system WebAssembly toolchain is required.
+Maple is a statically-typed, compiled language that targets WebAssembly. The compiler lowers the merged source dependency graph through a typed intermediate representation (IR) and emits the final `.wasm` binary directly. WAT (WebAssembly Text Format) and serialized IR are optional debug outputs; no system WebAssembly toolchain is required.
 
 ---
 
@@ -25,12 +25,14 @@ Architecturally, compilation follows this pipeline:
 ```
 parse modules → type-check and annotate → whole-program merge
   → lower to typed IR → run the IR pass hook (empty in this phase)
-  → validate IR → print WAT → assemble wasm
+  → validate IR → encodeWasm → .wasm
+                  ├ printWat → optional WAT debug output
+                  └ dumpIr   → optional IR debug output
 ```
 
-The IR validator runs after the pass hook and before WAT printing. It is an internal compile-time guarantee that malformed IR does not reach the backend, not a language or host API. The former direct AST-to-WAT string emitter is no longer part of the compiler.
+The IR validator runs after the pass hook and before binary emission or either debug output. It is an internal compile-time guarantee that malformed IR does not reach a backend, not a language or host API. The former direct AST-to-WAT string emitter is no longer part of the compiler.
 
-For the same resolved entry path and module graph in the same checkout, repeated compilation produces byte-identical WAT. This is not a cross-machine or cross-checkout reproducible-build guarantee: bundled-standard-library module keys are relative to the entry module, so checkout location can change internal symbol names.
+For the same resolved entry path and module graph in the same checkout, repeated compilation produces byte-identical `.wasm` and, when requested, byte-identical WAT. This is not a cross-machine or cross-checkout reproducible-build guarantee: bundled-standard-library module keys are relative to the entry module, so checkout location can change internal symbol names.
 
 ### Memory ownership
 

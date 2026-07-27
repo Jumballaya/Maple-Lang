@@ -11,14 +11,20 @@ npm install
 ```
 
 No system WebAssembly toolchain is required. The project uses the `wat2wasm`
-binary supplied by its `wabt` development dependency.
+binary supplied by its `wabt` development dependency only for the permanent
+WAT-vs-binary cross-check tests. npm scripts add that bin shim to `PATH`;
+running the cross-check file directly outside npm can silently skip it when the
+shim is unreachable. CI sets `MAPLE_REQUIRE_WAT2WASM=1` to prevent that skip.
+The compiler itself has no runtime npm dependencies or external-tool
+requirements.
 
 ## Compilation pipeline
 
 The compiler parses the entry module and its dependency graph, type-checks and
 annotates each module, merges the whole program, lowers it to typed IR, runs the
-IR pass hook, validates the IR, prints WAT, and uses the project-local
-`wat2wasm` binary to produce the final `.wasm` file.
+IR pass hook, validates the IR, and emits the final `.wasm` bytes directly.
+WAT and IR text are optional debug artifacts derived from the same validated
+module.
 
 ## Usage
 
@@ -31,12 +37,19 @@ Compiles a maple source code file into a .wasm file
 Options:
   -o, --output <file>   Specify output file (default: build/app.wasm)
   --import-memory       Import runtime.memory instead of exporting owned memory
+  --emit-wat <file>     Also write WebAssembly text (debug output)
+  --emit-ir <file>      Also write the lowered IR as JSON (debug output)
+  --strip               Omit the name section from the .wasm output
 
 Examples:
   maple src/main.maple
   maple src/main.maple -o app.wasm
   maple --import-memory src/main.maple
 ```
+
+`--emit-wat` and `--emit-ir` are unstable debugging surfaces with no
+compatibility promise. `--strip` removes the name section from the binary while
+leaving the optional debug artifacts unchanged.
 
 ## Host memory
 
