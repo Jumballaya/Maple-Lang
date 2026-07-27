@@ -1,7 +1,7 @@
 // biome-ignore-all lint/suspicious/noThenProperty: IR branch nodes intentionally use `then`.
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { printValidatedModule } from "../src/compiler/compiler";
+import { prepareValidatedModule, printValidatedModule } from "../src/compiler/compiler";
 import type { ConvOp, Expr, IrModule, IrType, Stmt } from "../src/ir/ir";
 import { validateModule } from "../src/ir/validate";
 
@@ -143,11 +143,29 @@ function expectError(expected: string, mutate: (module: IrModule) => void): void
 }
 
 describe("IR validator: valid modules", () => {
+  test("prepares a module by running passes exactly once before validation", () => {
+    const module = validModule();
+    let passRuns = 0;
+
+    const prepared = prepareValidatedModule(module, [
+      (candidate) => {
+        passRuns += 1;
+        candidate.memory.initialPages = 3;
+      },
+    ]);
+
+    assert.equal(prepared, module);
+    assert.equal(passRuns, 1);
+    assert.equal(prepared.memory.initialPages, 3);
+  });
+
   test("the backend validates after running its pass hook", () => {
+    let passRuns = 0;
     assert.throws(
       () =>
         printValidatedModule(validModule(), [
           (module) => {
+            passRuns += 1;
             module.memory.initialPages = 0;
           },
         ]),
@@ -155,6 +173,7 @@ describe("IR validator: valid modules", () => {
         message: /IR validation failed:\nmemory initialPages must be at least 1/,
       },
     );
+    assert.equal(passRuns, 1);
   });
 
   test("accepts arithmetic, exports, data, a populated table, and start", () => {

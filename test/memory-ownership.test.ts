@@ -28,11 +28,12 @@ async function compileMode(importMemory: boolean): Promise<{
   try {
     const entry = path.join(dir, "main.maple");
     const output = path.join(dir, "app.wasm");
+    const watPath = path.join(dir, "app.wat");
     await writeFile(entry, source);
-    await compiler(entry, "main", dir, output, { importMemory });
+    await compiler(entry, "main", dir, output, { importMemory, emitWat: watPath });
     return {
       bytes: await readFile(output),
-      wat: await readFile(path.join(dir, "app.wat"), "utf8"),
+      wat: await readFile(watPath, "utf8"),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -32,12 +32,13 @@ async function compileEntry(entry: string): Promise<{
   const outputDir = await mkdtemp(path.join(tmpdir(), "maple-entry-"));
   try {
     const output = path.join(outputDir, "app.wasm");
+    const watPath = path.join(outputDir, "app.wat");
     const parsed = path.parse(entry);
-    await compiler(entry, parsed.name, parsed.dir, output);
-    const [wat, bytes] = await Promise.all([
-      readFile(path.join(outputDir, "app.wat"), "utf8"),
-      readFile(output),
-    ]);
+    await compiler(entry, parsed.name, parsed.dir, output, {
+      importMemory: false,
+      emitWat: watPath,
+    });
+    const [wat, bytes] = await Promise.all([readFile(watPath, "utf8"), readFile(output)]);
     return { wat, ...instantiate(bytes) };
   } finally {
     await rm(outputDir, { recursive: true, force: true });
@@ -58,11 +59,12 @@ async function compileProject(files: Project): Promise<{
     }
     const entry = path.join(dir, "main.maple");
     const output = path.join(dir, "app.wasm");
-    await compiler(entry, "main", dir, output);
-    const [wat, bytes] = await Promise.all([
-      readFile(path.join(dir, "app.wat"), "utf8"),
-      readFile(output),
-    ]);
+    const watPath = path.join(dir, "app.wat");
+    await compiler(entry, "main", dir, output, {
+      importMemory: false,
+      emitWat: watPath,
+    });
+    const [wat, bytes] = await Promise.all([readFile(watPath, "utf8"), readFile(output)]);
     return { wat, ...instantiate(bytes) };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -93,6 +95,95 @@ function call(instance: WebAssembly.Instance, name: string, ...args: number[]): 
   assert.equal(typeof fn, "function", `missing function export ${name}`);
   return (fn as (...values: number[]) => unknown)(...args);
 }
+
+describe("Compiler: direct artifact options", () => {
+  test("writes each requested artifact, creates parents, and strips only wasm", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "maple-artifacts-"));
+    try {
+      const entry = path.join(dir, "main.maple");
+      await writeFile(entry, "export fn run(): i64 { return 42; }");
+
+      const watOnlyWasm = path.join(dir, "wat-only.wasm");
+      const watOnly = path.join(dir, "wat-only.wat");
+      await compiler(entry, "main", dir, watOnlyWasm, {
+        importMemory: false,
+        emitWat: watOnly,
+      });
+      assert.match(await readFile(watOnly, "utf8"), /\(module/);
+
+      const irOnlyWasm = path.join(dir, "ir-only.wasm");
+      const irOnly = path.join(dir, "ir-only.json");
+      await compiler(entry, "main", dir, irOnlyWasm, {
+        importMemory: false,
+        emitIr: irOnly,
+      });
+      assert.match(await readFile(irOnly, "utf8"), /"\$bigint": "42"/);
+
+      const nested = path.join(dir, "nested", "artifacts");
+      const fullWasm = path.join(nested, "full", "app.wasm");
+      const fullWat = path.join(nested, "wat", "app.wat");
+      const fullIr = path.join(nested, "ir", "app.json");
+      await compiler(entry, "main", dir, fullWasm, {
+        importMemory: false,
+        emitWat: fullWat,
+        emitIr: fullIr,
+      });
+
+      const strippedWasm = path.join(dir, "stripped.wasm");
+      await compiler(entry, "main", dir, strippedWasm, {
+        importMemory: false,
+        strip: true,
+      });
+
+      const [fullBytes, strippedBytes] = await Promise.all([
+        readFile(fullWasm),
+        readFile(strippedWasm),
+      ]);
+      assert(fullBytes.length > strippedBytes.length);
+      assert.deepEqual(fullBytes.subarray(0, strippedBytes.length), strippedBytes);
+      assert(instantiate(fullBytes));
+      assert(instantiate(strippedBytes));
+      assert.match(await readFile(fullWat, "utf8"), /\(module/);
+      assert.match(await readFile(fullIr, "utf8"), /"\$bigint": "42"/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects every resolved output-path collision", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "maple-artifact-collisions-"));
+    try {
+      const entry = path.join(dir, "main.maple");
+      const output = path.join(dir, "app.wasm");
+      await writeFile(entry, "export fn run(): i32 { return 42; }");
+
+      await assert.rejects(
+        compiler(entry, "main", dir, output, {
+          importMemory: false,
+          emitWat: path.join(dir, ".", "app.wasm"),
+        }),
+        /--emit-wat path collides with the output path/,
+      );
+      await assert.rejects(
+        compiler(entry, "main", dir, output, {
+          importMemory: false,
+          emitIr: path.join(dir, "nested", "..", "app.wasm"),
+        }),
+        /--emit-ir path collides with the output path/,
+      );
+      await assert.rejects(
+        compiler(entry, "main", dir, output, {
+          importMemory: false,
+          emitWat: path.join(dir, "debug", "module.txt"),
+          emitIr: path.join(dir, "debug", ".", "module.txt"),
+        }),
+        /--emit-ir path collides with --emit-wat/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 /*
  * WAT assertions were inventoried and behavioralized by T33–T36/T38; the
@@ -930,10 +1021,8 @@ describe("Compiler: merged-program acceptance", () => {
         },
       );
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      const [bytes, _wat] = await Promise.all([
-        readFile(output),
-        readFile(path.join(outputDir, "app.wat"), "utf8"),
-      ]);
+      const bytes = await readFile(output);
+      assert.equal(existsSync(path.join(outputDir, "app.wat")), false);
       const { instance } = instantiate(bytes);
       assert.equal(call(instance, "_start", 2, 3), 10);
     } finally {

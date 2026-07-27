@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { dumpIr } from "../ir/dump-ir";
+import { encodeWasm } from "../ir/encode-wasm";
 import type { IrModule } from "../ir/ir";
 import { lowerModule } from "../ir/lower";
 import { type IrPass, runPasses } from "../ir/passes";
@@ -29,15 +30,22 @@ export { resolveImportModule };
 
 export type CompilerOptions = {
   importMemory: boolean;
+  emitWat?: string;
+  emitIr?: string;
+  strip?: boolean;
 };
 
-export function printValidatedModule(module: IrModule, passes: readonly IrPass[]): string {
+export function prepareValidatedModule(module: IrModule, passes: readonly IrPass[]): IrModule {
   runPasses(module, passes);
   const errors = validateModule(module);
   if (errors.length > 0) {
     throw new Error(`IR validation failed:\n${errors.join("\n")}`);
   }
-  return printWat(module);
+  return module;
+}
+
+export function printValidatedModule(module: IrModule, passes: readonly IrPass[]): string {
+  return printWat(prepareValidatedModule(module, passes));
 }
 
 function resolveLinkedType(graph: ModuleGraph, module: ModuleRecord, type: string): string {
@@ -146,9 +154,9 @@ export function linkStdlibImports(meta: ModuleMeta): void {
 //  3) Validation pass
 //     - run typeCheck() over each module before emission
 //
-//  4) Build the whole-program model, lower it to IR, and print one WAT module
+//  4) Build the whole-program model, lower it to IR, run passes, and validate
 //
-//  5) Assemble the final WebAssembly module with wat2wasm
+//  5) Encode WebAssembly bytes and derive any requested debug artifacts
 //
 // Next idea status:
 //   1) Optimization pass (constant folding/static simplification): pending.
@@ -178,6 +186,19 @@ export async function compiler(
   outputPath = "build/app.wasm",
   options: CompilerOptions = { importMemory: false },
 ) {
+  const resolvedOutputPath = path.resolve(outputPath);
+  const resolvedEmitWat = options.emitWat === undefined ? undefined : path.resolve(options.emitWat);
+  const resolvedEmitIr = options.emitIr === undefined ? undefined : path.resolve(options.emitIr);
+  if (resolvedEmitWat === resolvedOutputPath) {
+    throw new Error("--emit-wat path collides with the output path");
+  }
+  if (resolvedEmitIr === resolvedOutputPath) {
+    throw new Error("--emit-ir path collides with the output path");
+  }
+  if (resolvedEmitIr !== undefined && resolvedEmitIr === resolvedEmitWat) {
+    throw new Error("--emit-ir path collides with --emit-wat");
+  }
+
   const absoluteEntryPath = path.resolve(entryPoint);
   const entrySrc = await openFile(absoluteEntryPath);
   if (!entrySrc) {
@@ -222,27 +243,28 @@ export async function compiler(
   if (result.pendingInits.length > 0) {
     throw new Error(`lowering left ${result.pendingInits.length} pending initializer(s)`);
   }
-  const wat = printValidatedModule(result.module, []);
-  const outputDir = path.dirname(outputPath);
-  await mkdir(outputDir, { recursive: true });
-  const watPath = outputPath.endsWith(".wasm")
-    ? `${outputPath.slice(0, -".wasm".length)}.wat`
-    : `${outputPath}.wat`;
-  await writeFile(watPath, wat);
-  await run("wat2wasm", [watPath, "-o", outputPath]);
-  console.log(`Compiled: ${outputPath}`);
-}
 
-function run(command: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      if (stderr) console.error(stderr);
-      if (stdout) console.log(stdout);
-      resolve();
-    });
-  });
+  const module = prepareValidatedModule(result.module, []);
+  const wasm = encodeWasm(module, { strip: options.strip ?? false });
+  const wat = options.emitWat === undefined ? undefined : printWat(module);
+  const ir = options.emitIr === undefined ? undefined : dumpIr(module);
+
+  const outputPaths = [
+    outputPath,
+    ...(options.emitWat === undefined ? [] : [options.emitWat]),
+    ...(options.emitIr === undefined ? [] : [options.emitIr]),
+  ];
+  await Promise.all(
+    [...new Set(outputPaths.map((artifactPath) => path.dirname(artifactPath)))].map((directory) =>
+      mkdir(directory, { recursive: true }),
+    ),
+  );
+  await writeFile(outputPath, wasm);
+  if (options.emitWat !== undefined && wat !== undefined) {
+    await writeFile(options.emitWat, wat, "utf8");
+  }
+  if (options.emitIr !== undefined && ir !== undefined) {
+    await writeFile(options.emitIr, ir, "utf8");
+  }
+  console.log(`Compiled: ${outputPath}`);
 }
