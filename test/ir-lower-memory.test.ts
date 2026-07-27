@@ -45,14 +45,14 @@ function lowered(source: string): ReturnType<typeof lowerModule> & { wat: string
 }
 
 function differential(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
-  return runExport(lowered(source).wat, exportName, args);
+  return runExport(lowered(source).module, exportName, args);
 }
 
 function fixed(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
   const { ast, meta } = checked(source);
   const result = lowerModule(ast, meta, { importMemory: false });
   assert.deepEqual(validateModule(result.module), []);
-  return runExport(printWat(result.module), exportName, args);
+  return runExport(result.module, exportName, args);
 }
 
 describe("IR memory lowering: layout and frames", () => {
@@ -214,9 +214,9 @@ describe("IR memory lowering: arrays", () => {
         return trace;
       }
     `;
-    const { wat } = lowered(source);
-    assert.equal(runExport(wat, "run", [0]), 0);
-    assert.equal(runExport(wat, "run", [1]), 1);
+    const { module } = lowered(source);
+    assert.equal(runExport(module, "run", [0]), 0);
+    assert.equal(runExport(module, "run", [1]), 1);
   });
 
   maybeTest("preserves shared local literal buffers across calls", () => {
@@ -233,12 +233,12 @@ describe("IR memory lowering: arrays", () => {
   });
 
   maybeTest("traps negative, length, and huge indices", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       export fn read(i: i32): i32 { let values: i32[] = [4, 5]; return values[i]; }
     `);
-    assert.equal(runExport(wat, "read", [1]), 5);
+    assert.equal(runExport(module, "read", [1]), 5);
     for (const index of [-1, 2, 2_000_000_000]) {
-      assert.throws(() => runExport(wat, "read", [index]), WebAssembly.RuntimeError);
+      assert.throws(() => runExport(module, "read", [index]), WebAssembly.RuntimeError);
     }
   });
 
@@ -440,7 +440,7 @@ describe("IR memory lowering: structs", () => {
       }
     `;
     const result = lowered(source);
-    assert.equal(runExport(result.wat, "run"), 1);
+    assert.equal(runExport(result.module, "run"), 1);
     const helperNames = new Set(result.module.names.funcs.values());
     assert(helperNames.has("__struct_eq_Outer"));
     assert(helperNames.has("__struct_eq_Inner"));
@@ -457,7 +457,7 @@ describe("IR memory lowering: structs", () => {
       }
     `;
     const result = lowered(source);
-    assert.equal(runExport(result.wat, "run", [123]), 1);
+    assert.equal(runExport(result.module, "run", [123]), 1);
   });
 
   maybeTest("encodes aggregate fields of global structs directly", () => {
@@ -488,7 +488,7 @@ describe("IR memory lowering: startup initializers and helper demand", () => {
       [["array-elements", "values", "values"]],
     );
     assert.notEqual(result.module.start, undefined);
-    assert.equal(runExport(result.wat, "run"), 41);
+    assert.equal(runExport(result.module, "run"), 41);
   });
 
   test("splices global struct stores by owner and ordinal", () => {

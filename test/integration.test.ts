@@ -15,17 +15,18 @@ import { fileURLToPath } from "node:url";
 import { linkStdlibImports } from "../src/compiler/compiler";
 import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
+import { encodeWasm } from "../src/ir/encode-wasm";
+import type { IrModule } from "../src/ir/ir";
+import { printWat } from "../src/ir/print-wat";
 import { Parser } from "../src/parser/Parser";
-import {
-  compile,
-  hasWat2Wasm,
-  maybeTest,
-  runExport,
-  runMergedExport,
-  validateWithWat2Wasm,
-} from "./helpers";
+import { compile, hasWat2Wasm, maybeTest, runExport, runMergedExport } from "./helpers";
+import { moduleWith } from "./ir-fixtures";
 
-function checkedCompile(source: string): string {
+function encodedModule(module: IrModule): WebAssembly.Module {
+  return new WebAssembly.Module(encodeWasm(module) as Uint8Array<ArrayBuffer>);
+}
+
+function checkedCompile(source: string) {
   const parser = new Parser(source, "behavioralization.maple");
   const ast = parser.parse("behavioralization");
   assert.deepEqual(
@@ -58,6 +59,70 @@ function checkerMessages(source: string): string[] {
 const wat2wasmAvailable = hasWat2Wasm();
 
 describe("wat2wasm test gating", () => {
+  test("runExport merges fresh automatic memory with caller imports and honors overrides", () => {
+    const module = moduleWith({
+      types: [
+        { params: ["i32", "i32", "i32"], results: ["i32"] },
+        { params: [], results: ["i32"] },
+      ],
+      funcImports: [
+        { module: "host", name: "combine", sig: 0 },
+        { module: "runtime", name: "marker", sig: 1 },
+      ],
+      globalImports: [{ module: "host", name: "base", type: "i32" }],
+      funcs: [
+        {
+          sig: 1,
+          locals: [],
+          body: [
+            {
+              k: "drop",
+              e: { k: "memory.grow", pages: { k: "const", type: "i32", value: 1 } },
+            },
+            {
+              k: "return",
+              values: [
+                {
+                  k: "call",
+                  fn: 0,
+                  args: [
+                    { k: "global.get", id: 0 },
+                    { k: "call", fn: 1, args: [] },
+                    { k: "memory.size" },
+                  ],
+                },
+              ],
+            },
+          ],
+          export: "run",
+        },
+      ],
+      memory: { initialPages: 1, mode: "imported" },
+    });
+    const imports = {
+      host: {
+        base: new WebAssembly.Global({ value: "i32", mutable: false }, 40),
+        combine: (base: number, marker: number, pages: number) => base + marker + pages,
+      },
+      runtime: {
+        marker: () => 0,
+      },
+    };
+
+    assert.equal(runExport(module, "run", [], imports), 42);
+    assert.equal(runExport(module, "run", [], imports), 42);
+
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    assert.equal(
+      runExport(module, "run", [], {
+        ...imports,
+        runtime: { ...imports.runtime, memory },
+      }),
+      42,
+    );
+    assert.equal(memory.buffer.byteLength / 65_536, 2);
+  });
+
   maybeTest("runExport accepts and returns BigInt for i64 exports", () => {
     const wat = compile("export fn echo(value: i64): i64 { return value; }");
     assert.equal(runExport(wat, "echo", [123n]), 123n);
@@ -65,7 +130,7 @@ describe("wat2wasm test gating", () => {
 
   maybeTest("runExport supports imported memory as an explicit option", () => {
     const wat = compile("export fn answer(): i32 { return 42; }", { importMemory: true });
-    assert.equal(runExport(wat, "answer", [], { importMemory: true }), 42);
+    assert.equal(runExport(wat, "answer"), 42);
   });
 
   test("math tests skip when wat2wasm execution is disabled", () => {
@@ -109,36 +174,40 @@ describe("wat2wasm test gating", () => {
  */
 describe("host surface (WAT-structural)", () => {
   test("module-owned memory export is always present", () => {
-    const wat = compile("fn noop(): void {}");
+    const wat = printWat(compile("fn noop(): void {}"));
     assert.match(wat, /\(memory\s+\(export\s+"memory"\)\s+\d+\s*\)/);
     assert.doesNotMatch(wat, /\(import\s+"runtime"\s+"memory"\s+\(memory\b/);
   });
 
   test("exported functions expose their public name", () => {
-    const wat = compile(`
-      export fn add(a: i32, b: i32): i32 { return a + b; }
-    `);
+    const wat = printWat(
+      compile(`
+        export fn add(a: i32, b: i32): i32 { return a + b; }
+      `),
+    );
     assert.match(wat, /\(export\s+"add"\)/);
   });
 
   test("the math demo retains its external host imports", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
-    const wat = compile(source);
+    const wat = printWat(compile(source));
     assert.match(wat, /\(import\s+"math"\s+"[^"]+"\s+\((?:func|global)\b/);
   });
 
   test("sparse switches keep bounded textual output", () => {
-    const wat = compile(`
-      fn dispatch(x: i32): i32 {
-        switch (x) {
-          case 1: { return 1; }
-          case 1000000: { return 999; }
-          default: { return 0; }
+    const wat = printWat(
+      compile(`
+        fn dispatch(x: i32): i32 {
+          switch (x) {
+            case 1: { return 1; }
+            case 1000000: { return 999; }
+            default: { return 0; }
+          }
+          return -1;
         }
-        return -1;
-      }
-    `);
+      `),
+    );
     assert(wat.length < 50_000, `WAT for a 2-case switch ballooned to ${wat.length} chars`);
   });
 
@@ -296,8 +365,7 @@ describe("Integration: behavioralized structure coverage", () => {
 describe("Integration: wat2wasm validation", () => {
   maybeTest("simple function passes wat2wasm", () => {
     const wat = compile("fn add(a: i32, b: i32): i32 { return a + b; }");
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("for loop passes wat2wasm", () => {
@@ -308,8 +376,7 @@ describe("Integration: wat2wasm validation", () => {
         return total;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("switch statement passes wat2wasm", () => {
@@ -323,8 +390,7 @@ describe("Integration: wat2wasm validation", () => {
         return 0;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("switch default with break stays in valid label scope", () => {
@@ -336,8 +402,7 @@ describe("Integration: wat2wasm validation", () => {
         }
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("nested f32 return if emits wat2wasm-valid output", () => {
@@ -350,8 +415,7 @@ describe("Integration: wat2wasm validation", () => {
         }
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("void-returning if both branches returns remains wat2wasm-valid", () => {
@@ -360,8 +424,7 @@ describe("Integration: wat2wasm validation", () => {
         if (x > 0) { return; } else { return; }
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("struct param and member access passes wat2wasm", () => {
@@ -378,8 +441,7 @@ describe("Integration: wat2wasm validation", () => {
         return vx * ux + vy * uy;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("full-featured program passes wat2wasm", () => {
@@ -407,8 +469,7 @@ describe("Integration: wat2wasm validation", () => {
         return acc;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("void function discarding single-return call validates", () => {
@@ -418,8 +479,7 @@ describe("Integration: wat2wasm validation", () => {
         produce();
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -434,8 +494,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.x + p.y;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("local struct with early return passes wat2wasm", () => {
@@ -449,8 +508,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.y;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("two local structs — read from both passes wat2wasm", () => {
@@ -462,8 +520,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.x + q.y;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("write-then-read local struct passes wat2wasm", () => {
@@ -475,8 +532,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.x;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("loop with struct field read/write passes wat2wasm", () => {
@@ -491,8 +547,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.y;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("method call on local struct passes wat2wasm", () => {
@@ -506,8 +561,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.sum();
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("method with extra arg on local struct passes wat2wasm", () => {
@@ -521,8 +575,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.scale(2);
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("f32 struct local — read f32 member passes wat2wasm", () => {
@@ -533,8 +586,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return v.x;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("mixed i32/f32 struct local passes wat2wasm", () => {
@@ -545,8 +597,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return m.a;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("void function with local struct passes wat2wasm", () => {
@@ -557,8 +608,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         p.x = 10;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("nested function calls — both with local structs passes wat2wasm", () => {
@@ -573,8 +623,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return p.x + inner();
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest(
@@ -590,8 +639,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return with_struct() + 1;
       }
     `);
-      const err = validateWithWat2Wasm(wat);
-      assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+      assert(encodedModule(wat));
     },
   );
 
@@ -606,8 +654,7 @@ describe("Integration: local struct wat2wasm validation", () => {
         return vx * ux + vy * uy;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -620,8 +667,7 @@ describe("Integration: Struct literal expression values", () => {
         return p.x + p.y;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("local struct with function-call field passes wat2wasm", () => {
@@ -633,8 +679,7 @@ describe("Integration: Struct literal expression values", () => {
         return p.x;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("local struct with cast field passes wat2wasm", () => {
@@ -645,8 +690,7 @@ describe("Integration: Struct literal expression values", () => {
         return v.x;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("global struct with expression field passes wat2wasm", () => {
@@ -656,8 +700,7 @@ describe("Integration: Struct literal expression values", () => {
       let g: Point = { x = offset, y = 3 };
       export fn run(): i32 { return g.x + g.y; }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("mixed literal-only and expression global structs pass wat2wasm", () => {
@@ -668,8 +711,7 @@ describe("Integration: Struct literal expression values", () => {
       let g2: Point = { x = offset, y = 0 };
       export fn run(): i32 { return g1.x + g2.x; }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected WAT: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -683,8 +725,7 @@ describe("Integration: Inferred function call types", () => {
       }
     `;
     const wat = compile(src);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm failed: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("inferred struct method call compiles and passes wat2wasm", () => {
@@ -698,8 +739,7 @@ describe("Integration: Inferred function call types", () => {
       }
     `;
     const wat = compile(src);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm failed: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("inferred f32 from function call compiles and passes wat2wasm", () => {
@@ -711,16 +751,14 @@ describe("Integration: Inferred function call types", () => {
       }
     `;
     const wat = compile(src);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm failed: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("demo 12_math compiles and passes wat2wasm", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
     const wat = compile(src);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm failed: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -1876,8 +1914,7 @@ describe("structs", () => {
         return h.cb(5);
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 
   // A global struct literal containing a string field fails with
@@ -1888,8 +1925,7 @@ describe("structs", () => {
       let g: M = { tag = 1, msg = "hello" };
       export fn run(): i32 { return g.msg.len; }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 
   // Member access on a function call (`make().x`) avoids a throwaway let.
@@ -2215,8 +2251,7 @@ describe("global variables", () => {
       let B: i32 = A + 5;
       export fn run(): i32 { return B; }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -2275,8 +2310,7 @@ describe("numeric literals", () => {
         return 0xFFFFFFFFFFFFFFFF as i64;
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 
   maybeTest("signed i32 boundary literals execute exactly", () => {
@@ -2650,8 +2684,7 @@ describe("string semantics", () => {
         string_copy(src, dst);
       }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -2702,8 +2735,7 @@ describe("lexical scoping", () => {
       }
       export fn run(): i32 { return f(1); }
     `);
-    const err = validateWithWat2Wasm(wat);
-    assert.equal(err, null, `wat2wasm rejected: ${err}`);
+    assert(encodedModule(wat));
   });
 });
 
@@ -3154,14 +3186,14 @@ describe("stress", () => {
     timeout: 10_000,
     skip: !wat2wasmAvailable,
   }, () => {
-    assert.equal(validateWithWat2Wasm(compile("")), null);
+    assert(encodedModule(compile("")));
   });
 
   test("declaration-only modules are valid", { timeout: 10_000, skip: !wat2wasmAvailable }, () => {
     const structWat = compile("struct Point { x: i32, y: i32 }");
     const globalWat = compile("let answer: i32 = 42;");
-    assert.equal(validateWithWat2Wasm(structWat), null);
-    assert.equal(validateWithWat2Wasm(globalWat), null);
+    assert(encodedModule(structWat));
+    assert(encodedModule(globalWat));
   });
 
   test("fifty functions call through the complete chain", {

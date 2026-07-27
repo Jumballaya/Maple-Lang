@@ -4,17 +4,12 @@ import { describe, test } from "node:test";
 import type { BinOp, ConvOp, Expr, IrModule, IrType, Stmt, UnOp } from "../src/ir/ir";
 import { printWat } from "../src/ir/print-wat";
 import { validateModule } from "../src/ir/validate";
-import { hasWat2Wasm, maybeTest, runExport, validateWithWat2Wasm } from "./helpers";
+import { maybeTest, runExport } from "./helpers";
 import { constant, expressionModule, moduleWith, statementModule } from "./ir-fixtures";
 
 function printed(module: IrModule): string {
   assert.deepEqual(validateModule(module), []);
-  const wat = printWat(module);
-  if (hasWat2Wasm()) {
-    const error = validateWithWat2Wasm(wat);
-    assert.equal(error, null, `wat2wasm rejected WAT:\n${error}\n${wat}`);
-  }
-  return wat;
+  return printWat(module);
 }
 
 describe("IR WAT printer: golden modules", () => {
@@ -402,12 +397,12 @@ describe("IR WAT printer: numeric fidelity", () => {
     assert.match(wat, /\(f32\.const inf\)/);
     assert.match(wat, /\(f32\.const -inf\)/);
     assert.match(wat, /\(f64\.const nan\)/);
-    assert(Number.isNaN(runExport(wat, "nan32")));
-    assert.equal(runExport(wat, "inf32"), Number.POSITIVE_INFINITY);
-    assert.equal(runExport(wat, "neg_inf32"), Number.NEGATIVE_INFINITY);
-    assert(Number.isNaN(runExport(wat, "nan64")));
-    assert.equal(runExport(wat, "inf64"), Number.POSITIVE_INFINITY);
-    assert.equal(runExport(wat, "neg_inf64"), Number.NEGATIVE_INFINITY);
+    assert(Number.isNaN(runExport(module, "nan32")));
+    assert.equal(runExport(module, "inf32"), Number.POSITIVE_INFINITY);
+    assert.equal(runExport(module, "neg_inf32"), Number.NEGATIVE_INFINITY);
+    assert(Number.isNaN(runExport(module, "nan64")));
+    assert.equal(runExport(module, "inf64"), Number.POSITIVE_INFINITY);
+    assert.equal(runExport(module, "neg_inf64"), Number.NEGATIVE_INFINITY);
   });
 
   maybeTest("round-trips i64 max, f64 negative zero, and canonical unsigned extremes", () => {
@@ -447,10 +442,10 @@ describe("IR WAT printer: numeric fidelity", () => {
     const wat = printed(module);
     assert.match(wat, /\(i64\.const 9223372036854775807\)/);
     assert.match(wat, /\(f64\.const -0\)/);
-    assert.equal(runExport(wat, "i64_max"), (1n << 63n) - 1n);
-    assert(Object.is(runExport(wat, "negative_zero"), -0));
-    assert.equal((runExport(wat, "u32_max") as number) >>> 0, 0xffff_ffff);
-    assert.equal(BigInt.asUintN(64, runExport(wat, "u64_max") as bigint), (1n << 64n) - 1n);
+    assert.equal(runExport(module, "i64_max"), (1n << 63n) - 1n);
+    assert(Object.is(runExport(module, "negative_zero"), -0));
+    assert.equal((runExport(module, "u32_max") as number) >>> 0, 0xffff_ffff);
+    assert.equal(BigInt.asUintN(64, runExport(module, "u64_max") as bigint), (1n << 64n) - 1n);
   });
 });
 

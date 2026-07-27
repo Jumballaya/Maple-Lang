@@ -46,7 +46,7 @@ function lowered(source: string): ReturnType<typeof lowerModule> & { wat: string
 }
 
 function differential(source: string, exportName: string, args: (number | bigint)[] = []): unknown {
-  return runExport(lowered(source).wat, exportName, args);
+  return runExport(lowered(source).module, exportName, args);
 }
 
 describe("IR scalar lowering: integers and casts", () => {
@@ -117,21 +117,21 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.equal(differential(source, "f64ToI64"), -6n);
     assert.equal(differential(source, "f64ToU64"), 6n);
     assert.equal(Number(differential(source, "u32Bits")) >>> 0, 0xffff_ffff);
-    const { wat } = lowered(source);
-    assert.throws(() => runExport(wat, "trapUnsigned"), WebAssembly.RuntimeError);
+    const { module } = lowered(source);
+    assert.throws(() => runExport(module, "trapUnsigned"), WebAssembly.RuntimeError);
   });
 
   maybeTest("masks float-to-sub-word casts for signed and unsigned targets", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       export fn signed8(): i32 { return -1.5 as i8; }
       export fn signed16(): i32 { return -1.5 as i16; }
       export fn unsigned8(): i32 { return 257.9 as u8; }
       export fn unsigned16(): i32 { return 65537.9 as u16; }
     `);
-    assert.equal(runExport(wat, "signed8"), 255);
-    assert.equal(runExport(wat, "signed16"), 65_535);
-    assert.equal(runExport(wat, "unsigned8"), 1);
-    assert.equal(runExport(wat, "unsigned16"), 1);
+    assert.equal(runExport(module, "signed8"), 255);
+    assert.equal(runExport(module, "signed16"), 65_535);
+    assert.equal(runExport(module, "unsigned8"), 1);
+    assert.equal(runExport(module, "unsigned16"), 1);
   });
 
   maybeTest("preserves lossless i64 literals and negative zero", () => {
@@ -223,13 +223,13 @@ describe("IR scalar lowering: expression evaluation", () => {
   });
 
   maybeTest("evaluates float remainder operands once in left-to-right order", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       let order: i32 = 0;
       fn left(): f32 { order = order * 10 + 1; return -7.5; }
       fn right(): f32 { order = order * 10 + 2; return 2.0; }
       export fn run(): i32 { let value: f32 = left() % right(); return order; }
     `);
-    assert.equal(runExport(wat, "run"), 12);
+    assert.equal(runExport(module, "run"), 12);
   });
 
   maybeTest("matches numeric f32 and f64 remainder signs", () => {
@@ -288,7 +288,7 @@ describe("IR scalar lowering: control flow", () => {
   });
 
   maybeTest("evaluates a switch selector once", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       let count: i32 = 0;
       fn selector(): i32 { count += 10; return 2; }
       export fn run(): i32 {
@@ -301,11 +301,11 @@ describe("IR scalar lowering: control flow", () => {
         return count;
       }
     `);
-    assert.equal(runExport(wat, "run"), 13);
+    assert.equal(runExport(module, "run"), 13);
   });
 
   maybeTest("accepts a complete returning switch at a non-void tail", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       export fn run(value: i32): i32 {
         switch (value) {
           case 0: { return 10; }
@@ -314,9 +314,9 @@ describe("IR scalar lowering: control flow", () => {
         }
       }
     `);
-    assert.equal(runExport(wat, "run", [0]), 10);
-    assert.equal(runExport(wat, "run", [1]), 20);
-    assert.equal(runExport(wat, "run", [9]), 30);
+    assert.equal(runExport(module, "run", [0]), 10);
+    assert.equal(runExport(module, "run", [1]), 20);
+    assert.equal(runExport(module, "run", [9]), 30);
   });
 });
 

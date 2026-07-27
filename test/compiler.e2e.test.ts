@@ -47,6 +47,7 @@ async function compileEntry(entry: string): Promise<{
 
 async function compileProject(files: Project): Promise<{
   wat: string;
+  bytes: Uint8Array;
   instance: WebAssembly.Instance;
   module: WebAssembly.Module;
 }> {
@@ -65,7 +66,7 @@ async function compileProject(files: Project): Promise<{
       emitWat: watPath,
     });
     const [wat, bytes] = await Promise.all([readFile(watPath, "utf8"), readFile(output)]);
-    return { wat, ...instantiate(bytes) };
+    return { wat, bytes, ...instantiate(bytes) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -337,6 +338,7 @@ describe("host surface (WAT-structural)", () => {
     const second = await compileProject(project);
 
     assert.equal(first.wat, second.wat);
+    assert.deepEqual(first.bytes, second.bytes);
     assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused(?:_\d+)?(?=\s|\))/);
   });
 
@@ -715,10 +717,9 @@ describe("Compiler: merged whole-program emission", () => {
   });
 
   maybeTest("does not require a linker executable on PATH", async () => {
-    const wat2wasm = execFileSync("which", ["wat2wasm"], { encoding: "utf8" }).trim();
     const node = execFileSync("which", ["node"], { encoding: "utf8" }).trim();
     const originalPath = process.env.PATH;
-    process.env.PATH = [path.dirname(wat2wasm), path.dirname(node)].join(path.delimiter);
+    process.env.PATH = path.dirname(node);
     try {
       const { instance } = await compileProject({
         "main.maple": "export fn run(): i32 { return 42; }",
@@ -1004,10 +1005,15 @@ describe("Compiler: merged-program acceptance", () => {
     try {
       const output = path.join(outputDir, "app.wasm");
       const npm = execFileSync("which", ["npm"], { encoding: "utf8" }).trim();
-      const toolFreePath = (process.env.PATH ?? "")
-        .split(path.delimiter)
-        .filter((directory) => !existsSync(path.join(directory, "wat2wasm")))
-        .join(path.delimiter);
+      const node = execFileSync("which", ["node"], { encoding: "utf8" }).trim();
+      const toolFreePath = [
+        ...new Set([
+          path.dirname(npm),
+          path.dirname(node),
+          path.dirname(process.env.SHELL ?? "/bin/sh"),
+          "/usr/bin",
+        ]),
+      ].join(path.delimiter);
       const result = spawnSync(
         npm,
         ["start", "--", "demo/01_functions_imports/main.maple", "-o", output],

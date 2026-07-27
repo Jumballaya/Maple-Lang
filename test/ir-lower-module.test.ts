@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -10,6 +9,8 @@ import type { ModuleMeta } from "../src/compiler/metadata";
 import { buildModuleGraph } from "../src/compiler/module-graph";
 import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
+import { encodeWasm } from "../src/ir/encode-wasm";
+import type { IrModule } from "../src/ir/ir";
 import { type LoweringOptions, lowerModule } from "../src/ir/lower";
 import { printWat } from "../src/ir/print-wat";
 import type { ASTProgram } from "../src/parser/ast/ASTProgram";
@@ -93,17 +94,9 @@ function mergedLowered(files: Record<string, string>) {
   }
 }
 
-function instantiate(wat: string, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
-  const directory = mkdtempSync(join(tmpdir(), "maple-ir-module-"));
-  const watPath = join(directory, "module.wat");
-  const wasmPath = join(directory, "module.wasm");
-  writeFileSync(watPath, wat);
-  try {
-    execFileSync("wat2wasm", [watPath, "-o", wasmPath]);
-    return new WebAssembly.Instance(new WebAssembly.Module(readFileSync(wasmPath)), imports);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+function instantiate(module: IrModule, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
+  const bytes = encodeWasm(module) as Uint8Array<ArrayBuffer>;
+  return new WebAssembly.Instance(new WebAssembly.Module(bytes), imports);
 }
 
 function allocatorImports(): WebAssembly.Imports {
@@ -149,11 +142,11 @@ describe("IR module lowering: function references", () => {
     assert.equal(module.table?.entries.length, 3);
     assert.deepEqual(pendingInits, []);
     assert.match(wat, /call_indirect/);
-    assert.equal(call(instantiate(wat, allocatorImports()), "run"), 73_560);
+    assert.equal(call(instantiate(module, allocatorImports()), "run"), 73_560);
   });
 
   maybeTest("stores and invokes a function reference through a struct field", () => {
-    const { wat } = lowered(`
+    const { module } = lowered(`
       struct Holder { callback: fn(i32):i32 }
       fn double(value: i32): i32 { return value * 2; }
       export fn run(): i32 {
@@ -161,7 +154,7 @@ describe("IR module lowering: function references", () => {
         return holder.callback(21);
       }
     `);
-    assert.equal(call(instantiate(wat, allocatorImports()), "run"), 42);
+    assert.equal(call(instantiate(module, allocatorImports()), "run"), 42);
   });
 
   maybeTest("emits a zero-slot table without an allocator for a fn-typed surface", () => {
@@ -171,7 +164,7 @@ describe("IR module lowering: function references", () => {
     assert.deepEqual(module.table?.entries, []);
     assert.match(wat, /\(table \$__fn_table 0 0 funcref\)/);
     assert.doesNotMatch(wat, /__make_fnref|malloc/);
-    instantiate(wat);
+    instantiate(module);
   });
 
   test("requires the exact allocator handoff only for creation sites", () => {
@@ -189,7 +182,7 @@ describe("IR module lowering: function references", () => {
 
 describe("IR module lowering: start and assembly", () => {
   maybeTest("runs scalar and memory initializers at instantiation and consumes fragments", () => {
-    const { module, wat, pendingInits } = lowered(`
+    const { module, pendingInits } = lowered(`
       struct Pair { left: i32, rem: f32 }
       fn base(): i32 { return 7; }
       fn left(): f32 { return 7.5; }
@@ -201,7 +194,7 @@ describe("IR module lowering: start and assembly", () => {
     `);
     assert.notEqual(module.start, undefined);
     assert.deepEqual(pendingInits, []);
-    const instance = instantiate(wat);
+    const instance = instantiate(module);
     assert.equal((instance.exports.B as WebAssembly.Global).value, 12);
     assert.equal(call(instance, "read"), 8);
   });
@@ -216,10 +209,9 @@ describe("IR module lowering: start and assembly", () => {
       export fn read(): i32 { return pair.item + (pair.rem as i32); }
     `);
     const { module } = lowerModule(ast, meta);
-    const wat = printWat(module);
     const start = module.funcs[module.start! - module.funcImports.length]!;
     assert.deepEqual(start.locals, ["i32", "i32", "f32", "f32"]);
-    assert.equal(call(instantiate(wat), "read"), 8);
+    assert.equal(call(instantiate(module), "read"), 8);
   });
 
   test("omits start when no deferred initializer exists", () => {
@@ -234,10 +226,7 @@ describe("IR module lowering: start and assembly", () => {
       let box: Box = { value = [1][2] };
       export fn run(): i32 { return box.value; }
     `);
-    assert.throws(
-      () => instantiate(printWat(lowerModule(ast, meta).module)),
-      WebAssembly.RuntimeError,
-    );
+    assert.throws(() => instantiate(lowerModule(ast, meta).module), WebAssembly.RuntimeError);
   });
 
   maybeTest("supports public export mapping and both memory modes deterministically", () => {
@@ -258,7 +247,8 @@ describe("IR module lowering: start and assembly", () => {
       ]),
     });
     assert.equal(first.wat, second.wat);
-    const bytes = compileWat(first.wat);
+    const bytes = encodeWasm(first.module);
+    assert.deepEqual(bytes, encodeWasm(second.module));
     const ownedBytes = new Uint8Array(bytes.byteLength);
     ownedBytes.set(bytes);
     assert.deepEqual(WebAssembly.Module.exports(new WebAssembly.Module(ownedBytes)), [
@@ -269,22 +259,9 @@ describe("IR module lowering: start and assembly", () => {
 
     const imported = lowered(source, { importMemory: true });
     const memory = new WebAssembly.Memory({ initial: imported.module.memory.initialPages });
-    assert.equal(call(instantiate(imported.wat, { runtime: { memory } }), "run"), 9);
+    assert.equal(call(instantiate(imported.module, { runtime: { memory } }), "run"), 9);
   });
 });
-
-function compileWat(wat: string): Buffer {
-  const directory = mkdtempSync(join(tmpdir(), "maple-ir-module-bytes-"));
-  const watPath = join(directory, "module.wat");
-  const wasmPath = join(directory, "module.wasm");
-  writeFileSync(watPath, wat);
-  try {
-    execFileSync("wat2wasm", [watPath, "-o", wasmPath]);
-    return readFileSync(wasmPath);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-}
 
 describe("IR module lowering: imports", () => {
   maybeTest("lowers resolved external function and global imports to IR ids", () => {
@@ -316,7 +293,7 @@ describe("IR module lowering: imports", () => {
     collectFnReferences(ast, meta);
     assert.deepEqual(typeCheck(ast, meta), []);
     const result = lowerModule(ast, meta);
-    const instance = instantiate(printWat(result.module), {
+    const instance = instantiate(result.module, {
       host: { host_add: (value: number) => value + 2, seed: 5 },
     });
     assert.equal(call(instance, "run", [10]), 17);
@@ -356,7 +333,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
       false,
     );
     assert.doesNotMatch(creation.wat, /__make_fnref|malloc|heap_init|\(table /);
-    assert.equal(call(instantiate(creation.wat), "run"), 42);
+    assert.equal(call(instantiate(creation.module), "run"), 42);
   });
 
   maybeTest("preserves a zero-slot table through the merged bridge without memory", () => {
@@ -373,7 +350,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
       false,
     );
     assert.doesNotMatch(result.wat, /__make_fnref|malloc|heap_init/);
-    instantiate(result.wat);
+    instantiate(result.module);
   });
 
   maybeTest("runs cross-module fnrefs with the resolved allocator and rebaked heap start", () => {
@@ -398,7 +375,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert(first?.k === "call");
     assert(first.args[0]?.k === "const");
     assert.equal(first.args[0].value, Math.ceil(result.module.dataEnd / 8) * 8);
-    const instance = instantiate(result.wat);
+    const instance = instantiate(result.module);
     assert.equal(call(instance, "run"), 42);
     assert(Number(call(instance, "allocate")) >= Math.ceil(result.module.dataEnd / 8) * 8);
   });
@@ -418,7 +395,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
       result.input.meta.deferredGlobalInits.map((entry) => entry.owner),
       ["dep$$base", "main$$answer"],
     );
-    const instance = instantiate(result.wat);
+    const instance = instantiate(result.module);
     assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
   });
 
@@ -453,7 +430,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     const arrayInitializer = result.input.meta.deferredGlobalInits[3];
     assert(arrayInitializer?.kind === "array-elements");
     assert.equal(arrayInitializer.name, "dep$$values");
-    const instance = instantiate(result.wat);
+    const instance = instantiate(result.module);
     assert.equal((instance.exports.answer as WebAssembly.Global).value, 9);
   });
 
@@ -471,6 +448,6 @@ describe("IR module lowering: merged bridge and reachability", () => {
     });
     assert(result.model.reachable.globals.has("dep$$startup_only"));
     assert(result.model.reachable.functions.has("dep$$seed"));
-    assert.equal(call(instantiate(result.wat), "run"), 1);
+    assert.equal(call(instantiate(result.module), "run"), 1);
   });
 });

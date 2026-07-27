@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +8,14 @@ import {
   type CompilerOptions,
   compiler,
   linkStdlibImports,
-  printValidatedModule,
+  prepareValidatedModule,
 } from "../src/compiler/compiler";
 import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-metadata";
 import { typeCheck } from "../src/compiler/TypeChecker";
+import type { IrModule } from "../src/ir/ir";
 import { lowerModule } from "../src/ir/lower";
 import { Parser } from "../src/parser/Parser";
+import { runEncoded } from "./ir-fixtures";
 
 function probeWat2Wasm(): boolean {
   const skip = Boolean(process.env.MAPLE_SKIP_WAT2WASM);
@@ -51,7 +53,10 @@ export function maybeTest(name: string, fn: () => void | Promise<void>): void {
   }
 }
 
-export function compile(src: string, options: CompilerOptions = { importMemory: false }): string {
+export function compile(
+  src: string,
+  options: Pick<CompilerOptions, "importMemory"> = { importMemory: false },
+): IrModule {
   const parser = new Parser(src);
   const ast = parser.parse("integration");
   assert.equal(
@@ -68,55 +73,17 @@ export function compile(src: string, options: CompilerOptions = { importMemory: 
   );
   const result = lowerModule(ast, meta, options);
   assert.deepEqual(result.pendingInits, []);
-  return printValidatedModule(result.module, []);
+  return prepareValidatedModule(result.module, []);
 }
 
-export function validateWithWat2Wasm(wat: string): string | null {
-  const dir = mkdtempSync(join(tmpdir(), "maple-test-"));
-  const watFile = join(dir, "out.wat");
-  const wasmFile = join(dir, "out.wasm");
-  writeFileSync(watFile, wat);
-  try {
-    const result = spawnSync("wat2wasm", [watFile, "-o", wasmFile], {
-      encoding: "utf8",
-    });
-    if (result.status !== 0) {
-      return result.stderr || "wat2wasm failed";
-    }
-    return null;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-export function memoryMinimumFromWat(wat: string): number {
-  const match = wat.match(
-    /\(import "runtime" "memory" \(memory (\d+)\)\)|\(memory \(export "memory"\) (\d+)\)/,
-  );
-  if (!match) throw new Error("missing memory declaration");
-  return Number(match[1] ?? match[2]);
-}
-
-export type RunExportOptions = {
-  importMemory: boolean;
-};
-
-function assembleWat(wat: string): WebAssembly.Module {
-  const dir = mkdtempSync(join(tmpdir(), "maple-run-"));
-  const watFile = join(dir, "out.wat");
-  const wasmFile = join(dir, "out.wasm");
-  writeFileSync(watFile, wat);
-  try {
-    const assembly = spawnSync("wat2wasm", [watFile, "-o", wasmFile], {
-      encoding: "utf8",
-    });
-    if (assembly.status !== 0) {
-      throw new Error(`wat2wasm failed: ${assembly.stderr}`);
-    }
-    return new WebAssembly.Module(readFileSync(wasmFile));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+/** i64-returning exports yield BigInt; assert against `123n`, not `123`. */
+export function runExport(
+  module: IrModule,
+  fnName: string,
+  args: (number | bigint)[] = [],
+  imports?: WebAssembly.Imports,
+): unknown {
+  return runEncoded(module, fnName, args, imports);
 }
 
 function callExport(
@@ -129,22 +96,6 @@ function callExport(
     throw new Error(`export ${fnName} is not a function`);
   }
   return (fn as (...fnArgs: (number | bigint)[]) => unknown)(...args);
-}
-
-/** i64-returning exports yield BigInt; assert against `123n`, not `123`. */
-export function runExport(
-  wat: string,
-  fnName: string,
-  args: (number | bigint)[] = [],
-  options: RunExportOptions = { importMemory: false },
-): unknown {
-  const module = assembleWat(wat);
-  if (options.importMemory) {
-    const memory = new WebAssembly.Memory({ initial: memoryMinimumFromWat(wat) });
-    const instance = new WebAssembly.Instance(module, { runtime: { memory } });
-    return callExport(instance, fnName, args);
-  }
-  return callExport(new WebAssembly.Instance(module), fnName, args);
 }
 
 export async function runMergedExport(

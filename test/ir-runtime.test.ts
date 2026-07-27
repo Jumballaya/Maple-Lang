@@ -1,26 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, test } from "node:test";
 import { type FuncBuilder, IrBuilder } from "../src/ir/build";
+import { encodeWasm } from "../src/ir/encode-wasm";
 import type { IrModule, Stmt, StructLayout } from "../src/ir/ir";
-import { printWat } from "../src/ir/print-wat";
 import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "../src/ir/runtime";
 import { maybeTest, runExport } from "./helpers";
 
-function instantiateWat(module: IrModule, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
-  const directory = mkdtempSync(join(tmpdir(), "maple-ir-runtime-"));
-  const watPath = join(directory, "module.wat");
-  const wasmPath = join(directory, "module.wasm");
-  writeFileSync(watPath, printWat(module));
-  try {
-    execFileSync("wat2wasm", [watPath, "-o", wasmPath]);
-    return new WebAssembly.Instance(new WebAssembly.Module(readFileSync(wasmPath)), imports);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+function instantiate(module: IrModule, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
+  const bytes = encodeWasm(module) as Uint8Array<ArrayBuffer>;
+  return new WebAssembly.Instance(new WebAssembly.Module(bytes), imports);
 }
 
 function bytes(size: number, write: (view: DataView) => void): Uint8Array {
@@ -91,7 +79,7 @@ describe("IR builder", () => {
     const secondDefinedGlobal = builder.global("second", "i32", true, 4);
     assert.deepEqual([run.id, spare.id, firstDefinedGlobal, secondDefinedGlobal], [2, 3, 2, 3]);
 
-    const instance = instantiateWat(builder.finish(), {
+    const instance = instantiate(builder.finish(), {
       env: {
         inc: (value: number) => value + 1,
         double: (value: number) => value * 2,
@@ -116,10 +104,10 @@ describe("IR runtime: elemAddr", () => {
     run.ret([
       run.call(helper, [run.constant("i32", arrayHeader), run.localGet(0), run.constant("i32", 4)]),
     ]);
-    const wat = printWat(builder.finish());
-    assert.equal(runExport(wat, "address", [2]), data + 8);
-    assert.throws(() => runExport(wat, "address", [3]), WebAssembly.RuntimeError);
-    assert.throws(() => runExport(wat, "address", [-1]), WebAssembly.RuntimeError);
+    const module = builder.finish();
+    assert.equal(runExport(module, "address", [2]), data + 8);
+    assert.throws(() => runExport(module, "address", [3]), WebAssembly.RuntimeError);
+    assert.throws(() => runExport(module, "address", [-1]), WebAssembly.RuntimeError);
   });
 });
 
@@ -141,11 +129,11 @@ describe("IR runtime: stringEq", () => {
     builder.data(payloads[3]!, new Uint8Array([0x61, 0x62]));
     const helper = stringEq(builder);
     exportedBinaryWrapper(builder, helper);
-    const wat = printWat(builder.finish());
-    assert.equal(runExport(wat, "equal", [headers[0]!, headers[1]!]), 1);
-    assert.equal(runExport(wat, "equal", [headers[0]!, headers[2]!]), 0);
-    assert.equal(runExport(wat, "equal", [headers[0]!, headers[3]!]), 0);
-    assert.equal(runExport(wat, "equal", [headers[4]!, headers[5]!]), 1);
+    const module = builder.finish();
+    assert.equal(runExport(module, "equal", [headers[0]!, headers[1]!]), 1);
+    assert.equal(runExport(module, "equal", [headers[0]!, headers[2]!]), 0);
+    assert.equal(runExport(module, "equal", [headers[0]!, headers[3]!]), 0);
+    assert.equal(runExport(module, "equal", [headers[4]!, headers[5]!]), 1);
   });
 });
 
@@ -187,9 +175,9 @@ describe("IR runtime: structEqBatch", () => {
     );
     const ids = structEqBatch(builder, new Map([["Packed", layout]]));
     exportedBinaryWrapper(builder, ids.get("Packed")!);
-    const wat = printWat(builder.finish());
-    assert.equal(runExport(wat, "equal", [addresses[0]!, addresses[1]!]), 1);
-    assert.equal(runExport(wat, "equal", [addresses[0]!, addresses[2]!]), 0);
+    const module = builder.finish();
+    assert.equal(runExport(module, "equal", [addresses[0]!, addresses[1]!]), 1);
+    assert.equal(runExport(module, "equal", [addresses[0]!, addresses[2]!]), 0);
   });
 
   maybeTest("delegates string members to content equality", () => {
@@ -229,7 +217,7 @@ describe("IR runtime: structEqBatch", () => {
     const strings = stringEq(builder);
     const ids = structEqBatch(builder, new Map([["Named", layout]]), strings);
     exportedBinaryWrapper(builder, ids.get("Named")!);
-    assert.equal(runExport(printWat(builder.finish()), "equal", [firstStruct, secondStruct]), 1);
+    assert.equal(runExport(builder.finish(), "equal", [firstStruct, secondStruct]), 1);
   });
 
   maybeTest("reserves mutually recursive helpers before filling their bodies", () => {
@@ -288,7 +276,7 @@ describe("IR runtime: structEqBatch", () => {
       ]),
     );
     exportedBinaryWrapper(builder, ids.get("A")!);
-    assert.equal(runExport(printWat(builder.finish()), "equal", [a1, a2]), 0);
+    assert.equal(runExport(builder.finish(), "equal", [a1, a2]), 0);
   });
 
   test("rejects missing string helpers and identities outside the batch", () => {
@@ -332,7 +320,7 @@ describe("IR runtime: structEqBatch", () => {
     };
     const ids = structEqBatch(builder, new Map([["FloatBox", layout]]));
     exportedBinaryWrapper(builder, ids.get("FloatBox")!);
-    assert.equal(runExport(printWat(builder.finish()), "equal", [address, address]), 0);
+    assert.equal(runExport(builder.finish(), "equal", [address, address]), 0);
   });
 });
 
@@ -354,7 +342,7 @@ describe("IR runtime: makeFnref", () => {
     const helper = makeFnref(builder, alloc.id);
     const make = builder.func("make", allocSig, { export: "make" });
     make.ret([make.call(helper, [make.localGet(0)])]);
-    const instance = instantiateWat(builder.finish());
+    const instance = instantiate(builder.finish());
     const result = (instance.exports.make as (slot: number) => number)(17);
     const memory = instance.exports.memory as WebAssembly.Memory;
     const view = new DataView(memory.buffer);
@@ -421,9 +409,9 @@ describe("IR runtime: trampoline", () => {
     );
     runMulti.ret([runMulti.localGet(first), runMulti.localGet(second)]);
 
-    const wat = printWat(builder.finish());
-    assert.equal(runExport(wat, "run_void", [41]), 41);
-    assert.equal(runExport(wat, "run_one", [20, 22]), 42);
-    assert.deepEqual(runExport(wat, "run_multi", [7]), [7, 7n]);
+    const module = builder.finish();
+    assert.equal(runExport(module, "run_void", [41]), 41);
+    assert.equal(runExport(module, "run_one", [20, 22]), 42);
+    assert.deepEqual(runExport(module, "run_multi", [7]), [7, 7n]);
   });
 });

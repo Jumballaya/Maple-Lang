@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe } from "node:test";
 import { fileURLToPath } from "node:url";
+import { encodeWasm } from "../src/ir/encode-wasm";
 import { compile, maybeTest } from "./helpers";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -19,19 +18,9 @@ function assertNearF(a: number, b: number, eps: number, msg?: string): void {
 }
 
 async function loadMathWasm(): Promise<WebAssembly.Instance> {
-  const dir = mkdtempSync(join(tmpdir(), "maple-math-"));
-  const watPath = join(dir, "m.wat");
-  const wasmPath = join(dir, "m.wasm");
-  try {
-    const wat = compile(readFileSync(MATH_MAPLE, "utf8"));
-    writeFileSync(watPath, wat);
-    execFileSync("wat2wasm", [watPath, "-o", wasmPath], { stdio: "pipe" });
-    const buf = readFileSync(wasmPath);
-    const { instance } = await WebAssembly.instantiate(buf);
-    return instance;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const module = compile(readFileSync(MATH_MAPLE, "utf8"));
+  const bytes = encodeWasm(module) as Uint8Array<ArrayBuffer>;
+  return new WebAssembly.Instance(new WebAssembly.Module(bytes));
 }
 
 describe("stdlib math.maple (Tier 1)", () => {

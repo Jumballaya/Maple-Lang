@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe } from "node:test";
 import { compiler } from "../src/compiler/compiler";
-import { maybeTest, memoryMinimumFromWat } from "./helpers";
+import { maybeTest } from "./helpers";
+
+// Deliberate private WAT parser: compileMode does not retain the lowered IrModule.
+function memoryMinimumFromWat(wat: string): number {
+  const match = wat.match(
+    /\(import "runtime" "memory" \(memory (\d+)\)\)|\(memory \(export "memory"\) (\d+)\)/,
+  );
+  if (!match) throw new Error("missing memory declaration");
+  return Number(match[1] ?? match[2]);
+}
 
 const source = `
   import malloc from "memory"
