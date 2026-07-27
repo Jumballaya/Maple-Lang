@@ -13,7 +13,7 @@ import { collectFnReferences, extractModuleMeta } from "../src/compiler/module-m
 import { typeCheck } from "../src/compiler/TypeChecker";
 import { lowerModule } from "../src/ir/lower";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest, runExport, runMergedExport } from "./helpers";
+import { runExport, runMergedExport } from "./helpers";
 
 function compileWithIr(src: string, moduleName: string, fileName?: string) {
   const parser = new Parser(src, fileName);
@@ -57,7 +57,7 @@ function checkerMessages(src: string): string[] {
 }
 
 describe("Emission: Functions", () => {
-  maybeTest("void functions execute their side effects without producing a value", () => {
+  test("void functions execute their side effects without producing a value", () => {
     const { mod } = checkedCompile(`
       let touched: i32 = 0;
       fn mark(): void { touched = 7; }
@@ -66,29 +66,29 @@ describe("Emission: Functions", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("i32 functions return their value", () => {
+  test("i32 functions return their value", () => {
     const { mod } = checkedCompile("export fn run(): i32 { return 1; }");
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("f32 functions return their value", () => {
+  test("f32 functions return their value", () => {
     const { mod } = checkedCompile("export fn run(): f32 { return 1.5; }");
     assert.equal(runExport(mod, "run"), 1.5);
   });
 
-  maybeTest("i32 parameters participate in function behavior", () => {
+  test("i32 parameters participate in function behavior", () => {
     const { mod } = checkedCompile("export fn add(a: i32, b: i32): i32 { return a + b; }");
     assert.equal(runExport(mod, "add", [3, 4]), 7);
   });
 
-  maybeTest("mixed parameter types preserve both arguments", () => {
+  test("mixed parameter types preserve both arguments", () => {
     const { mod } = checkedCompile(`
       export fn mixed(a: i32, b: f32): i32 { return a + (b as i32); }
     `);
     assert.equal(runExport(mod, "mixed", [3, 4.75]), 7);
   });
 
-  maybeTest("zero-argument function calls return the callee value", () => {
+  test("zero-argument function calls return the callee value", () => {
     const { mod } = checkedCompile(`
       fn callee(): i32 { return 1; }
       export fn caller(): i32 { return callee(); }
@@ -96,7 +96,7 @@ describe("Emission: Functions", () => {
     assert.equal(runExport(mod, "caller"), 1);
   });
 
-  maybeTest("function calls pass arguments in source order", () => {
+  test("function calls pass arguments in source order", () => {
     const { mod } = checkedCompile(`
       fn add(a: i32, b: i32): i32 { return a + b; }
       export fn caller(): i32 { return add(3, 4); }
@@ -104,7 +104,7 @@ describe("Emission: Functions", () => {
     assert.equal(runExport(mod, "caller"), 7);
   });
 
-  maybeTest("four parameters are passed exactly once", () => {
+  test("four parameters are passed exactly once", () => {
     const { mod } = checkedCompile(`
       export fn quad(a: i32, b: i32, c: f32, d: i32): i32 {
         return a + b + (c as i32) + d;
@@ -115,22 +115,22 @@ describe("Emission: Functions", () => {
 });
 
 describe("Emission: Variables", () => {
-  maybeTest("local i32 bindings preserve their value", () => {
+  test("local i32 bindings preserve their value", () => {
     const { mod } = checkedCompile("export fn run(): i32 { let x: i32 = 5; return x; }");
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("local f32 bindings preserve their value", () => {
+  test("local f32 bindings preserve their value", () => {
     const { mod } = checkedCompile("export fn run(): f32 { let x: f32 = 3.25; return x; }");
     assert.equal(runExport(mod, "run"), 3.25);
   });
 
-  maybeTest("local bool bindings preserve canonical truth", () => {
+  test("local bool bindings preserve canonical truth", () => {
     const { mod } = checkedCompile("export fn run(): bool { let x: bool = true; return x; }");
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("global f32 bindings preserve their value", () => {
+  test("global f32 bindings preserve their value", () => {
     const { mod } = checkedCompile(`
       let rate: f32 = 1.5;
       export fn run(): f32 { return rate; }
@@ -138,7 +138,7 @@ describe("Emission: Variables", () => {
     assert.equal(runExport(mod, "run"), 1.5);
   });
 
-  maybeTest("global i32 bindings preserve their value", () => {
+  test("global i32 bindings preserve their value", () => {
     const { mod } = checkedCompile(`
       let x: i32 = 5;
       export fn run(): i32 { return x; }
@@ -146,14 +146,14 @@ describe("Emission: Variables", () => {
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("i32 assignment updates the local value", () => {
+  test("i32 assignment updates the local value", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 { let x: i32 = 0; x = 10; return x; }
     `);
     assert.equal(runExport(mod, "run"), 10);
   });
 
-  maybeTest("f32 assignment updates the local value", () => {
+  test("f32 assignment updates the local value", () => {
     const { mod } = checkedCompile(`
       export fn run(): f32 { let x: f32 = 0.0; x = 2.5; return x; }
     `);
@@ -170,7 +170,7 @@ describe("Emission: Structs", () => {
     assert.equal(meta.structs.S.size, 8);
   });
 
-  maybeTest("mixed i32 and f32 members round-trip independently", () => {
+  test("mixed i32 and f32 members round-trip independently", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: f32 }
       export fn run(): i32 {
@@ -181,7 +181,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 13);
   });
 
-  maybeTest("f32-only struct members round-trip", () => {
+  test("f32-only struct members round-trip", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: f32, y: f32 }
       export fn run(): f32 {
@@ -192,7 +192,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("struct i32 members participate in binary arithmetic", () => {
+  test("struct i32 members participate in binary arithmetic", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -203,7 +203,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("struct members participate in comparisons", () => {
+  test("struct members participate in comparisons", () => {
     const { mod } = checkedCompile(`
       struct Counter { n: i32 }
       export fn run(): i32 {
@@ -217,7 +217,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("struct f32 members participate in binary arithmetic", () => {
+  test("struct f32 members participate in binary arithmetic", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: f32, y: f32 }
       export fn run(): f32 {
@@ -228,7 +228,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("struct members drive while-loop conditions", () => {
+  test("struct members drive while-loop conditions", () => {
     const { mod } = checkedCompile(`
       struct Flag { active: i32 }
       export fn run(): i32 {
@@ -244,7 +244,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), 10);
   });
 
-  maybeTest("prefix minus negates a struct member", () => {
+  test("prefix minus negates a struct member", () => {
     const { mod } = checkedCompile(`
       struct Num { val: i32 }
       export fn run(): i32 {
@@ -255,7 +255,7 @@ describe("Emission: Structs", () => {
     assert.equal(runExport(mod, "run"), -7);
   });
 
-  maybeTest("memory-backed struct parameters preserve member values", () => {
+  test("memory-backed struct parameters preserve member values", () => {
     const { mod } = checkedCompile(`
       struct Pair { a: i32, b: i32 }
       fn sum(p: Pair): i32 { return p.a + p.b; }
@@ -269,7 +269,7 @@ describe("Emission: Structs", () => {
 });
 
 describe("Emission: Control Flow", () => {
-  maybeTest("if without else selects the matching path", () => {
+  test("if without else selects the matching path", () => {
     const { mod } = checkedCompile(
       "export fn run(x: i32): i32 { if (x > 0) { return 1; } return 0; }",
     );
@@ -277,7 +277,7 @@ describe("Emission: Control Flow", () => {
     assert.equal(runExport(mod, "run", [0]), 0);
   });
 
-  maybeTest("if with else selects both branches", () => {
+  test("if with else selects both branches", () => {
     const { mod } = checkedCompile(
       "export fn run(x: i32): i32 { if (x > 0) { return 1; } else { return 2; } }",
     );
@@ -285,7 +285,7 @@ describe("Emission: Control Flow", () => {
     assert.equal(runExport(mod, "run", [0]), 2);
   });
 
-  maybeTest("for loop executes its body and update", () => {
+  test("for loop executes its body and update", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -296,7 +296,7 @@ describe("Emission: Control Flow", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("while loop rechecks its condition", () => {
+  test("while loop rechecks its condition", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -307,7 +307,7 @@ describe("Emission: Control Flow", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("break exits its loop", () => {
+  test("break exits its loop", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -320,38 +320,38 @@ describe("Emission: Control Flow", () => {
 });
 
 describe("Emission: Arithmetic", () => {
-  maybeTest("i32 addition returns the sum", () => {
+  test("i32 addition returns the sum", () => {
     const { mod } = checkedCompile("export fn run(): i32 { return 1 + 2; }");
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("f32 addition returns the sum", () => {
+  test("f32 addition returns the sum", () => {
     const { mod } = checkedCompile("export fn run(): f32 { return 1.0 + 2.0; }");
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("i32 subtraction, multiplication, and division compose", () => {
+  test("i32 subtraction, multiplication, and division compose", () => {
     const { mod } = checkedCompile(
       "export fn run(a: i32, b: i32): i32 { return (a - b) * (a / b); }",
     );
     assert.equal(runExport(mod, "run", [9, 3]), 18);
   });
 
-  maybeTest("f32 subtraction, multiplication, and division compose", () => {
+  test("f32 subtraction, multiplication, and division compose", () => {
     const { mod } = checkedCompile(
       "export fn run(a: f32, b: f32): f32 { return (a - b) * (a / b); }",
     );
     assert.equal(runExport(mod, "run", [9, 3]), 18);
   });
 
-  maybeTest("i32 remainder preserves the dividend sign", () => {
+  test("i32 remainder preserves the dividend sign", () => {
     const { mod } = checkedCompile("export fn run(a: i32, b: i32): i32 { return a % b; }");
     assert.equal(runExport(mod, "run", [-7, 3]), -1);
   });
 });
 
 describe("Emission: Comparisons", () => {
-  maybeTest("i32 greater-than and less-than are signed", () => {
+  test("i32 greater-than and less-than are signed", () => {
     const { mod } = checkedCompile(`
       export fn gt(a: i32, b: i32): i32 { return a > b; }
       export fn lt(a: i32, b: i32): i32 { return a < b; }
@@ -360,7 +360,7 @@ describe("Emission: Comparisons", () => {
     assert.equal(runExport(mod, "lt", [-1, 1]), 1);
   });
 
-  maybeTest("f32 greater-than and less-than compare values", () => {
+  test("f32 greater-than and less-than compare values", () => {
     const { mod } = checkedCompile(`
       export fn gt(a: f32, b: f32): i32 { return a > b; }
       export fn lt(a: f32, b: f32): i32 { return a < b; }
@@ -369,7 +369,7 @@ describe("Emission: Comparisons", () => {
     assert.equal(runExport(mod, "lt", [2.5, 1.5]), 0);
   });
 
-  maybeTest("i32 inclusive comparisons include equality", () => {
+  test("i32 inclusive comparisons include equality", () => {
     const { mod } = checkedCompile(`
       export fn gte(a: i32, b: i32): i32 { return a >= b; }
       export fn lte(a: i32, b: i32): i32 { return a <= b; }
@@ -378,7 +378,7 @@ describe("Emission: Comparisons", () => {
     assert.equal(runExport(mod, "lte", [2, 2]), 1);
   });
 
-  maybeTest("f32 inclusive comparisons include equality", () => {
+  test("f32 inclusive comparisons include equality", () => {
     const { mod } = checkedCompile(`
       export fn gte(a: f32, b: f32): i32 { return a >= b; }
       export fn lte(a: f32, b: f32): i32 { return a <= b; }
@@ -387,7 +387,7 @@ describe("Emission: Comparisons", () => {
     assert.equal(runExport(mod, "lte", [2.5, 2.5]), 1);
   });
 
-  maybeTest("integer and float equality and inequality are observable", () => {
+  test("integer and float equality and inequality are observable", () => {
     const { mod } = checkedCompile(`
       export fn eqi(a: i32, b: i32): i32 { return a == b; }
       export fn nei(a: i32, b: i32): i32 { return a != b; }
@@ -402,7 +402,7 @@ describe("Emission: Comparisons", () => {
 });
 
 describe("Emission: Bitwise / Logical / Shift Ops", () => {
-  maybeTest("&& and || short-circuit their right operands", () => {
+  test("&& and || short-circuit their right operands", () => {
     const { mod } = checkedCompile(`
       let calls: i32 = 0;
       fn tick(value: i32): i32 { calls++; return value; }
@@ -419,42 +419,42 @@ describe("Emission: Bitwise / Logical / Shift Ops", () => {
     assert.equal(runExport(mod, "or_true"), 1);
   });
 
-  maybeTest("bitwise and, or, and xor compose", () => {
+  test("bitwise and, or, and xor compose", () => {
     const { mod } = checkedCompile(
       "export fn run(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }",
     );
     assert.equal(runExport(mod, "run", [12, 10]), 14);
   });
 
-  maybeTest("left and signed-right shifts compose", () => {
+  test("left and signed-right shifts compose", () => {
     const { mod } = checkedCompile("export fn run(a: i32): i32 { return (a << 1) >> 1; }");
     assert.equal(runExport(mod, "run", [-8]), -8);
   });
 });
 
 describe("Emission: Prefix/Postfix", () => {
-  maybeTest("logical not flips integer truthiness", () => {
+  test("logical not flips integer truthiness", () => {
     const { mod } = checkedCompile("export fn run(x: i32): i32 { return !x; }");
     assert.equal(runExport(mod, "run", [0]), 1);
     assert.equal(runExport(mod, "run", [3]), 0);
   });
 
-  maybeTest("prefix minus negates integers", () => {
+  test("prefix minus negates integers", () => {
     const { mod } = checkedCompile("export fn run(x: i32): i32 { return -x; }");
     assert.equal(runExport(mod, "run", [7]), -7);
   });
 
-  maybeTest("prefix minus negates floats", () => {
+  test("prefix minus negates floats", () => {
     const { mod } = checkedCompile("export fn run(x: f32): f32 { return -x; }");
     assert.equal(runExport(mod, "run", [2.5]), -2.5);
   });
 
-  maybeTest("bitwise not flips every bit", () => {
+  test("bitwise not flips every bit", () => {
     const { mod } = checkedCompile("export fn run(x: i32): i32 { return ~x; }");
     assert.equal(runExport(mod, "run", [5]), -6);
   });
 
-  maybeTest("postfix increment and decrement update their local", () => {
+  test("postfix increment and decrement update their local", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let x: i32 = 3;
@@ -468,65 +468,65 @@ describe("Emission: Prefix/Postfix", () => {
 });
 
 describe("Emission: Cast", () => {
-  maybeTest("i32 as f32 preserves signed values", () => {
+  test("i32 as f32 preserves signed values", () => {
     const { mod } = checkedCompile("export fn run(x: i32): f32 { return x as f32; }");
     assert.equal(runExport(mod, "run", [-7]), -7);
   });
 
-  maybeTest("f32 as i32 truncates toward zero", () => {
+  test("f32 as i32 truncates toward zero", () => {
     const { mod } = checkedCompile("export fn run(x: f32): i32 { return x as i32; }");
     assert.equal(runExport(mod, "run", [3.9]), 3);
   });
 
-  maybeTest("i32 as u8 truncates to the low byte", () => {
+  test("i32 as u8 truncates to the low byte", () => {
     const { mod } = checkedCompile("export fn run(n: i32): i32 { return n as u8; }");
     assert.equal(runExport(mod, "run", [300]), 44);
   });
 
-  maybeTest("cast inside a binary expression adopts the float type", () => {
+  test("cast inside a binary expression adopts the float type", () => {
     const { mod } = checkedCompile("export fn run(x: i32): f32 { return x as f32 + 1.0; }");
     assert.equal(runExport(mod, "run", [3]), 4);
   });
 });
 
 describe("Emission: 64-bit widths and unsigned ops", () => {
-  maybeTest("i64 addition preserves values above the i32 range", () => {
+  test("i64 addition preserves values above the i32 range", () => {
     const { mod, meta } = checkedCompile(`export fn add64(a: i64, b: i64): i64 { return a + b; }`);
     assert.equal(runExport(mod, "add64", [4_000_000_000n, 5n]), 4_000_000_005n);
     assert.equal(meta.functions.add64?.signature, "II_I");
   });
 
-  maybeTest("u32 division treats the lane as unsigned", () => {
+  test("u32 division treats the lane as unsigned", () => {
     const { mod } = checkedCompile(`export fn udiv(a: u32, b: u32): u32 { return a / b; }`);
     assert.equal(runExport(mod, "udiv", [-1, 2]), 2_147_483_647);
   });
 
-  maybeTest("i32 division treats the lane as signed", () => {
+  test("i32 division treats the lane as signed", () => {
     const { mod } = checkedCompile(`export fn sdiv(a: i32, b: i32): i32 { return a / b; }`);
     assert.equal(runExport(mod, "sdiv", [-9, 2]), -4);
   });
 
-  maybeTest("u64 division treats the lane as unsigned", () => {
+  test("u64 division treats the lane as unsigned", () => {
     const { mod } = checkedCompile(`export fn udiv(a: u64, b: u64): u64 { return a / b; }`);
     assert.equal(runExport(mod, "udiv", [-1n, 2n]), 9_223_372_036_854_775_807n);
   });
 
-  maybeTest("u64 right shift fills with zeros", () => {
+  test("u64 right shift fills with zeros", () => {
     const { mod } = checkedCompile(`export fn shr(a: u64, b: u64): u64 { return a >> b; }`);
     assert.equal(runExport(mod, "shr", [-1n, 1n]), 9_223_372_036_854_775_807n);
   });
 
-  maybeTest("i64 right shift preserves the sign", () => {
+  test("i64 right shift preserves the sign", () => {
     const { mod } = checkedCompile(`export fn shr(a: i64, b: i64): i64 { return a >> b; }`);
     assert.equal(runExport(mod, "shr", [-8n, 1n]), -4n);
   });
 
-  maybeTest("f64 remainder follows truncated division", () => {
+  test("f64 remainder follows truncated division", () => {
     const { mod } = checkedCompile(`export fn rem(a: f64, b: f64): f64 { return a % b; }`);
     assert.equal(runExport(mod, "rem", [-7.5, 2]), -1.5);
   });
 
-  maybeTest("struct members preserve i64 values", () => {
+  test("struct members preserve i64 values", () => {
     const { mod } = checkedCompile(`
       struct S { x: i32, y: i64, }
       export fn loady(): i64 {
@@ -560,17 +560,17 @@ describe("Static data extraction", () => {
 });
 
 describe("Emission: Postfix Statement", () => {
-  maybeTest("idx++ as a statement increments the local", () => {
+  test("idx++ as a statement increments the local", () => {
     const { mod } = checkedCompile("export fn run(): i32 { let idx: i32 = 0; idx++; return idx; }");
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("idx-- as a statement decrements the local", () => {
+  test("idx-- as a statement decrements the local", () => {
     const { mod } = checkedCompile("export fn run(): i32 { let idx: i32 = 5; idx--; return idx; }");
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("postfix as an rvalue returns the old value and still mutates", () => {
+  test("postfix as an rvalue returns the old value and still mutates", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let idx: i32 = 3;
@@ -583,7 +583,7 @@ describe("Emission: Postfix Statement", () => {
 });
 
 describe("Emission: Compound Assignments", () => {
-  maybeTest("compound assignments preserve every operator's behavior", () => {
+  test("compound assignments preserve every operator's behavior", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let x: i32 = 10;
@@ -605,7 +605,7 @@ describe("Emission: Compound Assignments", () => {
 });
 
 describe("Emission: Member Access", () => {
-  maybeTest("member access reads from an identifier parent", () => {
+  test("member access reads from an identifier parent", () => {
     const { mod } = checkedCompile(`
       struct S { a: i32, b: i32 }
       let s: S = { a = 1, b = 2 };
@@ -614,7 +614,7 @@ describe("Emission: Member Access", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("member access reads from a function-call base", () => {
+  test("member access reads from a function-call base", () => {
     const { mod } = checkedCompile(`
       struct P { x: i32 }
       fn make(): P { let p: P = { x = 42 }; return p; }
@@ -623,7 +623,7 @@ describe("Emission: Member Access", () => {
     assert.equal(runExport(mod, "run"), 42);
   });
 
-  maybeTest("member assignment updates a local struct field", () => {
+  test("member assignment updates a local struct field", () => {
     const { mod } = checkedCompile(`
       struct Thing { a: i32 }
       export fn run(): i32 {
@@ -637,21 +637,21 @@ describe("Emission: Member Access", () => {
 });
 
 describe("Emission: Index Access", () => {
-  maybeTest("literal array indexes read the selected element", () => {
+  test("literal array indexes read the selected element", () => {
     const { mod } = checkedCompile(
       "export fn run(): i32 { let arr: i32[] = [1, 2, 3]; return arr[0]; }",
     );
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("variable array indexes read the selected element", () => {
+  test("variable array indexes read the selected element", () => {
     const { mod } = checkedCompile(
       "export fn run(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x]; }",
     );
     assert.equal(runExport(mod, "run"), 2);
   });
 
-  maybeTest("expression array indexes read the selected element", () => {
+  test("expression array indexes read the selected element", () => {
     const { mod } = checkedCompile(
       "export fn run(): i32 { let arr: i32[] = [1, 2, 3]; let x: i32 = 1; return arr[x + 1]; }",
     );
@@ -660,27 +660,27 @@ describe("Emission: Index Access", () => {
 });
 
 describe("Emission: Literals", () => {
-  maybeTest("integer literals return their exact value", () => {
+  test("integer literals return their exact value", () => {
     const { mod } = checkedCompile("export fn run(): i32 { return 42; }");
     assert.equal(runExport(mod, "run"), 42);
   });
 
-  maybeTest("negative integer literals retain their sign", () => {
+  test("negative integer literals retain their sign", () => {
     const { mod } = checkedCompile("export fn run(): i32 { return -5; }");
     assert.equal(runExport(mod, "run"), -5);
   });
 
-  maybeTest("folded negative zero retains its IEEE-754 sign", () => {
+  test("folded negative zero retains its IEEE-754 sign", () => {
     const { mod } = checkedCompile("export fn run(): f32 { return -0.0; }");
     assert(Object.is(runExport(mod, "run"), -0));
   });
 
-  maybeTest("float literals return their f32 value", () => {
+  test("float literals return their f32 value", () => {
     const { mod } = checkedCompile("export fn run(): f32 { return 3.14; }");
     assert(Math.abs((runExport(mod, "run") as number) - 3.14) < 0.000_001);
   });
 
-  maybeTest("boolean literals return canonical truth values", () => {
+  test("boolean literals return canonical truth values", () => {
     const { mod } = checkedCompile(
       "export fn yes(): i32 { return true; } export fn no(): i32 { return false; }",
     );
@@ -688,7 +688,7 @@ describe("Emission: Literals", () => {
     assert.equal(runExport(mod, "no"), 0);
   });
 
-  maybeTest("string literals materialize their payload and metadata", () => {
+  test("string literals materialize their payload and metadata", () => {
     const { mod } = checkedCompile(
       'export fn run(): i32 { let s: string = "hello"; return s.len; }',
     );
@@ -751,7 +751,7 @@ describe("Module Metadata", () => {
 });
 
 describe("Emission: else if", () => {
-  maybeTest("else-if chain selects every branch", () => {
+  test("else-if chain selects every branch", () => {
     const { mod } = checkedCompile(`
       export fn grade(score: i32): i32 {
         if (score >= 90) {
@@ -768,7 +768,7 @@ describe("Emission: else if", () => {
     assert.equal(runExport(mod, "grade", [50]), 3);
   });
 
-  maybeTest("three-level else-if chain selects every branch", () => {
+  test("three-level else-if chain selects every branch", () => {
     const { mod } = checkedCompile(`
       export fn classify(n: i32): i32 {
         if (n == 0) {
@@ -790,7 +790,7 @@ describe("Emission: else if", () => {
 });
 
 describe("Emission: continue", () => {
-  maybeTest("continue in a for loop still runs the update", () => {
+  test("continue in a for loop still runs the update", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let touched: i32 = 0;
@@ -804,7 +804,7 @@ describe("Emission: continue", () => {
     assert.equal(runExport(mod, "run"), 0);
   });
 
-  maybeTest("continue in a while loop rechecks the condition", () => {
+  test("continue in a while loop rechecks the condition", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -820,12 +820,12 @@ describe("Emission: continue", () => {
 });
 
 describe("Emission: const", () => {
-  maybeTest("const globals retain their initialized value", () => {
+  test("const globals retain their initialized value", () => {
     const { mod } = checkedCompile(`const MAX: i32 = 100; export fn run(): i32 { return MAX; }`);
     assert.equal(runExport(mod, "run"), 100);
   });
 
-  maybeTest("let globals remain mutable", () => {
+  test("let globals remain mutable", () => {
     const { mod } = checkedCompile(`
       let x: i32 = 0;
       export fn run(): i32 { x++; x++; return x; }
@@ -835,7 +835,7 @@ describe("Emission: const", () => {
 });
 
 describe("Emission: array index write", () => {
-  maybeTest("literal array indexes update only the selected element", () => {
+  test("literal array indexes update only the selected element", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let arr: i32[] = [1, 2, 3];
@@ -846,7 +846,7 @@ describe("Emission: array index write", () => {
     assert.equal(runExport(mod, "run"), 992);
   });
 
-  maybeTest("variable array indexes update only the selected element", () => {
+  test("variable array indexes update only the selected element", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let arr: i32[] = [1, 2, 3];
@@ -860,7 +860,7 @@ describe("Emission: array index write", () => {
 });
 
 describe("Emission: switch", () => {
-  maybeTest("switch dispatches to each case and the default", () => {
+  test("switch dispatches to each case and the default", () => {
     const { mod } = checkedCompile(`
       export fn classify(x: i32): i32 {
         switch (x) {
@@ -876,7 +876,7 @@ describe("Emission: switch", () => {
     assert.equal(runExport(mod, "classify", [9]), 99);
   });
 
-  maybeTest("switch without a default continues after unmatched input", () => {
+  test("switch without a default continues after unmatched input", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 {
         switch (x) {
@@ -1069,31 +1069,31 @@ describe("Compiler: stdlib source resolution", () => {
 });
 
 describe("Emission: Type inference", () => {
-  maybeTest("inferred i32 locals preserve their value", () => {
+  test("inferred i32 locals preserve their value", () => {
     const { mod } = checkedCompile("export fn run(): i32 { let x = 5; return x; }");
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("inferred f32 locals preserve their value", () => {
+  test("inferred f32 locals preserve their value", () => {
     const { mod } = checkedCompile("export fn run(): f32 { let y = 3.14; return y; }");
     assert(Math.abs((runExport(mod, "run") as number) - 3.14) < 0.000_001);
   });
 });
 
 describe("Emission: Strings", () => {
-  maybeTest("explicit string locals preserve their payload", () => {
+  test("explicit string locals preserve their payload", () => {
     const { mod } = checkedCompile(
       'export fn run(): i32 { let s: string = "hello"; return s.len; }',
     );
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("inferred string locals preserve their payload", () => {
+  test("inferred string locals preserve their payload", () => {
     const { mod } = checkedCompile('export fn run(): i32 { let s = "world"; return s.len; }');
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("string .len reads the payload length", () => {
+  test("string .len reads the payload length", () => {
     const { mod } = checkedCompile(
       'export fn run(): i32 { let s: string = "hello"; return s.len; }',
     );
@@ -1102,7 +1102,7 @@ describe("Emission: Strings", () => {
 });
 
 describe("Emission: Struct methods", () => {
-  maybeTest("dotted method declarations remain callable", () => {
+  test("dotted method declarations remain callable", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: i32, y: i32, }
       fn Vec2.add(v)(other: Vec2): i32 { return v.x + other.x; }
@@ -1115,7 +1115,7 @@ describe("Emission: Struct methods", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("method calls pass the receiver before explicit arguments", () => {
+  test("method calls pass the receiver before explicit arguments", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: i32, y: i32, }
       fn Vec2.add(v)(other: Vec2): i32 { return v.x + other.x; }
@@ -1132,7 +1132,7 @@ describe("Emission: Struct methods", () => {
 // ─── Control flow ───────────────────────────────────────────────
 
 describe("Emission: For init", () => {
-  maybeTest("for loop starts from a non-zero initializer", () => {
+  test("for loop starts from a non-zero initializer", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let sum: i32 = 0;
@@ -1143,7 +1143,7 @@ describe("Emission: For init", () => {
     assert.equal(runExport(mod, "run"), 35);
   });
 
-  maybeTest("for loop starts from a negative initializer", () => {
+  test("for loop starts from a negative initializer", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let sum: i32 = 0;
@@ -1154,7 +1154,7 @@ describe("Emission: For init", () => {
     assert.equal(runExport(mod, "run"), -5);
   });
 
-  maybeTest("for loop starts from a zero initializer", () => {
+  test("for loop starts from a zero initializer", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let sum: i32 = 0;
@@ -1167,7 +1167,7 @@ describe("Emission: For init", () => {
 });
 
 describe("Emission: If result type", () => {
-  maybeTest("f32-returning branches bypass code after the if", () => {
+  test("f32-returning branches bypass code after the if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(x: i32): f32 {
@@ -1181,7 +1181,7 @@ describe("Emission: If result type", () => {
     assert.equal(runExport(mod, "run", [0]), 2);
   });
 
-  maybeTest("nested f32-returning branches bypass code after the outer if", () => {
+  test("nested f32-returning branches bypass code after the outer if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(x: i32): f32 {
@@ -1200,7 +1200,7 @@ describe("Emission: If result type", () => {
     assert.equal(runExport(mod, "run", [0]), 3);
   });
 
-  maybeTest("void-returning branches bypass code after the if", () => {
+  test("void-returning branches bypass code after the if", () => {
     const { mod } = checkedCompile(`
       let reached: i32 = 0;
       fn choose(x: i32): void {
@@ -1213,7 +1213,7 @@ describe("Emission: If result type", () => {
     assert.equal(runExport(mod, "run", [0]), 2);
   });
 
-  maybeTest("i32-returning branches bypass code after the if", () => {
+  test("i32-returning branches bypass code after the if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(x: i32): i32 {
@@ -1237,7 +1237,7 @@ describe("Emission: Loop conditions", () => {
     );
   });
 
-  maybeTest("an f32 if condition uses numeric truthiness", () => {
+  test("an f32 if condition uses numeric truthiness", () => {
     const { mod } = checkedCompile(`
       export fn run(x: f32): i32 { if (x) { return 1; } return 0; }
     `);
@@ -1245,7 +1245,7 @@ describe("Emission: Loop conditions", () => {
     assert.equal(runExport(mod, "run", [0]), 0);
   });
 
-  maybeTest("an i32 if condition uses numeric truthiness", () => {
+  test("an i32 if condition uses numeric truthiness", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 { if (x) { return 1; } return 0; }
     `);
@@ -1269,7 +1269,7 @@ describe("Emission: Loop conditions", () => {
     );
   });
 
-  maybeTest("an f32 for condition is rechecked", () => {
+  test("an f32 for condition is rechecked", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let x: f32 = 1.0;
@@ -1281,7 +1281,7 @@ describe("Emission: Loop conditions", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("a bool while condition is rechecked", () => {
+  test("a bool while condition is rechecked", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let active: bool = true;
@@ -1293,7 +1293,7 @@ describe("Emission: Loop conditions", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("an i32 while condition is rechecked", () => {
+  test("an i32 while condition is rechecked", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let i: i32 = 3;
@@ -1323,7 +1323,7 @@ describe("Emission: Break/Continue outside loop", () => {
     );
   });
 
-  maybeTest("break exits a for loop", () => {
+  test("break exits a for loop", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1334,7 +1334,7 @@ describe("Emission: Break/Continue outside loop", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("continue in a for loop still performs the update", () => {
+  test("continue in a for loop still performs the update", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1345,7 +1345,7 @@ describe("Emission: Break/Continue outside loop", () => {
     assert.equal(runExport(mod, "run"), 0);
   });
 
-  maybeTest("break exits a while loop", () => {
+  test("break exits a while loop", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1356,7 +1356,7 @@ describe("Emission: Break/Continue outside loop", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("continue in a while loop rechecks the condition", () => {
+  test("continue in a while loop rechecks the condition", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -1369,7 +1369,7 @@ describe("Emission: Break/Continue outside loop", () => {
 });
 
 describe("Emission: Switch break", () => {
-  maybeTest("break exits a standalone switch", () => {
+  test("break exits a standalone switch", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 {
         let result: i32 = 0;
@@ -1384,7 +1384,7 @@ describe("Emission: Switch break", () => {
     assert.equal(runExport(mod, "run", [1]), 21);
   });
 
-  maybeTest("break inside a switch does not exit its enclosing for loop", () => {
+  test("break inside a switch does not exit its enclosing for loop", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 {
         let count: i32 = 0;
@@ -1402,7 +1402,7 @@ describe("Emission: Switch break", () => {
     assert.equal(runExport(mod, "run", [1]), 3);
   });
 
-  maybeTest("continue inside a switch targets its enclosing for loop", () => {
+  test("continue inside a switch targets its enclosing for loop", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1419,7 +1419,7 @@ describe("Emission: Switch break", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("switch cases do not fall through", () => {
+  test("switch cases do not fall through", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 {
         let result: i32 = 0;
@@ -1438,7 +1438,7 @@ describe("Emission: Switch break", () => {
 });
 
 describe("Emission: Nested constructs", () => {
-  maybeTest("break in an inner for loop leaves the outer loop running", () => {
+  test("break in an inner for loop leaves the outer loop running", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1454,7 +1454,7 @@ describe("Emission: Nested constructs", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("break inside an if exits the enclosing for loop", () => {
+  test("break inside an if exits the enclosing for loop", () => {
     const { mod } = checkedCompile(`
       export fn run(): i32 {
         let count: i32 = 0;
@@ -1468,7 +1468,7 @@ describe("Emission: Nested constructs", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("return inside a for loop exits its enclosing function", () => {
+  test("return inside a for loop exits its enclosing function", () => {
     const { mod } = checkedCompile(`
       export fn run(x: i32): i32 {
         if (x > 0) {
@@ -1485,7 +1485,7 @@ describe("Emission: Nested constructs", () => {
 });
 
 describe("Emission: Flow analysis", () => {
-  maybeTest("a switch without default can reach code after its if", () => {
+  test("a switch without default can reach code after its if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(x: i32, y: i32): i32 {
@@ -1506,7 +1506,7 @@ describe("Emission: Flow analysis", () => {
     assert.equal(runExport(mod, "run", [-1, 0]), 2);
   });
 
-  maybeTest("a zero-iteration for loop can reach code after its if", () => {
+  test("a zero-iteration for loop can reach code after its if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(branch: i32, limit: i32): i32 {
@@ -1527,7 +1527,7 @@ describe("Emission: Flow analysis", () => {
     assert.equal(runExport(mod, "run", [-1, 2]), -1);
   });
 
-  maybeTest("a zero-iteration while loop can reach code after its if", () => {
+  test("a zero-iteration while loop can reach code after its if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(branch: i32, limit: i32): i32 {
@@ -1548,7 +1548,7 @@ describe("Emission: Flow analysis", () => {
     assert.equal(runExport(mod, "run", [-1, 2]), -1);
   });
 
-  maybeTest("both returning branches cannot reach code after the if", () => {
+  test("both returning branches cannot reach code after the if", () => {
     const { mod } = checkedCompile(`
       let after: i32 = 0;
       fn choose(x: i32): i32 {
@@ -1566,7 +1566,7 @@ describe("Emission: Flow analysis", () => {
 // ─── Memory-Backed Local Structs ──────────────────────────────────────────
 
 describe("Emission: Shadow stack global", () => {
-  maybeTest("a local struct frame preserves member values", () => {
+  test("a local struct frame preserves member values", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1577,7 +1577,7 @@ describe("Emission: Shadow stack global", () => {
     assert.equal(runExport(mod, "run"), 12);
   });
 
-  maybeTest("recursive local struct frames remain isolated", () => {
+  test("recursive local struct frames remain isolated", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn recurse(n: i32): i32 {
@@ -1595,7 +1595,7 @@ describe("Emission: Shadow stack global", () => {
 });
 
 describe("Emission: Local declaration — flat locals gone", () => {
-  maybeTest("local struct fields remain independent after mutation", () => {
+  test("local struct fields remain independent after mutation", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1607,7 +1607,7 @@ describe("Emission: Local declaration — flat locals gone", () => {
     assert.equal(runExport(mod, "run"), 73);
   });
 
-  maybeTest("local struct members round-trip at every scalar width", () => {
+  test("local struct members round-trip at every scalar width", () => {
     const { mod } = checkedCompile(`
       struct Widths {
         signed8: i8,
@@ -1655,7 +1655,7 @@ describe("Emission: Local declaration — flat locals gone", () => {
 });
 
 describe("Emission: Field init — stores to memory", () => {
-  maybeTest("the first i32 field initializes without disturbing its neighbor", () => {
+  test("the first i32 field initializes without disturbing its neighbor", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1666,7 +1666,7 @@ describe("Emission: Field init — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 23);
   });
 
-  maybeTest("the second i32 field initializes without disturbing its neighbor", () => {
+  test("the second i32 field initializes without disturbing its neighbor", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1677,7 +1677,7 @@ describe("Emission: Field init — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 32);
   });
 
-  maybeTest("mixed i32 and f32 fields retain their own values", () => {
+  test("mixed i32 and f32 fields retain their own values", () => {
     const { mod } = checkedCompile(`
       struct Mixed { a: i32, b: f32 }
       export fn run(): i32 {
@@ -1688,7 +1688,7 @@ describe("Emission: Field init — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("two f32 fields initialize independently", () => {
+  test("two f32 fields initialize independently", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: f32, y: f32 }
       export fn run(): f32 {
@@ -1699,7 +1699,7 @@ describe("Emission: Field init — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 17.5);
   });
 
-  maybeTest("a single-field struct preserves its initializer", () => {
+  test("a single-field struct preserves its initializer", () => {
     const { mod } = checkedCompile(`
       struct Single { val: i32 }
       export fn run(): i32 {
@@ -1710,7 +1710,7 @@ describe("Emission: Field init — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 42);
   });
 
-  maybeTest("expression-valued fields preserve their computed results", () => {
+  test("expression-valued fields preserve their computed results", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(a: i32, b: i32): i32 {
@@ -1723,7 +1723,7 @@ describe("Emission: Field init — stores to memory", () => {
 });
 
 describe("Emission: Member read — loads from memory", () => {
-  maybeTest("reading p.x returns the first field", () => {
+  test("reading p.x returns the first field", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
@@ -1731,7 +1731,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("reading p.y returns the second field", () => {
+  test("reading p.y returns the second field", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 { let p: Point = { x = 3, y = 4 }; return p.y; }
@@ -1739,7 +1739,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 4);
   });
 
-  maybeTest("reading an f32 member returns its value", () => {
+  test("reading an f32 member returns its value", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: f32, y: f32 }
       export fn run(): f32 { let v: Vec2 = { x = 1.5, y = 2.5 }; return v.x; }
@@ -1747,7 +1747,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 1.5);
   });
 
-  maybeTest("multiple member reads compose in arithmetic", () => {
+  test("multiple member reads compose in arithmetic", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 { let p: Point = { x = 3, y = 4 }; return p.x + p.y; }
@@ -1755,7 +1755,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("member reads compose in comparisons", () => {
+  test("member reads compose in comparisons", () => {
     const { mod } = checkedCompile(`
       struct Counter { n: i32 }
       export fn run(): i32 {
@@ -1767,7 +1767,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("member reads compose with prefix negation", () => {
+  test("member reads compose with prefix negation", () => {
     const { mod } = checkedCompile(`
       struct Num { val: i32 }
       export fn run(): i32 { let n: Num = { val = 7 }; return -n.val; }
@@ -1775,7 +1775,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), -7);
   });
 
-  maybeTest("member reads drive while-loop conditions", () => {
+  test("member reads drive while-loop conditions", () => {
     const { mod } = checkedCompile(`
       struct Flag { active: i32 }
       export fn run(): i32 {
@@ -1788,7 +1788,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("member reads drive for-loop conditions", () => {
+  test("member reads drive for-loop conditions", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1800,7 +1800,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 0);
   });
 
-  maybeTest("member reads drive if conditions", () => {
+  test("member reads drive if conditions", () => {
     const { mod } = checkedCompile(`
       struct Counter { n: i32 }
       export fn run(): i32 {
@@ -1812,7 +1812,7 @@ describe("Emission: Member read — loads from memory", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("member reads pass through function arguments", () => {
+  test("member reads pass through function arguments", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn bar(n: i32): i32 { return n; }
@@ -1823,7 +1823,7 @@ describe("Emission: Member read — loads from memory", () => {
 });
 
 describe("Emission: Member write — stores to memory", () => {
-  maybeTest("writing p.x preserves p.y", () => {
+  test("writing p.x preserves p.y", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1835,7 +1835,7 @@ describe("Emission: Member write — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 107);
   });
 
-  maybeTest("writing p.y preserves p.x", () => {
+  test("writing p.y preserves p.x", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1847,7 +1847,7 @@ describe("Emission: Member write — stores to memory", () => {
     assert.equal(runExport(mod, "run"), 720);
   });
 
-  maybeTest("member writes read back from the same field", () => {
+  test("member writes read back from the same field", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1861,7 +1861,7 @@ describe("Emission: Member write — stores to memory", () => {
 });
 
 describe("Emission: Prologue / epilogue", () => {
-  maybeTest("one local struct receives an isolated frame", () => {
+  test("one local struct receives an isolated frame", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1872,7 +1872,7 @@ describe("Emission: Prologue / epilogue", () => {
     assert.equal(runExport(mod, "run"), 12);
   });
 
-  maybeTest("sequential local struct calls preserve their own values", () => {
+  test("sequential local struct calls preserve their own values", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn sample(value: i32): i32 {
@@ -1884,7 +1884,7 @@ describe("Emission: Prologue / epilogue", () => {
     assert.equal(runExport(mod, "run"), 1_234);
   });
 
-  maybeTest("frame setup precedes field initialization", () => {
+  test("frame setup precedes field initialization", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1896,7 +1896,7 @@ describe("Emission: Prologue / epilogue", () => {
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("two local structs do not overlap", () => {
+  test("two local structs do not overlap", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1910,7 +1910,7 @@ describe("Emission: Prologue / epilogue", () => {
     assert.equal(runExport(mod, "run"), 5_236);
   });
 
-  maybeTest("a four-field struct preserves every field", () => {
+  test("a four-field struct preserves every field", () => {
     const { mod } = checkedCompile(`
       struct Big { a: i32, b: i32, c: i32, d: i32 }
       export fn run(): i32 {
@@ -1923,7 +1923,7 @@ describe("Emission: Prologue / epilogue", () => {
 });
 
 describe("Emission: Pointer initialization", () => {
-  maybeTest("the first local struct points at its initialized fields", () => {
+  test("the first local struct points at its initialized fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1934,7 +1934,7 @@ describe("Emission: Pointer initialization", () => {
     assert.equal(runExport(mod, "run"), 12);
   });
 
-  maybeTest("the second local struct points at distinct initialized fields", () => {
+  test("the second local struct points at distinct initialized fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1947,7 +1947,7 @@ describe("Emission: Pointer initialization", () => {
     assert.equal(runExport(mod, "run"), 1_284);
   });
 
-  maybeTest("pointer initialization precedes expression-valued field stores", () => {
+  test("pointer initialization precedes expression-valued field stores", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(seed: i32): i32 {
@@ -1960,7 +1960,7 @@ describe("Emission: Pointer initialization", () => {
 });
 
 describe("Emission: Return with SP restore via $__ret_tmp", () => {
-  maybeTest("a value return preserves a local struct member", () => {
+  test("a value return preserves a local struct member", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 { let p: Point = { x = 3, y = 4 }; return p.x; }
@@ -1968,7 +1968,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("repeated early void returns do not leak their frames", () => {
+  test("repeated early void returns do not leak their frames", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let visits: i32 = 0;
@@ -1985,7 +1985,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
     assert.equal(runExport(mod, "run"), 10_000);
   });
 
-  maybeTest("a scalar return remains intact when a local struct exists", () => {
+  test("a scalar return remains intact when a local struct exists", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1996,7 +1996,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
     assert.equal(runExport(mod, "run"), 42);
   });
 
-  maybeTest("multiple value-return paths restore their frames", () => {
+  test("multiple value-return paths restore their frames", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn choose(cond: i32): i32 {
@@ -2013,7 +2013,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
     assert.equal(runExport(mod, "run"), 30_004);
   });
 
-  maybeTest("an f32 return remains intact when a local struct exists", () => {
+  test("an f32 return remains intact when a local struct exists", () => {
     const { mod } = checkedCompile(`
       struct Vec2 { x: f32, y: f32 }
       export fn run(): f32 { let v: Vec2 = { x = 1.5, y = 2.5 }; return v.x; }
@@ -2021,7 +2021,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
     assert.equal(runExport(mod, "run"), 1.5);
   });
 
-  maybeTest("a void function with a local struct returns normally", () => {
+  test("a void function with a local struct returns normally", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let seen: i32 = 0;
@@ -2036,7 +2036,7 @@ describe("Emission: Return with SP restore via $__ret_tmp", () => {
 });
 
 describe("Emission: Negative assertions — flat locals gone", () => {
-  maybeTest("member writes preserve neighboring fields", () => {
+  test("member writes preserve neighboring fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -2048,7 +2048,7 @@ describe("Emission: Negative assertions — flat locals gone", () => {
     assert.equal(runExport(mod, "run"), 14);
   });
 
-  maybeTest("break and continue do not restore a live local-struct frame", () => {
+  test("break and continue do not restore a live local-struct frame", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn loop(): i32 {
@@ -2071,7 +2071,7 @@ describe("Emission: Negative assertions — flat locals gone", () => {
 });
 
 describe("Emission: Global struct regression", () => {
-  maybeTest("global structs materialize their initialized fields", () => {
+  test("global structs materialize their initialized fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let g: Point = { x = 2, y = 3 };
@@ -2080,7 +2080,7 @@ describe("Emission: Global struct regression", () => {
     assert.equal(runExport(mod, "run"), 23);
   });
 
-  maybeTest("global struct bindings retain their initialized values", () => {
+  test("global struct bindings retain their initialized values", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let g: Point = { x = 2, y = 3 };
@@ -2089,7 +2089,7 @@ describe("Emission: Global struct regression", () => {
     assert.equal(runExport(mod, "run"), 32);
   });
 
-  maybeTest("global struct members read back", () => {
+  test("global struct members read back", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let g: Point = { x = 2, y = 3 };
@@ -2098,7 +2098,7 @@ describe("Emission: Global struct regression", () => {
     assert.equal(runExport(mod, "run"), 2);
   });
 
-  maybeTest("global struct member writes preserve neighboring fields", () => {
+  test("global struct member writes preserve neighboring fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       let g: Point = { x = 2, y = 3 };
@@ -2109,7 +2109,7 @@ describe("Emission: Global struct regression", () => {
 });
 
 describe("Emission: Param struct regression", () => {
-  maybeTest("struct parameters expose each member", () => {
+  test("struct parameters expose each member", () => {
     const { mod } = checkedCompile(`
       struct Pair { a: i32, b: i32 }
       fn sum(p: Pair): i32 { return p.a + p.b; }
@@ -2121,7 +2121,7 @@ describe("Emission: Param struct regression", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("struct parameter arithmetic uses the member type", () => {
+  test("struct parameter arithmetic uses the member type", () => {
     const { mod } = checkedCompile(`
       struct Pair { a: i32, b: i32 }
       fn sum(p: Pair): i32 { return p.a + p.b; }
@@ -2135,7 +2135,7 @@ describe("Emission: Param struct regression", () => {
 });
 
 describe("Emission: Method calls on local structs", () => {
-  maybeTest("a method reads its local-struct receiver", () => {
+  test("a method reads its local-struct receiver", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn Point.sum(p)(): i32 { return p.x + p.y; }
@@ -2144,7 +2144,7 @@ describe("Emission: Method calls on local structs", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("a method preserves independent receiver fields", () => {
+  test("a method preserves independent receiver fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn Point.sum(p)(): i32 { return p.x + p.y; }
@@ -2157,7 +2157,7 @@ describe("Emission: Method calls on local structs", () => {
     assert.equal(runExport(mod, "run"), 12);
   });
 
-  maybeTest("a method receives another local struct as an argument", () => {
+  test("a method receives another local struct as an argument", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn Point.add(self)(other: Point): i32 { return self.x + other.x; }
@@ -2172,7 +2172,7 @@ describe("Emission: Method calls on local structs", () => {
 });
 
 describe("Emission: Struct member in various expressions", () => {
-  maybeTest("a struct member selects a switch case", () => {
+  test("a struct member selects a switch case", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -2188,7 +2188,7 @@ describe("Emission: Struct member in various expressions", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("repeated struct member reads compose in a binary chain", () => {
+  test("repeated struct member reads compose in a binary chain", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 { let p: Point = { x = 2, y = 3 }; return p.x * p.y + p.x; }
@@ -2196,7 +2196,7 @@ describe("Emission: Struct member in various expressions", () => {
     assert.equal(runExport(mod, "run"), 8);
   });
 
-  maybeTest("a struct member can be cast to f32", () => {
+  test("a struct member can be cast to f32", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): f32 { let p: Point = { x = 5, y = 0 }; return p.x as f32; }
@@ -2204,7 +2204,7 @@ describe("Emission: Struct member in various expressions", () => {
     assert.equal(runExport(mod, "run"), 5);
   });
 
-  maybeTest("a struct member initializes a scalar local", () => {
+  test("a struct member initializes a scalar local", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -2219,7 +2219,7 @@ describe("Emission: Struct member in various expressions", () => {
 });
 
 describe("Emission: Struct in control flow bodies", () => {
-  maybeTest("a local struct inside an if retains its fields", () => {
+  test("a local struct inside an if retains its fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(cond: i32): i32 {
@@ -2234,7 +2234,7 @@ describe("Emission: Struct in control flow bodies", () => {
     assert.equal(runExport(mod, "run", [0]), 0);
   });
 
-  maybeTest("a local struct inside a while body retains its fields", () => {
+  test("a local struct inside a while body retains its fields", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -2251,7 +2251,7 @@ describe("Emission: Struct in control flow bodies", () => {
     assert.equal(runExport(mod, "run"), 56);
   });
 
-  maybeTest("struct field writes inside a loop accumulate", () => {
+  test("struct field writes inside a loop accumulate", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       export fn run(): i32 {
@@ -2268,7 +2268,7 @@ describe("Emission: Struct in control flow bodies", () => {
 });
 
 describe("Emission: extractGlobalData — local struct skipped", () => {
-  maybeTest("local struct literals initialize at call time", () => {
+  test("local struct literals initialize at call time", () => {
     const { mod } = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn sample(seed: i32): i32 {
@@ -2494,7 +2494,7 @@ describe("host surface (WAT-structural)", () => {
 });
 
 describe("Compiler: inferred function call types", () => {
-  maybeTest("inferred i32 call results preserve their value", () => {
+  test("inferred i32 call results preserve their value", () => {
     const { mod } = checkedCompile(`
       fn add(a: i32, b: i32): i32 { return a + b; }
       export fn run(): i32 { let x = add(1, 2); return x; }
@@ -2502,7 +2502,7 @@ describe("Compiler: inferred function call types", () => {
     assert.equal(runExport(mod, "run"), 3);
   });
 
-  maybeTest("inferred f32 call results preserve their value", () => {
+  test("inferred f32 call results preserve their value", () => {
     const { mod } = checkedCompile(`
       fn half(x: f32): f32 { return x; }
       export fn run(): f32 { let y = half(1.5); return y; }
@@ -2512,7 +2512,7 @@ describe("Compiler: inferred function call types", () => {
 });
 
 describe("Emission: multi-return and destructure", () => {
-  maybeTest("multi-return functions expose every result", () => {
+  test("multi-return functions expose every result", () => {
     const { mod } = checkedCompile(`
       export fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
     `);
@@ -2524,13 +2524,13 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(meta.functions.pair?.signature, "v_iI");
   });
 
-  maybeTest("three-return signatures and values retain every lane", () => {
+  test("three-return signatures and values retain every lane", () => {
     const { meta, mod } = checkedCompile("export fn tri(): (i32, i32, i32) { return 1, 2, 3; }");
     assert.equal(meta.functions.tri?.signature, "v_iii");
     assert.deepEqual(runExport(mod, "tri"), [1, 2, 3]);
   });
 
-  maybeTest("five-return signatures and values retain every lane", () => {
+  test("five-return signatures and values retain every lane", () => {
     const { meta, mod } = checkedCompile(`
       export fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
     `);
@@ -2538,7 +2538,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.deepEqual(runExport(mod, "many"), [1, 2, 3, 4, 5]);
   });
 
-  maybeTest("six-return signatures and values retain every lane", () => {
+  test("six-return signatures and values retain every lane", () => {
     const { meta, mod } = checkedCompile(`
       export fn many6(): (i32, i32, i32, i32, i32, i32) {
         return 1, 2, 3, 4, 5, 6;
@@ -2548,12 +2548,12 @@ describe("Emission: multi-return and destructure", () => {
     assert.deepEqual(runExport(mod, "many6"), [1, 2, 3, 4, 5, 6]);
   });
 
-  maybeTest("multi-value return expressions preserve source order", () => {
+  test("multi-value return expressions preserve source order", () => {
     const { mod } = checkedCompile("export fn pair(): (i32, i32) { return 1, 2; }");
     assert.deepEqual(runExport(mod, "pair"), [1, 2]);
   });
 
-  maybeTest("pass-through returns preserve every result", () => {
+  test("pass-through returns preserve every result", () => {
     const { mod } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
       export fn pass(): (i32, i32) { return swap(1, 2); }
@@ -2561,7 +2561,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.deepEqual(runExport(mod, "pass"), [2, 1]);
   });
 
-  maybeTest("destructuring binds multi-return values by position", () => {
+  test("destructuring binds multi-return values by position", () => {
     const { mod } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
       export fn run(): i32 { let (x, y) = swap(1, 2); return x * 10 + y; }
@@ -2569,7 +2569,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 21);
   });
 
-  maybeTest("destructuring wildcards discard only their position", () => {
+  test("destructuring wildcards discard only their position", () => {
     const { mod } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
       export fn run(): i32 { let (_, y) = swap(1, 2); return y; }
@@ -2577,7 +2577,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("destructured locals preserve their individual result types", () => {
+  test("destructured locals preserve their individual result types", () => {
     const { mod } = checkedCompile(`
       fn pair(): (i32, i64) { return 1, 2 as i64; }
       export fn run(): i64 { let (x, y) = pair(); return y + (x as i64); }
@@ -2585,7 +2585,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 3n);
   });
 
-  maybeTest("statement-position multi-return calls discard every result", () => {
+  test("statement-position multi-return calls discard every result", () => {
     const { mod } = checkedCompile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
       export fn run(): i32 { swap(1, 2); return 7; }
@@ -2593,7 +2593,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 7);
   });
 
-  maybeTest("statement-position five-return calls discard every result", () => {
+  test("statement-position five-return calls discard every result", () => {
     const { mod } = checkedCompile(`
       fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
       export fn run(): i32 { many(); return 9; }
@@ -2601,7 +2601,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 9);
   });
 
-  maybeTest("five-return destructuring combines bindings and wildcards", () => {
+  test("five-return destructuring combines bindings and wildcards", () => {
     const { mod } = checkedCompile(`
       fn many(): (i32, i32, i32, i32, i32) { return 1, 2, 3, 4, 5; }
       export fn run(): i32 {
@@ -2612,7 +2612,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 1_345);
   });
 
-  maybeTest("single-return frame functions preserve their result", () => {
+  test("single-return frame functions preserve their result", () => {
     const { mod } = checkedCompile(`
       struct P { x: i32, y: i32 }
       export fn run(): i32 { let p: P = { x = 1, y = 2 }; return p.x; }
@@ -2620,7 +2620,7 @@ describe("Emission: multi-return and destructure", () => {
     assert.equal(runExport(mod, "run"), 1);
   });
 
-  maybeTest("multi-return frame functions restore the frame and preserve results", () => {
+  test("multi-return frame functions restore the frame and preserve results", () => {
     const { mod } = checkedCompile(`
       struct P { x: i32, y: i32 }
       export fn run(): (i32, i32) {
@@ -2633,7 +2633,7 @@ describe("Emission: multi-return and destructure", () => {
 });
 
 describe("Emission: stdlib global import", () => {
-  maybeTest("imported f32 globals retain their runtime value", async () => {
+  test("imported f32 globals retain their runtime value", async () => {
     const result = await runMergedExport(
       `
       import PI from "math"
@@ -2646,7 +2646,7 @@ describe("Emission: stdlib global import", () => {
 });
 
 describe("Emission: named function references", () => {
-  maybeTest("function references call the original function with their arguments", async () => {
+  test("function references call the original function with their arguments", async () => {
     assert.equal(
       await runMergedExport(
         `
@@ -2662,7 +2662,7 @@ describe("Emission: named function references", () => {
     );
   });
 
-  maybeTest("multiple function references preserve their distinct targets", async () => {
+  test("multiple function references preserve their distinct targets", async () => {
     assert.equal(
       await runMergedExport(
         `
@@ -2680,7 +2680,7 @@ describe("Emission: named function references", () => {
     );
   });
 
-  maybeTest("void function references remain callable", async () => {
+  test("void function references remain callable", async () => {
     assert.equal(
       await runMergedExport(
         `
@@ -2726,7 +2726,7 @@ describe("Emission: named function references", () => {
 });
 
 describe("Emission: math stdlib calls", () => {
-  maybeTest("Tier 1 f32 imports execute through the bundled stdlib", async () => {
+  test("Tier 1 f32 imports execute through the bundled stdlib", async () => {
     assert.equal(
       await runMergedExport(
         `
@@ -2739,7 +2739,7 @@ describe("Emission: math stdlib calls", () => {
     );
   });
 
-  maybeTest("Tier 1 f64 and integer imports execute through the bundled stdlib", async () => {
+  test("Tier 1 f64 and integer imports execute through the bundled stdlib", async () => {
     assert.equal(
       await runMergedExport(
         `
@@ -2752,7 +2752,7 @@ describe("Emission: math stdlib calls", () => {
     );
   });
 
-  maybeTest("Tier 2 imports execute through the bundled stdlib", async () => {
+  test("Tier 2 imports execute through the bundled stdlib", async () => {
     assert.equal(
       await runMergedExport(
         `

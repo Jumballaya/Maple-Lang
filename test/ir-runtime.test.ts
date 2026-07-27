@@ -4,7 +4,7 @@ import { type FuncBuilder, IrBuilder } from "../src/ir/build";
 import { encodeWasm } from "../src/ir/encode-wasm";
 import type { IrModule, Stmt, StructLayout } from "../src/ir/ir";
 import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "../src/ir/runtime";
-import { maybeTest, runExport } from "./helpers";
+import { runExport } from "./helpers";
 
 function instantiate(module: IrModule, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
   const bytes = encodeWasm(module) as Uint8Array<ArrayBuffer>;
@@ -62,7 +62,7 @@ describe("IR builder", () => {
     );
   });
 
-  maybeTest("allocates shared import and definition index spaces", () => {
+  test("allocates shared import and definition index spaces", () => {
     const builder = new IrBuilder();
     const unary = builder.signature(["i32"], ["i32"]);
     const voidSig = builder.signature([], []);
@@ -92,7 +92,7 @@ describe("IR builder", () => {
 });
 
 describe("IR runtime: elemAddr", () => {
-  maybeTest("computes in-range addresses and traps every unsigned overrun", () => {
+  test("computes in-range addresses and traps every unsigned overrun", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const arrayHeader = 65_536;
@@ -112,7 +112,7 @@ describe("IR runtime: elemAddr", () => {
 });
 
 describe("IR runtime: stringEq", () => {
-  maybeTest("compares lengths and UTF-8 payload bytes", () => {
+  test("compares lengths and UTF-8 payload bytes", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const headers = [65_536, 65_544, 65_552, 65_560, 65_568, 65_576];
@@ -138,7 +138,7 @@ describe("IR runtime: stringEq", () => {
 });
 
 describe("IR runtime: structEqBatch", () => {
-  maybeTest("compares declared numeric widths while skipping padding", () => {
+  test("compares declared numeric widths while skipping padding", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const layout: StructLayout = {
@@ -180,7 +180,7 @@ describe("IR runtime: structEqBatch", () => {
     assert.equal(runExport(module, "equal", [addresses[0]!, addresses[2]!]), 0);
   });
 
-  maybeTest("delegates string members to content equality", () => {
+  test("delegates string members to content equality", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const firstHeader = 65_536;
@@ -220,7 +220,7 @@ describe("IR runtime: structEqBatch", () => {
     assert.equal(runExport(builder.finish(), "equal", [firstStruct, secondStruct]), 1);
   });
 
-  maybeTest("reserves mutually recursive helpers before filling their bodies", () => {
+  test("reserves mutually recursive helpers before filling their bodies", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const aLayout: StructLayout = {
@@ -305,7 +305,7 @@ describe("IR runtime: structEqBatch", () => {
     );
   });
 
-  maybeTest("uses float equality so NaN is unequal to itself", () => {
+  test("uses float equality so NaN is unequal to itself", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const address = 65_536;
@@ -325,7 +325,7 @@ describe("IR runtime: structEqBatch", () => {
 });
 
 describe("IR runtime: makeFnref", () => {
-  maybeTest("stores the slot and a zero environment in allocator memory", () => {
+  test("stores the slot and a zero environment in allocator memory", () => {
     const builder = new IrBuilder();
     builder.memory("owned", 2);
     const heap = builder.global("heap", "i32", true, 65_536);
@@ -352,7 +352,7 @@ describe("IR runtime: makeFnref", () => {
 });
 
 describe("IR runtime: trampoline", () => {
-  maybeTest("drops junk env values for void, one-result, and multi-result targets", () => {
+  test("drops junk env values for void, one-result, and multi-result targets", () => {
     const builder = new IrBuilder();
     const status = builder.global("status", "i32", true, 0);
     const voidTargetSig = builder.signature(["i32"], []);

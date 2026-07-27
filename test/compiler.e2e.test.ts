@@ -7,7 +7,6 @@ import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compiler } from "../src/compiler/compiler";
-import { maybeTest } from "./helpers";
 
 type Project = Record<string, string>;
 
@@ -209,7 +208,7 @@ describe("host surface (WAT-structural)", () => {
       .join("");
   }
 
-  maybeTest("emits a shared diamond dependency exactly once", async () => {
+  test("emits a shared diamond dependency exactly once", async () => {
     const { wat } = await compileProject({
       "main.maple": `
         import from_b from "./b.maple"
@@ -230,7 +229,7 @@ describe("host surface (WAT-structural)", () => {
     assert.equal(wat.match(/\(func\s+\$[^\s()]*\$\$base(?:_\d+)?(?=\s|\))/g)?.length, 1);
   });
 
-  maybeTest("retains the function-reference table, element, and trampoline", async () => {
+  test("retains the function-reference table, element, and trampoline", async () => {
     const { module, wat } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
@@ -252,7 +251,7 @@ describe("host surface (WAT-structural)", () => {
     assert(WebAssembly.Module.exports(module).every((entry) => !entry.name.includes("indirect")));
   });
 
-  maybeTest("filters unreachable user functions and exports", async () => {
+  test("filters unreachable user functions and exports", async () => {
     const { wat } = await compileProject({
       "main.maple": `
         import used, unused_export from "./dep.maple"
@@ -269,7 +268,7 @@ describe("host surface (WAT-structural)", () => {
     assert.doesNotMatch(wat, /\(func\s+\$[^\s()]*\$\$unused_(?:private|export)(?:_\d+)?(?=\s|\))/);
   });
 
-  maybeTest("does not create a table for unreachable function references", async () => {
+  test("does not create a table for unreachable function references", async () => {
     const { wat } = await compileProject({
       "main.maple": `
         fn target(value: i32): i32 { return value + 1; }
@@ -285,7 +284,7 @@ describe("host surface (WAT-structural)", () => {
     assert.doesNotMatch(wat, /\(table\s+\$[^\s()]*fn_table\b/);
   });
 
-  maybeTest("retains functions reached only from startup", async () => {
+  test("retains functions reached only from startup", async () => {
     const { wat } = await compileProject({
       "main.maple": `
         fn seed(): i32 { return 42; }
@@ -297,7 +296,7 @@ describe("host surface (WAT-structural)", () => {
     assert.match(wat, /\(func\s+\$[^\s()]*\$\$seed(?:_\d+)?(?=\s|\))/);
   });
 
-  maybeTest("filters unused stdlib function chains", async () => {
+  test("filters unused stdlib function chains", async () => {
     const unused = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -324,7 +323,7 @@ describe("host surface (WAT-structural)", () => {
     assert.doesNotMatch(used.wat, /\(func\s+\$[^\s()]*\$\$sin(?:_\d+)?(?=\s|\))/);
   });
 
-  maybeTest("emits deterministic WAT before and after filtering", async () => {
+  test("emits deterministic WAT before and after filtering", async () => {
     const project = {
       "main.maple": `
         import used from "./dep.maple"
@@ -342,7 +341,7 @@ describe("host surface (WAT-structural)", () => {
     assert.doesNotMatch(first.wat, /\(func\s+\$[^\s()]*\$\$unused(?:_\d+)?(?=\s|\))/);
   });
 
-  maybeTest("shakes dead literal data before laying out the heap", async () => {
+  test("shakes dead literal data before laying out the heap", async () => {
     const heavyLiteral = `dead-${"x".repeat(512)}`;
     const liveLiteral = "live-data";
     const source = (useHeavy: boolean) => `
@@ -379,7 +378,7 @@ describe("host surface (WAT-structural)", () => {
 });
 
 describe("Compiler: merged whole-program emission", () => {
-  maybeTest("runs a two-module program as one wasm module", async () => {
+  test("runs a two-module program as one wasm module", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import add from "./math.maple"
@@ -391,7 +390,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("emits a diamond dependency once", async () => {
+  test("emits a diamond dependency once", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import from_b from "./b.maple"
@@ -412,7 +411,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 23);
   });
 
-  maybeTest("isolates private collisions and identical string literals", async () => {
+  test("isolates private collisions and identical string literals", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import from_a from "./a.maple"
@@ -438,7 +437,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 32);
   });
 
-  maybeTest("relocates distinct data from multiple modules", async () => {
+  test("relocates distinct data from multiple modules", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import first from "./first.maple"
@@ -460,7 +459,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 2);
   });
 
-  maybeTest("relocates only pointer fields in merged data", async () => {
+  test("relocates only pointer fields in merged data", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import dependency from "./dependency.maple"
@@ -480,7 +479,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 65537);
   });
 
-  maybeTest("exports owned memory and only entry-module API names", async () => {
+  test("exports owned memory and only entry-module API names", async () => {
     const { instance, module } = await compileProject({
       "main.maple": `
         import add from "./math.maple"
@@ -496,7 +495,7 @@ describe("Compiler: merged whole-program emission", () => {
     );
   });
 
-  maybeTest("preserves an alloc export when function references need malloc", async () => {
+  test("preserves an alloc export when function references need malloc", async () => {
     const { instance, module } = await compileProject({
       "main.maple": `
         fn add(a: i32, b: i32): i32 { return a + b; }
@@ -513,7 +512,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert(WebAssembly.Module.exports(module).some((entry) => entry.name === "alloc"));
   });
 
-  maybeTest("keeps same-named struct equality helpers module-local", async () => {
+  test("keeps same-named struct equality helpers module-local", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import eq_a from "./a.maple"
@@ -541,7 +540,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 2);
   });
 
-  maybeTest("takes a function reference from another merged module", async () => {
+  test("takes a function reference from another merged module", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
@@ -556,7 +555,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("merges malloc and sqrt with module-owned memory", async () => {
+  test("merges malloc and sqrt with module-owned memory", async () => {
     const { instance, module } = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -573,7 +572,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert(instance.exports.memory instanceof WebAssembly.Memory);
   });
 
-  maybeTest("starts the merged heap above static data without corrupting literals", async () => {
+  test("starts the merged heap above static data without corrupting literals", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -597,7 +596,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(pointer % 8, 0);
   });
 
-  maybeTest("mixes heap, shadow-stack structs, and string literals", async () => {
+  test("mixes heap, shadow-stack structs, and string literals", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -618,7 +617,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("sizes memory and the heap from more than one page of static data", async () => {
+  test("sizes memory and the heap from more than one page of static data", async () => {
     const literals = Array.from({ length: 72 }, (_, index) => {
       const contents = `${"x".repeat(1016)}-${index.toString().padStart(3, "0")}`;
       return `let static_${index}: string = "${contents}";`;
@@ -651,7 +650,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert(pointer + 8 <= pages * 65_536);
   });
 
-  maybeTest("resets the heap when heap_init is called explicitly", async () => {
+  test("resets the heap when heap_init is called explicitly", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import malloc, heap_init from "memory"
@@ -668,7 +667,7 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run", 131_072), 1);
   });
 
-  maybeTest("runs deferred global initializers in dependency post-order", async () => {
+  test("runs deferred global initializers in dependency post-order", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import base from "./dependency.maple"
@@ -684,25 +683,22 @@ describe("Compiler: merged whole-program emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest(
-    "makes dependency-ordered globals readable immediately after instantiation",
-    async () => {
-      const { instance } = await compileProject({
-        "main.maple": `
+  test("makes dependency-ordered globals readable immediately after instantiation", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
         import base from "./dependency.maple"
         export const answer: i32 = base + 1;
       `,
-        "dependency.maple": `
+      "dependency.maple": `
         fn seed(): i32 { return 41; }
         export let base: i32 = seed();
       `,
-      });
+    });
 
-      assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
-    },
-  );
+    assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
+  });
 
-  maybeTest("surfaces deferred initializer traps during instantiation", async () => {
+  test("surfaces deferred initializer traps during instantiation", async () => {
     await assert.rejects(
       () =>
         compileProject({
@@ -716,7 +712,7 @@ describe("Compiler: merged whole-program emission", () => {
     );
   });
 
-  maybeTest("does not require a linker executable on PATH", async () => {
+  test("does not require a linker executable on PATH", async () => {
     const node = execFileSync("which", ["node"], { encoding: "utf8" }).trim();
     const originalPath = process.env.PATH;
     process.env.PATH = path.dirname(node);
@@ -732,7 +728,7 @@ describe("Compiler: merged whole-program emission", () => {
 });
 
 describe("Compiler: tree-shaken emission", () => {
-  maybeTest("removes unreachable private functions from imported modules", async () => {
+  test("removes unreachable private functions from imported modules", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import used from "./dep.maple"
@@ -747,7 +743,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("removes unreachable exports from non-entry modules", async () => {
+  test("removes unreachable exports from non-entry modules", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import unused from "./dep.maple"
@@ -759,7 +755,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(instance, "run"), 1);
   });
 
-  maybeTest("keeps cross-module functions reached only through fn-refs callable", async () => {
+  test("keeps cross-module functions reached only through fn-refs callable", async () => {
     const { instance, module } = await compileProject({
       "main.maple": `
         import add from "./ops.maple"
@@ -777,7 +773,7 @@ describe("Compiler: tree-shaken emission", () => {
     );
   });
 
-  maybeTest("does not slot fn-refs created only by unreachable code", async () => {
+  test("does not slot fn-refs created only by unreachable code", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         fn target(value: i32): i32 { return value + 1; }
@@ -792,7 +788,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("keeps functions reached only from startup initialization", async () => {
+  test("keeps functions reached only from startup initialization", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         fn seed(): i32 { return 42; }
@@ -804,7 +800,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(instance, "run"), 42);
   });
 
-  maybeTest("emits only the used stdlib function chain", async () => {
+  test("emits only the used stdlib function chain", async () => {
     const unused = await compileProject({
       "main.maple": `
         import malloc from "memory"
@@ -830,7 +826,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(used.instance, "run"), 4);
   });
 
-  maybeTest("shakes dead literal data before laying out the heap", async () => {
+  test("shakes dead literal data before laying out the heap", async () => {
     const heavyLiteral = `dead-${"x".repeat(512)}`;
     const liveLiteral = "live-data";
     const source = (useHeavy: boolean) => `
@@ -852,7 +848,7 @@ describe("Compiler: tree-shaken emission", () => {
     assert.equal(call(retained.instance, "run"), liveLiteral.length + heavyLiteral.length);
   });
 
-  maybeTest("type-checks unreachable code before shaking", async () => {
+  test("type-checks unreachable code before shaking", async () => {
     const errors = await projectErrors({
       "main.maple": `
         fn invalid(): i32 {
@@ -868,7 +864,7 @@ describe("Compiler: tree-shaken emission", () => {
 });
 
 describe("Compiler: merged-program acceptance", () => {
-  maybeTest("uses an imported math struct", async () => {
+  test("uses an imported math struct", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import fraction from "math"
@@ -882,7 +878,7 @@ describe("Compiler: merged-program acceptance", () => {
     assert.equal(call(instance, "run"), 3);
   });
 
-  maybeTest("uses an imported user struct across three modules", async () => {
+  test("uses an imported user struct across three modules", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import Pair from "./types.maple"
@@ -905,7 +901,7 @@ describe("Compiler: merged-program acceptance", () => {
     assert.equal(call(instance, "run"), 11);
   });
 
-  maybeTest("materializes a global literal of an imported struct type", async () => {
+  test("materializes a global literal of an imported struct type", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import Pair from "./types.maple"
@@ -919,7 +915,7 @@ describe("Compiler: merged-program acceptance", () => {
     assert.equal(call(instance, "run"), 43);
   });
 
-  maybeTest("does not wire heap startup to a user stdlib path lookalike", async () => {
+  test("does not wire heap startup to a user stdlib path lookalike", async () => {
     const { instance } = await compileProject({
       "main.maple": `
         import spoof_calls from "./stdlib/memory.maple"
@@ -939,7 +935,7 @@ describe("Compiler: merged-program acceptance", () => {
     assert.equal(call(instance, "run"), 0);
   });
 
-  maybeTest("rejects identical layouts with different nominal identities", async () => {
+  test("rejects identical layouts with different nominal identities", async () => {
     const errors = await projectErrors({
       "main.maple": `
         import Node from "./a.maple"
@@ -960,7 +956,7 @@ describe("Compiler: merged-program acceptance", () => {
     assert.match(message, /expected 'b\$\$Node', got 'a\$\$Node'/);
   });
 
-  maybeTest("rejects duplicate imported names across declaration kinds", async () => {
+  test("rejects duplicate imported names across declaration kinds", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "maple-import-collision-"));
     try {
       await writeFile(
@@ -983,7 +979,7 @@ describe("Compiler: merged-program acceptance", () => {
     }
   });
 
-  maybeTest("compiles and instantiates every demo", async () => {
+  test("compiles and instantiates every demo", async () => {
     const demoRoot = path.join(repoRoot, "demo");
     const directories = (await readdir(demoRoot, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
@@ -1000,7 +996,7 @@ describe("Compiler: merged-program acceptance", () => {
     }
   });
 
-  maybeTest("runs the CLI with only npm-provided build tools", async () => {
+  test("runs the CLI with only npm-provided build tools", async () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "maple-cli-"));
     try {
       const output = path.join(outputDir, "app.wasm");

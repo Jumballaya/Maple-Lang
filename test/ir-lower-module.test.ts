@@ -15,7 +15,6 @@ import { type LoweringOptions, lowerModule } from "../src/ir/lower";
 import { printWat } from "../src/ir/print-wat";
 import type { ASTProgram } from "../src/parser/ast/ASTProgram";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest } from "./helpers";
 
 type CheckedProgram = { ast: ASTProgram; meta: ModuleMeta };
 
@@ -119,7 +118,7 @@ function call(instance: WebAssembly.Instance, name: string, args: number[] = [])
 }
 
 describe("IR module lowering: function references", () => {
-  maybeTest("executes local, parameter, void, discarded, and multi-result indirect calls", () => {
+  test("executes local, parameter, void, discarded, and multi-result indirect calls", () => {
     const { wat, module, pendingInits } = lowered(`
       let trace: i32 = 0;
       fn add(value: i32): i32 { return value + 1; }
@@ -145,7 +144,7 @@ describe("IR module lowering: function references", () => {
     assert.equal(call(instantiate(module, allocatorImports()), "run"), 73_560);
   });
 
-  maybeTest("stores and invokes a function reference through a struct field", () => {
+  test("stores and invokes a function reference through a struct field", () => {
     const { module } = lowered(`
       struct Holder { callback: fn(i32):i32 }
       fn double(value: i32): i32 { return value * 2; }
@@ -157,7 +156,7 @@ describe("IR module lowering: function references", () => {
     assert.equal(call(instantiate(module, allocatorImports()), "run"), 42);
   });
 
-  maybeTest("emits a zero-slot table without an allocator for a fn-typed surface", () => {
+  test("emits a zero-slot table without an allocator for a fn-typed surface", () => {
     const { module, wat } = lowered(`
       export fn apply(op: fn(i32):i32, value: i32): i32 { return op(value); }
     `);
@@ -181,7 +180,7 @@ describe("IR module lowering: function references", () => {
 });
 
 describe("IR module lowering: start and assembly", () => {
-  maybeTest("runs scalar and memory initializers at instantiation and consumes fragments", () => {
+  test("runs scalar and memory initializers at instantiation and consumes fragments", () => {
     const { module, pendingInits } = lowered(`
       struct Pair { left: i32, rem: f32 }
       fn base(): i32 { return 7; }
@@ -199,7 +198,7 @@ describe("IR module lowering: start and assembly", () => {
     assert.equal(call(instance, "read"), 8);
   });
 
-  maybeTest("remaps distinct array and float fragment locals without collisions", () => {
+  test("remaps distinct array and float fragment locals without collisions", () => {
     const { ast, meta } = checked(`
       struct Pair { item: i32, rem: f32 }
       fn index(): i32 { return 0; }
@@ -220,7 +219,7 @@ describe("IR module lowering: start and assembly", () => {
     assert.doesNotMatch(wat, /\(start /);
   });
 
-  maybeTest("traps during instantiation when a deferred initializer traps", () => {
+  test("traps during instantiation when a deferred initializer traps", () => {
     const { ast, meta } = checked(`
       struct Box { value: i32 }
       let box: Box = { value = [1][2] };
@@ -229,7 +228,7 @@ describe("IR module lowering: start and assembly", () => {
     assert.throws(() => instantiate(lowerModule(ast, meta).module), WebAssembly.RuntimeError);
   });
 
-  maybeTest("supports public export mapping and both memory modes deterministically", () => {
+  test("supports public export mapping and both memory modes deterministically", () => {
     const source = `
       export let value: i32 = 9;
       export fn run(): i32 { return value; }
@@ -264,7 +263,7 @@ describe("IR module lowering: start and assembly", () => {
 });
 
 describe("IR module lowering: imports", () => {
-  maybeTest("lowers resolved external function and global imports to IR ids", () => {
+  test("lowers resolved external function and global imports to IR ids", () => {
     const parser = new Parser(`
       import host_add from "host"
       import seed from "host"
@@ -301,7 +300,7 @@ describe("IR module lowering: imports", () => {
 });
 
 describe("IR module lowering: merged bridge and reachability", () => {
-  maybeTest("keeps unreachable fn surfaces and creation sites out of the assembled module", () => {
+  test("keeps unreachable fn surfaces and creation sites out of the assembled module", () => {
     const surface = mergedLowered({
       "main.maple": `
         fn unused(op: fn(i32):i32, value: i32): i32 { return op(value); }
@@ -336,7 +335,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert.equal(call(instantiate(creation.module), "run"), 42);
   });
 
-  maybeTest("preserves a zero-slot table through the merged bridge without memory", () => {
+  test("preserves a zero-slot table through the merged bridge without memory", () => {
     const result = mergedLowered({
       "main.maple": `
         export fn apply(op: fn(i32):i32, value: i32): i32 { return op(value); }
@@ -353,7 +352,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     instantiate(result.module);
   });
 
-  maybeTest("runs cross-module fnrefs with the resolved allocator and rebaked heap start", () => {
+  test("runs cross-module fnrefs with the resolved allocator and rebaked heap start", () => {
     const result = mergedLowered({
       "main.maple": `
         import add from "./ops.maple"
@@ -380,7 +379,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert(Number(call(instance, "allocate")) >= Math.ceil(result.module.dataEnd / 8) * 8);
   });
 
-  maybeTest("executes dependency startup before importer startup at instantiation", () => {
+  test("executes dependency startup before importer startup at instantiation", () => {
     const result = mergedLowered({
       "main.maple": `
         import base from "./dep.maple"
@@ -399,7 +398,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert.equal((instance.exports.answer as WebAssembly.Global).value, 42);
   });
 
-  maybeTest("interleaves heap, dependency scalar, memory, array, and importer startup", () => {
+  test("interleaves heap, dependency scalar, memory, array, and importer startup", () => {
     const result = mergedLowered({
       "main.maple": `
         import value from "./dep.maple"
@@ -434,7 +433,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
     assert.equal((instance.exports.answer as WebAssembly.Global).value, 9);
   });
 
-  maybeTest("roots a dependency global touched only by dynamic-array startup", () => {
+  test("roots a dependency global touched only by dynamic-array startup", () => {
     const result = mergedLowered({
       "main.maple": `
         import ready from "./dep.maple"

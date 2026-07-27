@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import {
   type CompilerOptions,
   compiler,
@@ -16,42 +14,6 @@ import type { IrModule } from "../src/ir/ir";
 import { lowerModule } from "../src/ir/lower";
 import { Parser } from "../src/parser/Parser";
 import { runEncoded } from "./ir-fixtures";
-
-function probeWat2Wasm(): boolean {
-  const skip = Boolean(process.env.MAPLE_SKIP_WAT2WASM);
-  const requireWat2Wasm = Boolean(process.env.MAPLE_REQUIRE_WAT2WASM);
-
-  if (skip && requireWat2Wasm) {
-    throw new Error("wat2wasm is required but MAPLE_SKIP_WAT2WASM is set");
-  }
-  if (skip) {
-    return false;
-  }
-
-  try {
-    execFileSync("wat2wasm", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch (error) {
-    if (requireWat2Wasm) {
-      throw new Error("wat2wasm is required but unavailable", { cause: error });
-    }
-    return false;
-  }
-}
-
-const wat2wasmAvailable = probeWat2Wasm();
-
-export function hasWat2Wasm(): boolean {
-  return wat2wasmAvailable;
-}
-
-export function maybeTest(name: string, fn: () => void | Promise<void>): void {
-  if (wat2wasmAvailable) {
-    test(name, fn);
-  } else {
-    test.skip(`[needs wat2wasm] ${name}`, fn);
-  }
-}
 
 export function compile(
   src: string,

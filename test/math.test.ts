@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe } from "node:test";
+import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { encodeWasm } from "../src/ir/encode-wasm";
-import { compile, maybeTest } from "./helpers";
+import { compile } from "./helpers";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const MATH_MAPLE = join(__dirname, "../src/compiler/stdlib/math.maple");
@@ -24,7 +24,7 @@ async function loadMathWasm(): Promise<WebAssembly.Instance> {
 }
 
 describe("stdlib math.maple (Tier 1)", () => {
-  maybeTest("opcode-backed f32 helpers are exact at spot values", async () => {
+  test("opcode-backed f32 helpers are exact at spot values", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     assert.equal((e.sqrt as (x: number) => number)(4), 2);
@@ -37,14 +37,14 @@ describe("stdlib math.maple (Tier 1)", () => {
     assert.equal((e.copysign as (x: number, y: number) => number)(1, -2), -1);
   });
 
-  maybeTest("opcode-backed f64 mirrors", async () => {
+  test("opcode-backed f64 mirrors", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     assert.equal((e.sqrt_f64 as (x: number) => number)(16), 4);
     assert.equal((e.abs_f64 as (x: number) => number)(-2.5), 2.5);
   });
 
-  maybeTest("abs_i32 branchless edge (INT_MIN)", async () => {
+  test("abs_i32 branchless edge (INT_MIN)", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     const abs_i32 = e.abs_i32 as (x: number) => number;
@@ -55,7 +55,7 @@ describe("stdlib math.maple (Tier 1)", () => {
 });
 
 describe("stdlib math.maple (Tier 2 accuracy)", () => {
-  maybeTest("sin / cos / tan spot checks", async () => {
+  test("sin / cos / tan spot checks", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     const sin = e.sin as (x: number) => number;
@@ -79,7 +79,7 @@ describe("stdlib math.maple (Tier 2 accuracy)", () => {
     assertNearF(tan(PI * 0.25), 1, EPS_TAN);
   });
 
-  maybeTest("atan2 quadrant spots", async () => {
+  test("atan2 quadrant spots", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     const atan2 = e.atan2 as (y: number, x: number) => number;
@@ -92,7 +92,7 @@ describe("stdlib math.maple (Tier 2 accuracy)", () => {
     assertNearF(atan2(0, -1), PI, EPS_ATAN2);
   });
 
-  maybeTest("atan2 covers all four quadrants within 1e-3", async () => {
+  test("atan2 covers all four quadrants within 1e-3", async () => {
     const i = await loadMathWasm();
     const atan2 = i.exports.atan2 as (y: number, x: number) => number;
     for (const [y, x] of [
@@ -105,7 +105,7 @@ describe("stdlib math.maple (Tier 2 accuracy)", () => {
     }
   });
 
-  maybeTest("pow and fmod", async () => {
+  test("pow and fmod", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     const pow = e.pow as (b: number, exp: number) => number;
@@ -120,7 +120,7 @@ describe("stdlib math.maple (Tier 2 accuracy)", () => {
     assert.equal(fmod(-7.5, 2.0), -1.5);
   });
 
-  maybeTest("constants are plausible f32 values", async () => {
+  test("constants are plausible f32 values", async () => {
     const i = await loadMathWasm();
     const e = i.exports as Record<string, WebAssembly.ExportValue>;
     const PI = (e.PI as WebAssembly.Global).value as number;

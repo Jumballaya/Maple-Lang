@@ -9,6 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
+      # Require the dedicated WAT-vs-binary cross-check; every other test is tool-free.
       MAPLE_REQUIRE_WAT2WASM: "1"
     steps:
       - uses: actions/checkout@v4

@@ -4,7 +4,7 @@ import { describe, test } from "node:test";
 import type { BinOp, ConvOp, Expr, IrModule, IrType, Stmt, UnOp } from "../src/ir/ir";
 import { printWat } from "../src/ir/print-wat";
 import { validateModule } from "../src/ir/validate";
-import { maybeTest, runExport } from "./helpers";
+import { runExport } from "./helpers";
 import { constant, expressionModule, moduleWith, statementModule } from "./ir-fixtures";
 
 function printed(module: IrModule): string {
@@ -347,7 +347,7 @@ describe("IR WAT printer: naming, escaping, memory, and table shapes", () => {
 });
 
 describe("IR WAT printer: numeric fidelity", () => {
-  maybeTest("prints and executes all non-finite float spellings", () => {
+  test("prints and executes all non-finite float spellings", () => {
     const module = moduleWith({
       types: [
         { params: [], results: ["f32"] },
@@ -405,7 +405,7 @@ describe("IR WAT printer: numeric fidelity", () => {
     assert.equal(runExport(module, "neg_inf64"), Number.NEGATIVE_INFINITY);
   });
 
-  maybeTest("round-trips i64 max, f64 negative zero, and canonical unsigned extremes", () => {
+  test("round-trips i64 max, f64 negative zero, and canonical unsigned extremes", () => {
     const module = moduleWith({
       types: [
         { params: [], results: ["i64"] },

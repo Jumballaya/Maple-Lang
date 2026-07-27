@@ -1,14 +1,8 @@
-/**
- * Integration tests: compile Maple source all the way to WAT and verify
- * structural correctness (Level 1) and, when wat2wasm is available on PATH,
- * binary validity (Level 2).
- *
- * Level 1 – pure TypeScript, no external tools needed.
- * Level 2 – shells out to `wat2wasm`. Tests are skipped if the binary is absent.
- */
+/** Integration tests compile Maple source and validate emitted Wasm directly. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -19,7 +13,7 @@ import { encodeWasm } from "../src/ir/encode-wasm";
 import type { IrModule } from "../src/ir/ir";
 import { printWat } from "../src/ir/print-wat";
 import { Parser } from "../src/parser/Parser";
-import { compile, hasWat2Wasm, maybeTest, runExport, runMergedExport } from "./helpers";
+import { compile, runExport, runMergedExport } from "./helpers";
 import { moduleWith } from "./ir-fixtures";
 
 function encodedModule(module: IrModule): WebAssembly.Module {
@@ -56,9 +50,22 @@ function checkerMessages(source: string): string[] {
   return typeCheck(ast, meta).map((error) => error.message);
 }
 
-const wat2wasmAvailable = hasWat2Wasm();
+describe("cross-check tool gating", () => {
+  test("direct-encoder suites ignore the cross-check skip flag", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "test/math.test.ts"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MAPLE_REQUIRE_WAT2WASM: undefined,
+        MAPLE_SKIP_WAT2WASM: "1",
+        NODE_TEST_CONTEXT: undefined,
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.equal(result.status, 0, output);
+    assert.match(output, /skipped 0/);
+  });
 
-describe("wat2wasm test gating", () => {
   test("runExport merges fresh automatic memory with caller imports and honors overrides", () => {
     const module = moduleWith({
       types: [
@@ -123,42 +130,75 @@ describe("wat2wasm test gating", () => {
     assert.equal(memory.buffer.byteLength / 65_536, 2);
   });
 
-  maybeTest("runExport accepts and returns BigInt for i64 exports", () => {
+  test("runExport accepts and returns BigInt for i64 exports", () => {
     const wat = compile("export fn echo(value: i64): i64 { return value; }");
     assert.equal(runExport(wat, "echo", [123n]), 123n);
   });
 
-  maybeTest("runExport supports imported memory as an explicit option", () => {
+  test("runExport supports imported memory as an explicit option", () => {
     const wat = compile("export fn answer(): i32 { return 42; }", { importMemory: true });
     assert.equal(runExport(wat, "answer"), 42);
   });
 
-  test("math tests skip when wat2wasm execution is disabled", () => {
-    const result = spawnSync("npx", ["tsx", "--test", "test/math.test.ts"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        MAPLE_REQUIRE_WAT2WASM: undefined,
-        MAPLE_SKIP_WAT2WASM: "1",
-        NODE_TEST_CONTEXT: undefined,
+  test("cross-check tests skip when comparison is disabled", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--test", "test/ir-crosscheck.test.ts"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MAPLE_REQUIRE_WAT2WASM: undefined,
+          MAPLE_SKIP_WAT2WASM: "1",
+          NODE_TEST_CONTEXT: undefined,
+        },
       },
-    });
+    );
     const output = `${result.stdout}${result.stderr}`;
     assert.equal(result.status, 0, output);
     assert.match(output, /skip/i);
   });
 
-  test("required wat2wasm overrides disabled execution", () => {
-    const result = spawnSync("npx", ["tsx", "--test", "test/math.test.ts"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        MAPLE_REQUIRE_WAT2WASM: "1",
-        MAPLE_SKIP_WAT2WASM: "1",
-        NODE_TEST_CONTEXT: undefined,
+  test("required cross-check comparison overrides disabled execution", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--test", "test/ir-crosscheck.test.ts"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MAPLE_REQUIRE_WAT2WASM: "1",
+          MAPLE_SKIP_WAT2WASM: "1",
+          NODE_TEST_CONTEXT: undefined,
+        },
       },
-    });
+    );
     assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  });
+
+  test("cross-check tests skip when the comparison tool is absent", () => {
+    const emptyPath = mkdtempSync(join(tmpdir(), "maple-empty-path-"));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "--test", "test/ir-crosscheck.test.ts"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MAPLE_REQUIRE_WAT2WASM: undefined,
+            MAPLE_SKIP_WAT2WASM: undefined,
+            NODE_TEST_CONTEXT: undefined,
+            PATH: emptyPath,
+          },
+        },
+      );
+      const output = `${result.stdout}${result.stderr}`;
+      assert.equal(result.status, 0, output);
+      assert.match(output, /skipped [1-9]\d*/);
+    } finally {
+      rmSync(emptyPath, { recursive: true, force: true });
+    }
   });
 });
 
@@ -224,7 +264,7 @@ describe("host surface (WAT-structural)", () => {
 });
 
 describe("Integration: behavioralized structure coverage", () => {
-  maybeTest("declared functions compose at runtime", () => {
+  test("declared functions compose at runtime", () => {
     const wat = checkedCompile(`
       fn alpha(): i32 { return 1; }
       fn beta(): i32 { return 2; }
@@ -233,7 +273,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "gamma"), 3);
   });
 
-  maybeTest("globals and multi-function control flow execute", () => {
+  test("globals and multi-function control flow execute", () => {
     const wat = checkedCompile(`
       const MAX: i32 = 100;
       let total: i32 = 0;
@@ -254,7 +294,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "run", [5]), 95);
   });
 
-  maybeTest("for break and continue preserve update semantics", () => {
+  test("for break and continue preserve update semantics", () => {
     const wat = checkedCompile(`
       fn sum(n: i32): i32 {
         let result: i32 = 0;
@@ -270,7 +310,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "run", [10]), 18);
   });
 
-  maybeTest("switch dispatch selects cases and the default", () => {
+  test("switch dispatch selects cases and the default", () => {
     const wat = checkedCompile(`
       export fn classify(x: i32): i32 {
         switch (x) {
@@ -287,7 +327,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "classify", [9]), 99);
   });
 
-  maybeTest("binary operator families produce observable results", () => {
+  test("binary operator families produce observable results", () => {
     const wat = checkedCompile(`
       export fn arithmetic(a: i32, b: i32): i32 { return ((a + b) * (a - b)) / 2 % 7; }
       export fn bits(a: i32, b: i32): i32 { return (a & b) | (a ^ b); }
@@ -302,7 +342,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "comparisons", [1, 2]), 1);
   });
 
-  maybeTest("postfix and compound assignments mutate the value", () => {
+  test("postfix and compound assignments mutate the value", () => {
     const wat = checkedCompile(`
       export fn mutations(seed: i32): i32 {
         let value: i32 = seed;
@@ -324,7 +364,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "mutations", [10]), 4);
   });
 
-  maybeTest("struct parameters and member access compose", () => {
+  test("struct parameters and member access compose", () => {
     const wat = checkedCompile(`
       struct Point { x: i32, y: i32 }
       fn manhattan(p: Point, q: Point): i32 {
@@ -339,7 +379,7 @@ describe("Integration: behavioralized structure coverage", () => {
     assert.equal(runExport(wat, "run"), 7);
   });
 
-  maybeTest("nested else-if chains choose the matching branch", () => {
+  test("nested else-if chains choose the matching branch", () => {
     const wat = checkedCompile(`
       export fn grade(score: i32): i32 {
         if (score >= 90) {
@@ -360,15 +400,15 @@ describe("Integration: behavioralized structure coverage", () => {
   });
 });
 
-// ─── Level 2: wat2wasm binary validation ────────────────────────────────────
+// ─── Level 2: direct binary validation ────────────────────────────────────
 
-describe("Integration: wat2wasm validation", () => {
-  maybeTest("simple function passes wat2wasm", () => {
+describe("Integration: binary validation", () => {
+  test("simple function encodes to valid Wasm", () => {
     const wat = compile("fn add(a: i32, b: i32): i32 { return a + b; }");
     assert(encodedModule(wat));
   });
 
-  maybeTest("for loop passes wat2wasm", () => {
+  test("for loop encodes to valid Wasm", () => {
     const wat = compile(`
       fn sum(n: i32): i32 {
         let total: i32 = 0;
@@ -379,7 +419,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("switch statement passes wat2wasm", () => {
+  test("switch statement encodes to valid Wasm", () => {
     const wat = compile(`
       fn classify(x: i32): i32 {
         switch (x) {
@@ -393,7 +433,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("switch default with break stays in valid label scope", () => {
+  test("switch default with break stays in valid label scope", () => {
     const wat = compile(`
       fn f(x: i32): void {
         switch (x) {
@@ -405,7 +445,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("nested f32 return if emits wat2wasm-valid output", () => {
+  test("nested f32 return if emits valid Wasm output", () => {
     const wat = compile(`
       fn f(x: i32): f32 {
         if (x > 0) {
@@ -418,7 +458,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("void-returning if both branches returns remains wat2wasm-valid", () => {
+  test("void-returning if both branches returns remains valid Wasm", () => {
     const wat = compile(`
       fn f(x: i32): void {
         if (x > 0) { return; } else { return; }
@@ -427,7 +467,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("struct param and member access passes wat2wasm", () => {
+  test("struct param and member access encodes to valid Wasm", () => {
     const wat = compile(`
       struct Vec2 {
         x: i32,
@@ -444,7 +484,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("full-featured program passes wat2wasm", () => {
+  test("full-featured program encodes to valid Wasm", () => {
     const wat = compile(`
       const LIMIT: i32 = 100;
       let acc: i32 = 0;
@@ -472,7 +512,7 @@ describe("Integration: wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("void function discarding single-return call validates", () => {
+  test("void function discarding single-return call validates", () => {
     const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn _start(): void {
@@ -485,8 +525,8 @@ describe("Integration: wat2wasm validation", () => {
 
 // ─── Memory-Backed Local Structs — Integration ─────────────────────────
 
-describe("Integration: local struct wat2wasm validation", () => {
-  maybeTest("local struct — create, read field, return passes wat2wasm", () => {
+describe("Integration: local struct binary validation", () => {
+  test("local struct — create, read field, return encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): i32 {
@@ -497,7 +537,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("local struct with early return passes wat2wasm", () => {
+  test("local struct with early return encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(cond: i32): i32 {
@@ -511,7 +551,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("two local structs — read from both passes wat2wasm", () => {
+  test("two local structs — read from both encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): i32 {
@@ -523,7 +563,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("write-then-read local struct passes wat2wasm", () => {
+  test("write-then-read local struct encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): i32 {
@@ -535,7 +575,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("loop with struct field read/write passes wat2wasm", () => {
+  test("loop with struct field read/write encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): i32 {
@@ -550,7 +590,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("method call on local struct passes wat2wasm", () => {
+  test("method call on local struct encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn Point.sum(self)(): i32 {
@@ -564,7 +604,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("method with extra arg on local struct passes wat2wasm", () => {
+  test("method with extra arg on local struct encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn Point.scale(self)(factor: i32): i32 {
@@ -578,7 +618,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("f32 struct local — read f32 member passes wat2wasm", () => {
+  test("f32 struct local — read f32 member encodes to valid Wasm", () => {
     const wat = compile(`
       struct Vec2 { x: f32, y: f32 }
       fn test(): f32 {
@@ -589,7 +629,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("mixed i32/f32 struct local passes wat2wasm", () => {
+  test("mixed i32/f32 struct local encodes to valid Wasm", () => {
     const wat = compile(`
       struct Mixed { a: i32, b: f32 }
       fn test(): i32 {
@@ -600,7 +640,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("void function with local struct passes wat2wasm", () => {
+  test("void function with local struct encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn test(): void {
@@ -611,7 +651,7 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("nested function calls — both with local structs passes wat2wasm", () => {
+  test("nested function calls — both with local structs encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn inner(): i32 {
@@ -626,10 +666,8 @@ describe("Integration: local struct wat2wasm validation", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest(
-    "P75: function without local struct calling function with local struct passes wat2wasm",
-    () => {
-      const wat = compile(`
+  test("P75: function without local struct calling function with local struct encodes to valid Wasm", () => {
+    const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn with_struct(): i32 {
         let p: Point = { x = 5, y = 6 };
@@ -639,11 +677,10 @@ describe("Integration: local struct wat2wasm validation", () => {
         return with_struct() + 1;
       }
     `);
-      assert(encodedModule(wat));
-    },
-  );
+    assert(encodedModule(wat));
+  });
 
-  maybeTest("existing struct param and member access still passes wat2wasm", () => {
+  test("existing struct param and member access still encodes to valid Wasm", () => {
     const wat = compile(`
       struct Vec2 { x: i32, y: i32 }
       fn dot(v: Vec2, u: Vec2): i32 {
@@ -659,7 +696,7 @@ describe("Integration: local struct wat2wasm validation", () => {
 });
 
 describe("Integration: Struct literal expression values", () => {
-  maybeTest("local struct with binary expression fields passes wat2wasm", () => {
+  test("local struct with binary expression fields encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn run(a: i32, b: i32): i32 {
@@ -670,7 +707,7 @@ describe("Integration: Struct literal expression values", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("local struct with function-call field passes wat2wasm", () => {
+  test("local struct with function-call field encodes to valid Wasm", () => {
     const wat = compile(`
       struct Point { x: i32, y: i32 }
       fn add(a: i32, b: i32): i32 { return a + b; }
@@ -682,7 +719,7 @@ describe("Integration: Struct literal expression values", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("local struct with cast field passes wat2wasm", () => {
+  test("local struct with cast field encodes to valid Wasm", () => {
     const wat = compile(`
       struct Vec2 { x: f32, y: f32 }
       fn run(n: i32): f32 {
@@ -693,7 +730,7 @@ describe("Integration: Struct literal expression values", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("global struct with expression field passes wat2wasm", () => {
+  test("global struct with expression field encodes to valid Wasm", () => {
     const wat = compile(`
       let offset: i32 = 12;
       struct Point { x: i32, y: i32 }
@@ -703,7 +740,7 @@ describe("Integration: Struct literal expression values", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("mixed literal-only and expression global structs pass wat2wasm", () => {
+  test("mixed literal-only and expression global structs encode to valid Wasm", () => {
     const wat = compile(`
       let offset: i32 = 7;
       struct Point { x: i32, y: i32 }
@@ -716,7 +753,7 @@ describe("Integration: Struct literal expression values", () => {
 });
 
 describe("Integration: Inferred function call types", () => {
-  maybeTest("inferred i32 from function call compiles and passes wat2wasm", () => {
+  test("inferred i32 from function call compiles and encodes to valid Wasm", () => {
     const src = `
       fn add(a: i32, b: i32): i32 { return a + b; }
       export fn _start(): i32 {
@@ -728,7 +765,7 @@ describe("Integration: Inferred function call types", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("inferred struct method call compiles and passes wat2wasm", () => {
+  test("inferred struct method call compiles and encodes to valid Wasm", () => {
     const src = `
       struct Pair { left: i32, right: i32, }
       fn Pair.sum(p)(): i32 { return p.left + p.right; }
@@ -742,7 +779,7 @@ describe("Integration: Inferred function call types", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("inferred f32 from function call compiles and passes wat2wasm", () => {
+  test("inferred f32 from function call compiles and encodes to valid Wasm", () => {
     const src = `
       fn half(x: f32): f32 { return x; }
       export fn _start(): f32 {
@@ -754,7 +791,7 @@ describe("Integration: Inferred function call types", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("demo 12_math compiles and passes wat2wasm", () => {
+  test("demo 12_math compiles and encodes to valid Wasm", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(dir, "../demo/12_math/main.maple"), "utf8");
     const wat = compile(src);
@@ -768,7 +805,7 @@ describe("Integration: Inferred function call types", () => {
 // re-enters with the same loop counter.
 
 describe("for-loop continue runs the update clause", () => {
-  maybeTest("for + continue: skips body but increments", () => {
+  test("for + continue: skips body but increments", () => {
     const wat = checkedCompile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
@@ -785,7 +822,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run", [0]), 0);
   });
 
-  maybeTest("for + multiple continues in same body", () => {
+  test("for + multiple continues in same body", () => {
     const wat = compile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
@@ -801,7 +838,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run", [10]), 38);
   });
 
-  maybeTest("continue inside switch inside for", () => {
+  test("continue inside switch inside for", () => {
     const wat = compile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
@@ -819,7 +856,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run", [6]), 22);
   });
 
-  maybeTest("continue inside nested for binds to innermost loop", () => {
+  test("continue inside nested for binds to innermost loop", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -836,7 +873,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run"), 6);
   });
 
-  maybeTest("continue in inner for inside outer while binds to inner for", () => {
+  test("continue in inner for inside outer while binds to inner for", () => {
     // Inverse nesting from the next test. Inner continue must run the inner
     // for's update, not jump back to the outer while's loop top.
     const wat = compile(`
@@ -858,7 +895,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run"), 6);
   });
 
-  maybeTest("continue in nested while binds to inner while", () => {
+  test("continue in nested while binds to inner while", () => {
     const wat = compile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -879,7 +916,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run"), 6);
   });
 
-  maybeTest("continue in inner while inside outer for runs the for update", () => {
+  test("continue in inner while inside outer for runs the for update", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -898,7 +935,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run"), 8);
   });
 
-  maybeTest("break and continue coexist in same for", () => {
+  test("break and continue coexist in same for", () => {
     const wat = compile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
@@ -914,7 +951,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run", [10]), 3);
   });
 
-  maybeTest("continue in while re-checks condition", () => {
+  test("continue in while re-checks condition", () => {
     const wat = compile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -931,7 +968,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run"), 50);
   });
 
-  maybeTest("for without continue still works", () => {
+  test("for without continue still works", () => {
     const wat = compile(`
       export fn run(n: i32): i32 {
         let sum: i32 = 0;
@@ -944,7 +981,7 @@ describe("for-loop continue runs the update clause", () => {
     assert.equal(runExport(wat, "run", [5]), 10); // 0+1+2+3+4
   });
 
-  maybeTest("for with continue triggered every iteration terminates", () => {
+  test("for with continue triggered every iteration terminates", () => {
     // If continue ever skips the for-update, this hangs instead of returning 0.
     const wat = compile(`
       export fn run(n: i32): i32 {
@@ -968,7 +1005,7 @@ describe("for-loop continue runs the update clause", () => {
 // the right opcode" from "actually short-circuits."
 
 describe("&& and || short-circuit", () => {
-  maybeTest("&& with false LHS does not evaluate RHS", () => {
+  test("&& with false LHS does not evaluate RHS", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -980,7 +1017,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "run"), 0);
   });
 
-  maybeTest("&& with true LHS does evaluate RHS", () => {
+  test("&& with true LHS does evaluate RHS", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -992,7 +1029,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("|| with true LHS does not evaluate RHS", () => {
+  test("|| with true LHS does not evaluate RHS", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -1004,7 +1041,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "run"), 0);
   });
 
-  maybeTest("|| with false LHS does evaluate RHS", () => {
+  test("|| with false LHS does evaluate RHS", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -1016,7 +1053,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("&& and || still produce correct boolean results", () => {
+  test("&& and || still produce correct boolean results", () => {
     const wat = compile(`
       export fn and_ff(): i32 { let r: i32 = 0 && 0; return r; }
       export fn and_ft(): i32 { let r: i32 = 0 && 1; return r; }
@@ -1037,7 +1074,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "or_tt"), 1);
   });
 
-  maybeTest("chained && short-circuits at first false", () => {
+  test("chained && short-circuits at first false", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -1050,7 +1087,7 @@ describe("&& and || short-circuit", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("chained || short-circuits at first true", () => {
+  test("chained || short-circuits at first true", () => {
     const wat = compile(`
       let count: i32 = 0;
       fn tick(): i32 { count = count + 1; return 1; }
@@ -1071,7 +1108,7 @@ describe("&& and || short-circuit", () => {
 // language level.
 
 describe("unsigned int <-> float casts", () => {
-  maybeTest("u32 → f32 → u32 round-trips for values above 2^31", () => {
+  test("u32 → f32 → u32 round-trips for values above 2^31", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: u32 = 3000000000;
@@ -1084,7 +1121,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("u32 → f64 → u32 round-trips for values above 2^31", () => {
+  test("u32 → f64 → u32 round-trips for values above 2^31", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: u32 = 3500000000;
@@ -1097,7 +1134,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("u32 → f32 preserves values above the signed range", () => {
+  test("u32 → f32 preserves values above the signed range", () => {
     const wat = checkedCompile(`
       export fn run(): f32 {
         let x: u32 = 3000000000;
@@ -1107,7 +1144,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), 3_000_000_000);
   });
 
-  maybeTest("f32 → u32 preserves values above the signed range", () => {
+  test("f32 → u32 preserves values above the signed range", () => {
     const wat = checkedCompile(`
       export fn run(): u32 {
         let f: f32 = 3000000000.0;
@@ -1117,7 +1154,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), -1_294_967_296);
   });
 
-  maybeTest("signed i32 → f32 preserves negative values", () => {
+  test("signed i32 → f32 preserves negative values", () => {
     const wat = checkedCompile(`
       export fn run(): f32 {
         let x: i32 = 0 - 5;
@@ -1127,7 +1164,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), -5);
   });
 
-  maybeTest("signed i32 → f32 → i32 preserves negative values", () => {
+  test("signed i32 → f32 → i32 preserves negative values", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 0 - 42;
@@ -1138,7 +1175,7 @@ describe("unsigned int <-> float casts", () => {
     assert.equal(runExport(wat, "run"), -42);
   });
 
-  maybeTest("u8 → f32 preserves its unsigned value", () => {
+  test("u8 → f32 preserves its unsigned value", () => {
     const wat = checkedCompile(`
       export fn run(): f32 {
         let x: u8 = 200;
@@ -1153,7 +1190,7 @@ describe("unsigned int <-> float casts", () => {
 // A wrong drop count makes these modules fail validation or corrupt results.
 
 describe("unused call results are dropped at statement position", () => {
-  maybeTest("void function discarding i32-returning call instantiates", () => {
+  test("void function discarding i32-returning call instantiates", () => {
     const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn _start(): void {
@@ -1163,7 +1200,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("void function discarding i64-returning call instantiates", () => {
+  test("void function discarding i64-returning call instantiates", () => {
     const wat = compile(`
       fn produce(): i64 { return 42 as i64; }
       export fn _start(): void {
@@ -1173,7 +1210,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("void function discarding f32-returning call instantiates", () => {
+  test("void function discarding f32-returning call instantiates", () => {
     const wat = compile(`
       fn produce(): f32 { return 1.5; }
       export fn _start(): void {
@@ -1183,7 +1220,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("void function discarding f64-returning call instantiates", () => {
+  test("void function discarding f64-returning call instantiates", () => {
     const wat = compile(`
       fn produce(): f64 { return 1.5 as f64; }
       export fn _start(): void {
@@ -1193,7 +1230,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("multiple discarded calls in sequence don't leak stack", () => {
+  test("multiple discarded calls in sequence don't leak stack", () => {
     const wat = compile(`
       fn produce(): i32 { return 42; }
       export fn _start(): void {
@@ -1205,7 +1242,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("discarded call in value-returning fn doesn't corrupt result", () => {
+  test("discarded call in value-returning fn doesn't corrupt result", () => {
     const wat = compile(`
       fn produce(): i32 { return 999; }
       export fn run(): i32 {
@@ -1217,7 +1254,7 @@ describe("unused call results are dropped at statement position", () => {
     assert.equal(runExport(wat, "run"), 7);
   });
 
-  maybeTest("discarded multi-return call instantiates and runs", () => {
+  test("discarded multi-return call instantiates and runs", () => {
     const wat = checkedCompile(`
       fn pair(): (i32, i32) { return 1, 2; }
       export fn _start(): void {
@@ -1227,7 +1264,7 @@ describe("unused call results are dropped at statement position", () => {
     runExport(wat, "_start");
   });
 
-  maybeTest("call result that is assigned does NOT get extra drop", () => {
+  test("call result that is assigned does NOT get extra drop", () => {
     const wat = checkedCompile(`
       fn produce(): i32 { return 42; }
       export fn run(): i32 {
@@ -1239,7 +1276,7 @@ describe("unused call results are dropped at statement position", () => {
     assert.equal(runExport(wat, "run"), 42);
   });
 
-  maybeTest("void-returning calls do not introduce a stack value", () => {
+  test("void-returning calls do not introduce a stack value", () => {
     const wat = checkedCompile(`
       fn consume(): void {}
       export fn run(): i32 {
@@ -1250,7 +1287,7 @@ describe("unused call results are dropped at statement position", () => {
     assert.equal(runExport(wat, "run"), 7);
   });
 
-  maybeTest("discarded indirect-call results leave the stack valid", async () => {
+  test("discarded indirect-call results leave the stack valid", async () => {
     const source = `
       fn add(a: i32, b: i32): i32 { return a + b; }
       export fn run(): i32 {
@@ -1270,7 +1307,7 @@ describe("unused call results are dropped at statement position", () => {
 // step sizes.
 
 describe("for-loop non-trivial bounds", () => {
-  maybeTest("counts up from 5", () => {
+  test("counts up from 5", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -1283,7 +1320,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 5 + 6 + 7 + 8 + 9);
   });
 
-  maybeTest("counts down from 10 to 0 exclusive", () => {
+  test("counts down from 10 to 0 exclusive", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -1296,7 +1333,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 55);
   });
 
-  maybeTest("counts down inclusive to zero", () => {
+  test("counts down inclusive to zero", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -1309,7 +1346,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 15);
   });
 
-  maybeTest("steps by 2", () => {
+  test("steps by 2", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -1322,7 +1359,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 5);
   });
 
-  maybeTest("init from parameter expression", () => {
+  test("init from parameter expression", () => {
     const wat = compile(`
       export fn run(start: i32, count: i32): i32 {
         let total: i32 = 0;
@@ -1337,7 +1374,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run", [100, 0]), 0);
   });
 
-  maybeTest("update is an expression call to itself", () => {
+  test("update is an expression call to itself", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i32 = 0;
@@ -1351,7 +1388,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 7);
   });
 
-  maybeTest("zero iterations when init violates condition", () => {
+  test("zero iterations when init violates condition", () => {
     const wat = compile(`
       export fn run(): i32 {
         let touched: i32 = 0;
@@ -1364,7 +1401,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 0);
   });
 
-  maybeTest("break exits at exact iteration", () => {
+  test("break exits at exact iteration", () => {
     const wat = compile(`
       export fn run(): i32 {
         let last: i32 = -1;
@@ -1378,7 +1415,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 14);
   });
 
-  maybeTest("nested for with distinct bounds runs full cartesian", () => {
+  test("nested for with distinct bounds runs full cartesian", () => {
     const wat = compile(`
       export fn run(): i32 {
         let pairs: i32 = 0;
@@ -1393,7 +1430,7 @@ describe("for-loop non-trivial bounds", () => {
     assert.equal(runExport(wat, "run"), 9);
   });
 
-  maybeTest("i64 counter from non-zero start", () => {
+  test("i64 counter from non-zero start", () => {
     const wat = compile(`
       export fn run(): i32 {
         let total: i64 = 0 as i64;
@@ -1410,7 +1447,7 @@ describe("for-loop non-trivial bounds", () => {
 // ─── while-loop conditions and break placement ─────────────────────────────
 
 describe("while-loop variations", () => {
-  maybeTest("condition involving function call re-evaluated each iteration", () => {
+  test("condition involving function call re-evaluated each iteration", () => {
     const wat = compile(`
       fn under(n: i32, limit: i32): i32 {
         if (n < limit) { return 1; }
@@ -1428,7 +1465,7 @@ describe("while-loop variations", () => {
     assert.equal(runExport(wat, "run", [0]), 0);
   });
 
-  maybeTest("break mid-loop returns the partial count", () => {
+  test("break mid-loop returns the partial count", () => {
     const wat = compile(`
       export fn run(): i32 {
         let i: i32 = 0;
@@ -1442,7 +1479,7 @@ describe("while-loop variations", () => {
     assert.equal(runExport(wat, "run"), 13);
   });
 
-  maybeTest("condition uses && — both subconditions checked", () => {
+  test("condition uses && — both subconditions checked", () => {
     const wat = compile(`
       export fn run(a: i32, b: i32): i32 {
         let n: i32 = 0;
@@ -1461,7 +1498,7 @@ describe("while-loop variations", () => {
 // ─── recursion ─────────────────────────────────────────────────────────────
 
 describe("recursion", () => {
-  maybeTest("factorial via recursion", () => {
+  test("factorial via recursion", () => {
     const wat = compile(`
       fn fact(n: i32): i32 {
         if (n <= 1) { return 1; }
@@ -1475,7 +1512,7 @@ describe("recursion", () => {
     assert.equal(runExport(wat, "run", [10]), 3628800);
   });
 
-  maybeTest("fibonacci via recursion", () => {
+  test("fibonacci via recursion", () => {
     const wat = compile(`
       fn fib(n: i32): i32 {
         if (n < 2) { return n; }
@@ -1488,7 +1525,7 @@ describe("recursion", () => {
     assert.equal(runExport(wat, "run", [10]), 55);
   });
 
-  maybeTest("mutual recursion: even/odd", () => {
+  test("mutual recursion: even/odd", () => {
     const wat = compile(`
       fn is_even(n: i32): i32 {
         if (n == 0) { return 1; }
@@ -1506,7 +1543,7 @@ describe("recursion", () => {
     assert.equal(runExport(wat, "run", [11]), 0);
   });
 
-  maybeTest("accumulator-passing recursion (tail style)", () => {
+  test("accumulator-passing recursion (tail style)", () => {
     const wat = compile(`
       fn sum_acc(n: i32, acc: i32): i32 {
         if (n == 0) { return acc; }
@@ -1522,7 +1559,7 @@ describe("recursion", () => {
 // ─── arithmetic edge cases ─────────────────────────────────────────────────
 
 describe("arithmetic edge cases", () => {
-  maybeTest("signed integer division with negative dividend", () => {
+  test("signed integer division with negative dividend", () => {
     const wat = compile(`
       export fn run(a: i32, b: i32): i32 { return a / b; }
     `);
@@ -1531,7 +1568,7 @@ describe("arithmetic edge cases", () => {
     assert.equal(runExport(wat, "run", [-10, -3]), 3);
   });
 
-  maybeTest("signed modulo preserves sign of dividend", () => {
+  test("signed modulo preserves sign of dividend", () => {
     const wat = compile(`
       export fn run(a: i32, b: i32): i32 { return a % b; }
     `);
@@ -1539,14 +1576,14 @@ describe("arithmetic edge cases", () => {
     assert.equal(runExport(wat, "run", [10, -3]), 1);
   });
 
-  maybeTest("i32 wraps on overflow", () => {
+  test("i32 wraps on overflow", () => {
     const wat = compile(`
       export fn run(): i32 { return 2147483647 + 1; }
     `);
     assert.equal(runExport(wat, "run"), -2147483648);
   });
 
-  maybeTest("i64 arithmetic above i32 range", () => {
+  test("i64 arithmetic above i32 range", () => {
     const wat = compile(`
       export fn run(a: i32, b: i32): i32 {
         let x: i64 = a as i64;
@@ -1560,7 +1597,7 @@ describe("arithmetic edge cases", () => {
     assert.equal(runExport(wat, "run", [100000, 100000]), 1410065408);
   });
 
-  maybeTest("float division and float mod (custom lowering)", () => {
+  test("float division and float mod (custom lowering)", () => {
     const wat = compile(`
       export fn divf(a: f32, b: f32): f32 { return a / b; }
       export fn modf(a: f32, b: f32): f32 { return a % b; }
@@ -1571,7 +1608,7 @@ describe("arithmetic edge cases", () => {
     assert(Math.abs(modResult - 1.0) < 1e-6);
   });
 
-  maybeTest("comparison ops produce 0/1 i32", () => {
+  test("comparison ops produce 0/1 i32", () => {
     const wat = compile(`
       export fn lt(a: i32, b: i32): i32 {
         if (a < b) { return 1; }
@@ -1592,7 +1629,7 @@ describe("arithmetic edge cases", () => {
   // Compound op on a wider type with a narrower literal. The literal `5` is
   // i32 by default; the emitter currently throws "incompatible binary operand
   // lanes i64 vs i32".
-  maybeTest("i64 += integer literal compiles", () => {
+  test("i64 += integer literal compiles", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i64 = 1 as i64;
@@ -1607,7 +1644,7 @@ describe("arithmetic edge cases", () => {
 // ─── bitwise and shift ops ─────────────────────────────────────────────────
 
 describe("bitwise and shift", () => {
-  maybeTest("AND/OR/XOR with concrete bit patterns", () => {
+  test("AND/OR/XOR with concrete bit patterns", () => {
     const wat = compile(`
       export fn band(a: i32, b: i32): i32 { return a & b; }
       export fn bor(a: i32, b: i32): i32 { return a | b; }
@@ -1618,7 +1655,7 @@ describe("bitwise and shift", () => {
     assert.equal(runExport(wat, "bxor", [0b1100, 0b1010]), 0b0110);
   });
 
-  maybeTest("left shift", () => {
+  test("left shift", () => {
     const wat = compile(`
       export fn shl(a: i32, b: i32): i32 { return a << b; }
     `);
@@ -1627,7 +1664,7 @@ describe("bitwise and shift", () => {
     assert.equal(runExport(wat, "shl", [3, 4]), 48);
   });
 
-  maybeTest("signed right shift preserves sign", () => {
+  test("signed right shift preserves sign", () => {
     const wat = compile(`
       export fn shr(a: i32, b: i32): i32 { return a >> b; }
     `);
@@ -1635,7 +1672,7 @@ describe("bitwise and shift", () => {
     assert.equal(runExport(wat, "shr", [16, 2]), 4);
   });
 
-  maybeTest("unsigned shift ignores a signed count and remains unsigned", () => {
+  test("unsigned shift ignores a signed count and remains unsigned", () => {
     const wat = checkedCompile(`
       export fn run(): i32 {
         return ((4294967295 as u32) >> 1) == 2147483647;
@@ -1646,14 +1683,14 @@ describe("bitwise and shift", () => {
     assert.equal(runExport(wat, "adopted", [4294967294, 1]), 0);
   });
 
-  maybeTest("unary minus on unsigned wraps modulo the lane width", () => {
+  test("unary minus on unsigned wraps modulo the lane width", () => {
     const wat = compile(`
       export fn run(): i32 { return -(1 as u32) == 4294967295; }
     `);
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("XOR with -1 flips all bits", () => {
+  test("XOR with -1 flips all bits", () => {
     const wat = compile(`
       export fn run(a: i32): i32 { return a ^ (0 - 1); }
     `);
@@ -1666,7 +1703,7 @@ describe("bitwise and shift", () => {
 // ─── compound assignment operators ─────────────────────────────────────────
 
 describe("compound assignments", () => {
-  maybeTest("+= -= *= /= %= on local", () => {
+  test("+= -= *= /= %= on local", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 100;
@@ -1681,7 +1718,7 @@ describe("compound assignments", () => {
     assert.equal(runExport(wat, "run"), 7);
   });
 
-  maybeTest("+= with expression rhs", () => {
+  test("+= with expression rhs", () => {
     const wat = compile(`
       export fn run(n: i32): i32 {
         let total: i32 = 0;
@@ -1695,7 +1732,7 @@ describe("compound assignments", () => {
     assert.equal(runExport(wat, "run", [5]), 30);
   });
 
-  maybeTest("postfix ++ and -- as statement", () => {
+  test("postfix ++ and -- as statement", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 10;
@@ -1768,7 +1805,7 @@ describe("compound assignments", () => {
 // ─── struct field access on offsets > 0 ────────────────────────────────────
 
 describe("structs", () => {
-  maybeTest("read fields at every offset", () => {
+  test("read fields at every offset", () => {
     const wat = compile(`
       struct Quad { a: i32, b: i32, c: i32, d: i32 }
       export fn run(): i32 {
@@ -1780,7 +1817,7 @@ describe("structs", () => {
     assert.equal(runExport(wat, "run"), 20);
   });
 
-  maybeTest("write field at non-first offset preserves others", () => {
+  test("write field at non-first offset preserves others", () => {
     const wat = compile(`
       struct Triple { x: i32, y: i32, z: i32 }
       export fn run(): i32 {
@@ -1793,7 +1830,7 @@ describe("structs", () => {
     assert.equal(runExport(wat, "run"), 1000 + 9900 + 3);
   });
 
-  maybeTest("struct with i64 field reads back correctly", () => {
+  test("struct with i64 field reads back correctly", () => {
     const wat = compile(`
       struct Big { tag: i32, big: i64 }
       export fn run(): i32 {
@@ -1804,7 +1841,7 @@ describe("structs", () => {
     assert.equal(runExport(wat, "run"), 1000007);
   });
 
-  maybeTest("struct with f32 fields", () => {
+  test("struct with f32 fields", () => {
     const wat = compile(`
       struct V { x: f32, y: f32 }
       export fn run(): i32 {
@@ -1816,7 +1853,7 @@ describe("structs", () => {
     assert.equal(runExport(wat, "run"), 25);
   });
 
-  maybeTest("aligned mixed-width structs remain independent", () => {
+  test("aligned mixed-width structs remain independent", () => {
     const wat = checkedCompile(`
       struct M { a: u8, b: i32 }
       export fn run(): i32 {
@@ -1833,7 +1870,7 @@ describe("structs", () => {
   // Struct equality silently does pointer comparison instead of field-wise
   // compare. Either the typechecker should reject it, or it should do the
   // expected structural comparison.
-  maybeTest("struct == struct compares fields (or is rejected)", () => {
+  test("struct == struct compares fields (or is rejected)", () => {
     const wat = compile(`
       struct P { x: i32, y: i32 }
       export fn run(): i32 {
@@ -1856,7 +1893,7 @@ describe("structs", () => {
   });
 
   // An empty (marker) struct can be declared, instantiated, and passed back.
-  maybeTest("empty struct can be instantiated and used as a marker type", () => {
+  test("empty struct can be instantiated and used as a marker type", () => {
     const wat = compile(`
       struct Marker {}
       fn make(): Marker { let m: Marker = {}; return m; }
@@ -1905,7 +1942,7 @@ describe("structs", () => {
 
   // A struct field of fn-type should work — same as a let binding of fn-type
   // does today.
-  maybeTest("struct field of fn-type can be called via .field()", () => {
+  test("struct field of fn-type can be called via .field()", () => {
     const wat = compile(`
       struct Handler { cb: fn(i32):i32 }
       fn dbl(x: i32): i32 { return x * 2; }
@@ -1919,7 +1956,7 @@ describe("structs", () => {
 
   // A global struct literal containing a string field fails with
   // "unsupported type: string" during emit.
-  maybeTest("global struct with a string field compiles", () => {
+  test("global struct with a string field compiles", () => {
     const wat = compile(`
       struct M { tag: i32, msg: string }
       let g: M = { tag = 1, msg = "hello" };
@@ -1929,7 +1966,7 @@ describe("structs", () => {
   });
 
   // Member access on a function call (`make().x`) avoids a throwaway let.
-  maybeTest("member access chained after a function call works", () => {
+  test("member access chained after a function call works", () => {
     const wat = compile(`
       struct P { x: i32 }
       fn make(): P { let p: P = { x = 42 }; return p; }
@@ -1942,7 +1979,7 @@ describe("structs", () => {
 // ─── array operations driven by loops ──────────────────────────────────────
 
 describe("array operations", () => {
-  maybeTest("write all elements via loop, read back via loop", () => {
+  test("write all elements via loop, read back via loop", () => {
     const wat = compile(`
       export fn run(): i32 {
         let arr: i32[] = [0, 0, 0, 0, 0];
@@ -1960,7 +1997,7 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run"), 30);
   });
 
-  maybeTest("find max of array", () => {
+  test("find max of array", () => {
     const wat = compile(`
       export fn run(): i32 {
         let arr: i32[] = [3, 7, 1, 9, 4, 6];
@@ -1974,7 +2011,7 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run"), 9);
   });
 
-  maybeTest("swap two elements via temp", () => {
+  test("swap two elements via temp", () => {
     const wat = compile(`
       export fn run(): i32 {
         let arr: i32[] = [10, 20, 30];
@@ -1988,7 +2025,7 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run"), 3210);
   });
 
-  maybeTest("array index from function parameter", () => {
+  test("array index from function parameter", () => {
     const wat = compile(`
       export fn run(i: i32): i32 {
         let arr: i32[] = [11, 22, 33, 44, 55];
@@ -2000,7 +2037,7 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run", [4]), 55);
   });
 
-  maybeTest("i64 array elements beyond 2^53 round-trip exactly", () => {
+  test("i64 array elements beyond 2^53 round-trip exactly", () => {
     const wat = compile(`
       export fn run(): i64 {
         let values: i64[] = [9007199254740993];
@@ -2011,7 +2048,7 @@ describe("array operations", () => {
   });
 
   // Arrays of bool / string / fn-ref are natural extensions of i32[]/f32[].
-  maybeTest("bool[] is a supported array type", () => {
+  test("bool[] is a supported array type", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: bool[] = [true, false, true];
@@ -2022,7 +2059,7 @@ describe("array operations", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("string[] is a supported array type", () => {
+  test("string[] is a supported array type", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: string[] = ["foo", "bar"];
@@ -2045,7 +2082,7 @@ describe("array operations", () => {
   });
 
   // `.len` works for strings; arrays should expose the same thing.
-  maybeTest("arrays have a .len property", () => {
+  test("arrays have a .len property", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: i32[] = [10, 20, 30, 40];
@@ -2092,7 +2129,7 @@ describe("array operations", () => {
 
   // Out-of-bounds and negative indices silently read adjacent memory today.
   // A safe implementation should trap or surface the issue.
-  maybeTest("reading past the end of an array traps or returns a known value", () => {
+  test("reading past the end of an array traps or returns a known value", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: i32[] = [1, 2, 3];
@@ -2109,7 +2146,7 @@ describe("array operations", () => {
     assert(trapped || value !== 0, `OOB read returned ${value} silently`);
   });
 
-  maybeTest("negative array index traps or is rejected", () => {
+  test("negative array index traps or is rejected", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: i32[] = [1, 2, 3];
@@ -2127,7 +2164,7 @@ describe("array operations", () => {
 });
 
 describe("static data alignment", () => {
-  maybeTest("aligns i64 array payloads and f64 global structs to 8 bytes", () => {
+  test("aligns i64 array payloads and f64 global structs to 8 bytes", () => {
     const arrayWat = compile(`
       let prefix: u8[] = [1, 2, 3];
       let values: i64[] = [11, 22];
@@ -2155,7 +2192,7 @@ describe("static data alignment", () => {
 // ─── multi-return + destructuring with non-trivial inputs ──────────────────
 
 describe("multi-return destructuring", () => {
-  maybeTest("divmod with various dividend/divisor", () => {
+  test("divmod with various dividend/divisor", () => {
     const wat = compile(`
       fn divmod(n: i32, d: i32): (i32, i32) { return n / d, n % d; }
       export fn quot(n: i32, d: i32): i32 {
@@ -2173,7 +2210,7 @@ describe("multi-return destructuring", () => {
     assert.equal(runExport(wat, "rem", [100, 7]), 2);
   });
 
-  maybeTest("swap returns both values", () => {
+  test("swap returns both values", () => {
     const wat = compile(`
       fn swap(a: i32, b: i32): (i32, i32) { return b, a; }
       export fn fst(a: i32, b: i32): i32 {
@@ -2189,7 +2226,7 @@ describe("multi-return destructuring", () => {
     assert.equal(runExport(wat, "snd", [1, 2]), 1);
   });
 
-  maybeTest("discard with _ in destructure", () => {
+  test("discard with _ in destructure", () => {
     const wat = compile(`
       fn divmod(n: i32, d: i32): (i32, i32) { return n / d, n % d; }
       export fn run(): i32 {
@@ -2204,7 +2241,7 @@ describe("multi-return destructuring", () => {
 // ─── global variables ──────────────────────────────────────────────────────
 
 describe("global variables", () => {
-  maybeTest("global int mutated from function", () => {
+  test("global int mutated from function", () => {
     const wat = compile(`
       let counter: i32 = 0;
       fn tick(): void { counter = counter + 1; }
@@ -2218,7 +2255,7 @@ describe("global variables", () => {
     assert.equal(runExport(wat, "run"), 3);
   });
 
-  maybeTest("global with non-zero initializer", () => {
+  test("global with non-zero initializer", () => {
     const wat = compile(`
       let base: i32 = 100;
       export fn run(): i32 { return base + 5; }
@@ -2226,7 +2263,7 @@ describe("global variables", () => {
     assert.equal(runExport(wat, "run"), 105);
   });
 
-  maybeTest("const global cannot be re-assigned but reads work", () => {
+  test("const global cannot be re-assigned but reads work", () => {
     const wat = compile(`
       const FACTOR: i32 = 7;
       export fn run(n: i32): i32 { return n * FACTOR; }
@@ -2234,7 +2271,7 @@ describe("global variables", () => {
     assert.equal(runExport(wat, "run", [6]), 42);
   });
 
-  maybeTest("two globals coexist", () => {
+  test("two globals coexist", () => {
     const wat = compile(`
       let a: i32 = 10;
       let b: i32 = 20;
@@ -2244,8 +2281,8 @@ describe("global variables", () => {
   });
 
   // A global initializer that references another global compiles and reads
-  // the referenced value. Currently fails at wat2wasm.
-  maybeTest("a global initializer can reference another global", () => {
+  // the referenced value. Currently fails during binary validation.
+  test("a global initializer can reference another global", () => {
     const wat = compile(`
       let A: i32 = 10;
       let B: i32 = A + 5;
@@ -2272,7 +2309,7 @@ describe("comments", () => {
 
   // Comment content (including code-like text inside the comment) must not
   // influence the compiled program.
-  maybeTest("block comment content is ignored at runtime", () => {
+  test("block comment content is ignored at runtime", () => {
     const wat = compile(`
       export fn run(): i32 {
         /* return 999; */
@@ -2287,7 +2324,7 @@ describe("comments", () => {
 
 describe("numeric literals", () => {
   // Underscores in numeric literals are common readability sugar in modern langs.
-  maybeTest("underscores in numeric literals are accepted", () => {
+  test("underscores in numeric literals are accepted", () => {
     const wat = compile(`
       export fn run(): i32 { return 1_000_000; }
     `);
@@ -2295,7 +2332,7 @@ describe("numeric literals", () => {
   });
 
   // `0b` and `0x` are both supported; `0o` is the obvious gap.
-  maybeTest("octal literal 0o17 is accepted", () => {
+  test("octal literal 0o17 is accepted", () => {
     const wat = compile(`
       export fn run(): i32 { return 0o17; }
     `);
@@ -2304,7 +2341,7 @@ describe("numeric literals", () => {
 
   // Hex literals above 2^53 lose precision through `Number.parseInt`, then
   // emit an `(i32.const ...)` whose value isn't a valid integer.
-  maybeTest("hex literal 0xFFFFFFFFFFFFFFFF compiles to a valid i64", () => {
+  test("hex literal 0xFFFFFFFFFFFFFFFF compiles to a valid i64", () => {
     const wat = compile(`
       export fn run(): i64 {
         return 0xFFFFFFFFFFFFFFFF as i64;
@@ -2313,7 +2350,7 @@ describe("numeric literals", () => {
     assert(encodedModule(wat));
   });
 
-  maybeTest("signed i32 boundary literals execute exactly", () => {
+  test("signed i32 boundary literals execute exactly", () => {
     const wat = compile(`
       export fn max(): i32 { return 2147483647; }
       export fn min(): i32 { return -2147483648; }
@@ -2322,7 +2359,7 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "min"), -2147483648);
   });
 
-  maybeTest("decimal signed i64 boundary literals remain lossless", () => {
+  test("decimal signed i64 boundary literals remain lossless", () => {
     const wat = compile(`
       export fn max(): i64 { let x: i64 = 9223372036854775807; return x; }
       export fn min(): i64 { let x: i64 = -9223372036854775808; return x; }
@@ -2331,7 +2368,7 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "min"), -9223372036854775808n);
   });
 
-  maybeTest("decimal u64 max round-trips as -1 on the signed Wasm lane", () => {
+  test("decimal u64 max round-trips as -1 on the signed Wasm lane", () => {
     const wat = compile(`
       export fn run(): u64 {
         let x: u64 = 18446744073709551615;
@@ -2341,7 +2378,7 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "run"), -1n);
   });
 
-  maybeTest("u32 max uses unsigned comparison and division", () => {
+  test("u32 max uses unsigned comparison and division", () => {
     const wat = compile(`
       export fn positive(): i32 { let x: u32 = 4294967295; return x > 0; }
       export fn half(): u32 { let x: u32 = 4294967295; return x / 2; }
@@ -2350,7 +2387,7 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "half"), 2147483647);
   });
 
-  maybeTest("integer arithmetic wraps at its Wasm lane width", () => {
+  test("integer arithmetic wraps at its Wasm lane width", () => {
     const wat = compile(`
       export fn addWrap(): i32 { return 2147483647 + 1; }
       export fn subWrap(): i32 { return -2147483648 - 1; }
@@ -2363,12 +2400,12 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "addWrap64", [9223372036854775807n]), -9223372036854775808n);
   });
 
-  maybeTest("direct literal casts remain an explicit wrapping escape hatch", () => {
+  test("direct literal casts remain an explicit wrapping escape hatch", () => {
     const wat = compile("export fn run(): u32 { return -1 as u32; }");
     assert.equal(runExport(wat, "run"), -1);
   });
 
-  maybeTest("parenthesized and repeated literal negation fold correctly", () => {
+  test("parenthesized and repeated literal negation fold correctly", () => {
     const wat = compile(`
       export fn parenthesized(): i32 { return -(5); }
       export fn repeated(): i32 { return - -5; }
@@ -2377,7 +2414,7 @@ describe("numeric literals", () => {
     assert.equal(runExport(wat, "repeated"), 5);
   });
 
-  maybeTest("folded float negative zero preserves IEEE-754 behavior", () => {
+  test("folded float negative zero preserves IEEE-754 behavior", () => {
     const wat = compile(`
       export fn belowZero(): i32 { return -0.0 < 0.0 == false; }
       export fn inverse(): f32 { return 1.0 / -0.0; }
@@ -2398,7 +2435,7 @@ describe("unary operators", () => {
     assert.equal(p.errors.length, 0, `parse errors: ${p.errors.map((e) => e.message).join("; ")}`);
   });
 
-  maybeTest("unary plus is a no-op at runtime", () => {
+  test("unary plus is a no-op at runtime", () => {
     const wat = compile(`
       export fn run(): i32 { return +5; }
       export fn negRun(): i32 { let x: i32 = 0 - 7; return +x; }
@@ -2407,7 +2444,7 @@ describe("unary operators", () => {
     assert.equal(runExport(wat, "negRun"), -7);
   });
 
-  maybeTest("logical-not on i64 produces valid wasm and correct semantics", () => {
+  test("logical-not on i64 produces valid wasm and correct semantics", () => {
     const wat = compile(`
       export fn notZero(): i32 { let x: i64 = 0 as i64; if (!x) { return 1; } return 0; }
       export fn notOne(): i32  { let x: i64 = 1 as i64; if (!x) { return 1; } return 0; }
@@ -2416,7 +2453,7 @@ describe("unary operators", () => {
     assert.equal(runExport(wat, "notOne"), 0);
   });
 
-  maybeTest("logical-not on f32 produces valid wasm and correct semantics", () => {
+  test("logical-not on f32 produces valid wasm and correct semantics", () => {
     const wat = compile(`
       export fn notZero(): i32 { let x: f32 = 0.0; if (!x) { return 1; } return 0; }
       export fn notOne(): i32  { let x: f32 = 1.0; if (!x) { return 1; } return 0; }
@@ -2425,7 +2462,7 @@ describe("unary operators", () => {
     assert.equal(runExport(wat, "notOne"), 0);
   });
 
-  maybeTest("logical-not on f64 produces valid wasm and correct semantics", () => {
+  test("logical-not on f64 produces valid wasm and correct semantics", () => {
     const wat = compile(`
       export fn notZero(): i32 { let x: f64 = 0.0 as f64; if (!x) { return 1; } return 0; }
       export fn notOne(): i32  { let x: f64 = 1.0 as f64; if (!x) { return 1; } return 0; }
@@ -2440,7 +2477,7 @@ describe("unary operators", () => {
 // Currently `x as u8` is a no-op — the cast emits just `(local.get $x)`.
 
 describe("narrow integer casts", () => {
-  maybeTest("i32 -> u8 truncates to 8 bits", () => {
+  test("i32 -> u8 truncates to 8 bits", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 300;
@@ -2452,7 +2489,7 @@ describe("narrow integer casts", () => {
     assert.equal(runExport(wat, "run"), 44);
   });
 
-  maybeTest("i32 -> u16 truncates to 16 bits", () => {
+  test("i32 -> u16 truncates to 16 bits", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 70000;
@@ -2464,7 +2501,7 @@ describe("narrow integer casts", () => {
     assert.equal(runExport(wat, "run"), 4464);
   });
 
-  maybeTest("i32 -> i8 sign-extends from low byte", () => {
+  test("i32 -> i8 sign-extends from low byte", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 200;
@@ -2511,7 +2548,7 @@ describe("switch statements", () => {
   // The parser now accepts negative case literals but the emitter's br_table
   // only covers `[0..maxCase]`, so negative values fall through to default
   // instead of firing their case body.
-  maybeTest("switch dispatches on a negative case value at runtime", () => {
+  test("switch dispatches on a negative case value at runtime", () => {
     const wat = compile(`
       export fn run(x: i32): i32 {
         switch (x) {
@@ -2527,7 +2564,7 @@ describe("switch statements", () => {
     assert.equal(runExport(wat, "run", [5]), 999);
   });
 
-  maybeTest("switch on an explicitly truncated f32 dispatches on the integer value", () => {
+  test("switch on an explicitly truncated f32 dispatches on the integer value", () => {
     const wat = compile(`
       export fn run(x: f32): i32 {
         switch (x as i32) {
@@ -2549,7 +2586,7 @@ describe("switch statements", () => {
 
 describe("string semantics", () => {
   // String comparison compares pointer values, not content.
-  maybeTest("two identical string literals are equal under ==", () => {
+  test("two identical string literals are equal under ==", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: string = "hello";
@@ -2561,7 +2598,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("hex escapes use codepoint semantics", () => {
+  test("hex escapes use codepoint semantics", () => {
     const wat = compile(String.raw`
       export fn asciiLen(): i32 { let s: string = "\x41"; return s.len; }
       export fn latinLen(): i32 { let s: string = "\xE9"; return s.len; }
@@ -2591,7 +2628,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "hexCaseEqual"), 1);
   });
 
-  maybeTest("NUL bytes remain part of string content", () => {
+  test("NUL bytes remain part of string content", () => {
     const wat = compile(String.raw`
       export fn length(): i32 { let s: string = "\x00abc"; return s.len; }
       export fn equal(): i32 {
@@ -2612,7 +2649,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "different"), 1);
   });
 
-  maybeTest("string length counts UTF-8 bytes", () => {
+  test("string length counts UTF-8 bytes", () => {
     const wat = compile(`
       export fn latin(): i32 { let s: string = "héllo"; return s.len; }
       export fn bmp(): i32 { let s: string = "€"; return s.len; }
@@ -2623,7 +2660,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "astral"), 4);
   });
 
-  maybeTest("escaped and empty string lengths are exact", () => {
+  test("escaped and empty string lengths are exact", () => {
     const wat = compile(String.raw`
       export fn newline(): i32 { let s: string = "a\nb"; return s.len; }
       export fn tab(): i32 { let s: string = "a\tb"; return s.len; }
@@ -2636,7 +2673,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "empty"), 0);
   });
 
-  maybeTest("string equality compares complete UTF-8 content", () => {
+  test("string equality compares complete UTF-8 content", () => {
     const wat = compile(`
       export fn run(): i32 {
         let unicodeA: string = "hé😀";
@@ -2661,7 +2698,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "run"), 0);
   });
 
-  maybeTest("strings compare correctly through a call boundary", () => {
+  test("strings compare correctly through a call boundary", () => {
     const wat = compile(`
       fn same(a: string, b: string): bool { return a == b; }
       export fn run(): i32 {
@@ -2675,7 +2712,7 @@ describe("string semantics", () => {
     assert.equal(runExport(wat, "run"), 1);
   });
 
-  maybeTest("string_copy import uses its parsed (src, dst) -> void signature", () => {
+  test("string_copy import uses its parsed (src, dst) -> void signature", () => {
     const wat = compile(`
       import string_copy from "string"
       export fn run(): void {
@@ -2694,7 +2731,7 @@ describe("string semantics", () => {
 
 describe("lexical scoping", () => {
   // Inner-block `let` should shadow, not clobber.
-  maybeTest("inner-block let shadows outer let", () => {
+  test("inner-block let shadows outer let", () => {
     const wat = compile(`
       export fn run(): i32 {
         let x: i32 = 1;
@@ -2709,7 +2746,7 @@ describe("lexical scoping", () => {
 
   // Two for-loops with the same counter name should iterate independently.
   // Today the inner loop clobbers the outer counter, so the outer runs once.
-  maybeTest("nested for-loops with same counter name iterate independently", () => {
+  test("nested for-loops with same counter name iterate independently", () => {
     const wat = compile(`
       export fn run(): i32 {
         let acc: i32 = 0;
@@ -2726,8 +2763,8 @@ describe("lexical scoping", () => {
   });
 
   // Parameter `x` and a body `let x` collide on the same WASM local name —
-  // wat2wasm rejects with "redefinition of parameter".
-  maybeTest("let inside fn body can shadow a parameter", () => {
+  // binary validation rejects with "redefinition of parameter".
+  test("let inside fn body can shadow a parameter", () => {
     const wat = compile(`
       fn f(x: i32): i32 {
         let x: i32 = 99;
@@ -2792,7 +2829,7 @@ describe("parser robustness", () => {
 });
 
 describe("trap semantics", () => {
-  maybeTest("i32 signed and unsigned division by zero trap", () => {
+  test("i32 signed and unsigned division by zero trap", () => {
     const wat = compile(`
       export fn signed(a: i32, b: i32): i32 { return a / b; }
       export fn unsigned(a: i32, b: i32): u32 { return (a as u32) / (b as u32); }
@@ -2801,7 +2838,7 @@ describe("trap semantics", () => {
     assert.throws(() => runExport(wat, "unsigned", [1, 0]), WebAssembly.RuntimeError);
   });
 
-  maybeTest("i32 signed and unsigned remainder by zero trap", () => {
+  test("i32 signed and unsigned remainder by zero trap", () => {
     const wat = compile(`
       export fn signed(a: i32, b: i32): i32 { return a % b; }
       export fn unsigned(a: i32, b: i32): u32 { return (a as u32) % (b as u32); }
@@ -2810,7 +2847,7 @@ describe("trap semantics", () => {
     assert.throws(() => runExport(wat, "unsigned", [1, 0]), WebAssembly.RuntimeError);
   });
 
-  maybeTest("i64 division and remainder by zero trap", () => {
+  test("i64 division and remainder by zero trap", () => {
     const wat = compile(`
       export fn divide(a: i64, b: i64): i64 { return a / b; }
       export fn remainder(a: i64, b: i64): i64 { return a % b; }
@@ -2819,14 +2856,14 @@ describe("trap semantics", () => {
     assert.throws(() => runExport(wat, "remainder", [1n, 0n]), WebAssembly.RuntimeError);
   });
 
-  maybeTest("i32 signed division overflow traps", () => {
+  test("i32 signed division overflow traps", () => {
     const wat = compile(`
       export fn run(a: i32, b: i32): i32 { return a / b; }
     `);
     assert.throws(() => runExport(wat, "run", [-2147483648, -1]), WebAssembly.RuntimeError);
   });
 
-  maybeTest("i64 signed division overflow traps", () => {
+  test("i64 signed division overflow traps", () => {
     const wat = compile(`
       export fn run(a: i64, b: i64): i64 { return a / b; }
     `);
@@ -2836,7 +2873,7 @@ describe("trap semantics", () => {
     );
   });
 
-  maybeTest("f32 and f64 Infinity truncation to i32 trap", () => {
+  test("f32 and f64 Infinity truncation to i32 trap", () => {
     const wat = compile(`
       export fn fromF32(): i32 { return (1.0 / 0.0) as i32; }
       export fn fromF64(): i32 {
@@ -2847,21 +2884,21 @@ describe("trap semantics", () => {
     assert.throws(() => runExport(wat, "fromF64"), WebAssembly.RuntimeError);
   });
 
-  maybeTest("NaN truncation to i32 traps", () => {
+  test("NaN truncation to i32 traps", () => {
     const wat = compile(`
       export fn run(): i32 { return (0.0 / 0.0) as i32; }
     `);
     assert.throws(() => runExport(wat, "run"), WebAssembly.RuntimeError);
   });
 
-  maybeTest("out-of-range finite f64 truncation to i32 traps", () => {
+  test("out-of-range finite f64 truncation to i32 traps", () => {
     const wat = compile(`
       export fn run(): i32 { return (3000000000.0 as f64) as i32; }
     `);
     assert.throws(() => runExport(wat, "run"), WebAssembly.RuntimeError);
   });
 
-  maybeTest("signed remainder overflow cases return zero without trapping", () => {
+  test("signed remainder overflow cases return zero without trapping", () => {
     const wat = compile(`
       export fn i32Rem(a: i32, b: i32): i32 { return a % b; }
       export fn i64Rem(a: i64, b: i64): i64 { return a % b; }
@@ -2870,7 +2907,7 @@ describe("trap semantics", () => {
     assert.equal(runExport(wat, "i64Rem", [-9223372036854775808n, -1n]), 0n);
   });
 
-  maybeTest("in-range float truncation returns the truncated value", () => {
+  test("in-range float truncation returns the truncated value", () => {
     const wat = compile(`
       export fn fromF32(): i32 { return 3.75 as i32; }
       export fn fromF64(): i32 { return ((0.0 as f64) - (3.75 as f64)) as i32; }
@@ -2881,7 +2918,7 @@ describe("trap semantics", () => {
 });
 
 describe("float semantics", () => {
-  maybeTest("f32 NaN is unequal to itself", () => {
+  test("f32 NaN is unequal to itself", () => {
     const wat = compile(`
       export fn equal(): i32 {
         let zero: f32 = 0.0;
@@ -2898,7 +2935,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "unequal"), 1);
   });
 
-  maybeTest("f64 NaN is unequal to itself", () => {
+  test("f64 NaN is unequal to itself", () => {
     const wat = compile(`
       export fn equal(): i32 {
         let zero: f64 = 0.0;
@@ -2915,7 +2952,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "unequal"), 1);
   });
 
-  maybeTest("f32 and f64 infinities order beyond finite values", () => {
+  test("f32 and f64 infinities order beyond finite values", () => {
     const wat = compile(`
       export fn f32Positive(): i32 {
         let zero: f32 = 0.0;
@@ -2951,7 +2988,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "f64Negative"), 1);
   });
 
-  maybeTest("ordered comparisons with NaN are all false", () => {
+  test("ordered comparisons with NaN are all false", () => {
     const wat = compile(`
       export fn f32Comparisons(): i32 {
         let zero: f32 = 0.0;
@@ -2978,7 +3015,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "f64Comparisons"), 0);
   });
 
-  maybeTest("f32 negative remainder matches truncated JS remainder", () => {
+  test("f32 negative remainder matches truncated JS remainder", () => {
     const wat = compile(`
       export fn negativeDividend(): f32 {
         let magnitude: f32 = 7.5;
@@ -3001,7 +3038,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "negativeDivisor"), negativeDivisor);
   });
 
-  maybeTest("f64 negative remainder matches truncated JS remainder", () => {
+  test("f64 negative remainder matches truncated JS remainder", () => {
     const wat = compile(`
       export fn negativeDividend(): f64 {
         let magnitude: f64 = 7.5;
@@ -3022,7 +3059,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "negativeDivisor"), 7.5 % -2.0);
   });
 
-  maybeTest("f32 and f64 preserve their distinct addition precision", () => {
+  test("f32 and f64 preserve their distinct addition precision", () => {
     const wat = compile(`
       export fn f32Sum(): f32 {
         let a: f32 = 0.1;
@@ -3042,7 +3079,7 @@ describe("float semantics", () => {
     assert.notEqual(f32Sum, f64Sum);
   });
 
-  maybeTest("negative-zero literal compares equal but has a negative reciprocal", () => {
+  test("negative-zero literal compares equal but has a negative reciprocal", () => {
     const wat = compile(`
       export fn equal(): i32 { return 0.0 == -0.0; }
       export fn inverse(): f32 { return 1.0 / -0.0; }
@@ -3051,7 +3088,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "inverse"), Number.NEGATIVE_INFINITY);
   });
 
-  maybeTest("multiplying a negative by zero constructs negative zero", () => {
+  test("multiplying a negative by zero constructs negative zero", () => {
     const wat = compile(`
       export fn value(): f32 {
         let negative: f32 = -1.0;
@@ -3069,7 +3106,7 @@ describe("float semantics", () => {
     assert.equal(runExport(wat, "inverse"), Number.NEGATIVE_INFINITY);
   });
 
-  maybeTest("f64 to f32 demotion loses precision", () => {
+  test("f64 to f32 demotion loses precision", () => {
     const wat = compile(`
       export fn run(): i32 {
         let a: f64 = 0.1;
@@ -3085,7 +3122,6 @@ describe("float semantics", () => {
 describe("stress", () => {
   test("compiles and runs arithmetic nested 200 parentheses deep", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     let expression = "1";
     for (let depth = 0; depth < 200; depth++) {
@@ -3097,7 +3133,6 @@ describe("stress", () => {
 
   test("compiles and runs a flat chain of 200 binary operators", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     const expression = Array.from({ length: 201 }, () => "1").join(" + ");
     const wat = compile(`export fn run(): i32 { return ${expression}; }`);
@@ -3106,7 +3141,6 @@ describe("stress", () => {
 
   test("compiles a function with 100 used locals", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     const declarations = Array.from(
       { length: 100 },
@@ -3124,7 +3158,6 @@ describe("stress", () => {
 
   test("executes the innermost branch of 20 nested if blocks", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     let body = "result = 42;";
     for (let depth = 0; depth < 20; depth++) {
@@ -3142,7 +3175,6 @@ describe("stress", () => {
 
   test("ten nested for and while loops execute exactly 1024 times", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     const nestedLoop = (depth: number): string => {
       if (depth === 10) return "count = count + 1;";
@@ -3165,7 +3197,6 @@ describe("stress", () => {
 
   test("break exits only the innermost of two nested loops", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     const wat = compile(`
         export fn run(): i32 {
@@ -3184,12 +3215,11 @@ describe("stress", () => {
 
   test("empty source compiles to a valid module", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     assert(encodedModule(compile("")));
   });
 
-  test("declaration-only modules are valid", { timeout: 10_000, skip: !wat2wasmAvailable }, () => {
+  test("declaration-only modules are valid", { timeout: 10_000 }, () => {
     const structWat = compile("struct Point { x: i32, y: i32 }");
     const globalWat = compile("let answer: i32 = 42;");
     assert(encodedModule(structWat));
@@ -3198,7 +3228,6 @@ describe("stress", () => {
 
   test("fifty functions call through the complete chain", {
     timeout: 10_000,
-    skip: !wat2wasmAvailable,
   }, () => {
     const functions = Array.from({ length: 50 }, (_, index) => {
       const exported = index === 0 ? "export " : "";
@@ -3211,7 +3240,7 @@ describe("stress", () => {
 });
 
 describe("standalone allocator fallback", () => {
-  maybeTest("lazy initialization stays above the default two-page boundary", () => {
+  test("lazy initialization stays above the default two-page boundary", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(dir, "../src/compiler/stdlib/memory.maple"), "utf8");
     const wat = compile(source);
@@ -3222,7 +3251,7 @@ describe("standalone allocator fallback", () => {
 });
 
 describe("stdlib execution through the merged pipeline", () => {
-  maybeTest("fn-reference works on the first exported call of a fresh instance", async () => {
+  test("fn-reference works on the first exported call of a fresh instance", async () => {
     const source = `
       fn multiply(a: i32, b: i32): i32 { return a * b; }
       export fn run(): i32 {
@@ -3234,7 +3263,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 42);
   });
 
-  maybeTest("fn-reference calls compose inside binary expressions", async () => {
+  test("fn-reference calls compose inside binary expressions", async () => {
     const source = `
       fn add(a: i32, b: i32): i32 { return a + b; }
       fn plus_one(value: i32): i32 { return value + 1; }
@@ -3246,7 +3275,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 8);
   });
 
-  maybeTest("merged malloc stays clear of structs and static data", async () => {
+  test("merged malloc stays clear of structs and static data", async () => {
     const source = `
       import malloc from "memory"
       struct Cell { value: i32 }
@@ -3267,7 +3296,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(pointer % 8, 0);
   });
 
-  maybeTest("malloc-backed vec2 addition preserves both fields", async () => {
+  test("malloc-backed vec2 addition preserves both fields", async () => {
     const source = `
       import malloc from "memory"
       struct Vec2 { x: i32, y: i32 }
@@ -3293,7 +3322,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 406);
   });
 
-  maybeTest("free allows malloc to reuse the same block", async () => {
+  test("free allows malloc to reuse the same block", async () => {
     const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
@@ -3306,7 +3335,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("realloc preserves the existing payload", async () => {
+  test("realloc preserves the existing payload", async () => {
     const source = `
       import malloc, realloc from "memory"
       struct Triple { a: i32, b: i32, c: i32 }
@@ -3323,7 +3352,7 @@ describe("stdlib execution through the merged pipeline", () => {
   });
 
   // Double-free and use-after-free are undefined until the ownership design (O1).
-  maybeTest("malloc payloads are 8-byte aligned", async () => {
+  test("malloc payloads are 8-byte aligned", async () => {
     const source = `
       import malloc from "memory"
       export fn run(): i32 {
@@ -3341,7 +3370,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("malloc splits a reused free block", async () => {
+  test("malloc splits a reused free block", async () => {
     const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
@@ -3360,7 +3389,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("free coalesces adjacent blocks", async () => {
+  test("free coalesces adjacent blocks", async () => {
     const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
@@ -3379,7 +3408,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("free reclaims the wilderness block", async () => {
+  test("free reclaims the wilderness block", async () => {
     const source = `
       import malloc, free from "memory"
       export fn run(): i32 {
@@ -3394,7 +3423,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("malloc grows memory when the wilderness exceeds capacity", async () => {
+  test("malloc grows memory when the wilderness exceeds capacity", async () => {
     const source = `
       import malloc from "memory"
       export fn run(): i32 {
@@ -3408,7 +3437,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("math sqrt executes through the merged module", async () => {
+  test("math sqrt executes through the merged module", async () => {
     const source = `
       import sqrt from "math"
       export fn run(): f32 { return sqrt(16.0); }
@@ -3416,7 +3445,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 4);
   });
 
-  maybeTest("math sin executes through the merged module", async () => {
+  test("math sin executes through the merged module", async () => {
     const source = `
       import sin from "math"
       export fn run(): f32 { return sin(0.0); }
@@ -3424,7 +3453,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 0);
   });
 
-  maybeTest("math abs_i32 executes through the merged module", async () => {
+  test("math abs_i32 executes through the merged module", async () => {
     const source = `
       import abs_i32 from "math"
       export fn run(): i32 { return abs_i32(-5); }
@@ -3432,7 +3461,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 5);
   });
 
-  maybeTest("math PI is available as an imported global", async () => {
+  test("math PI is available as an imported global", async () => {
     const source = `
       import PI from "math"
       export fn run(): f32 { return PI; }
@@ -3441,7 +3470,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert(Math.abs(result - Math.PI) < 1e-6);
   });
 
-  maybeTest("one program imports sin, sqrt, and PI from Maple math", async () => {
+  test("one program imports sin, sqrt, and PI from Maple math", async () => {
     const source = `
       import sin, sqrt, PI from "math"
       export fn run(): f32 {
@@ -3452,7 +3481,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert(Math.abs(result - 5) < 1e-3);
   });
 
-  maybeTest("math sqrt matches the intrinsic across representative f32 values", async () => {
+  test("math sqrt matches the intrinsic across representative f32 values", async () => {
     const source = `
       import sqrt from "math"
       export fn run(value: f32): f32 {
@@ -3464,7 +3493,7 @@ describe("stdlib execution through the merged pipeline", () => {
     }
   });
 
-  maybeTest("string_copy keeps the longer destination length and tail", async () => {
+  test("string_copy keeps the longer destination length and tail", async () => {
     const source = `
       import string_copy from "string"
       export fn run(): i32 {
@@ -3479,7 +3508,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("string_copy truncates to a shorter destination", async () => {
+  test("string_copy truncates to a shorter destination", async () => {
     const source = `
       import string_copy from "string"
       export fn run(): i32 {
@@ -3494,7 +3523,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("string_copy with an empty source is a no-op", async () => {
+  test("string_copy with an empty source is a no-op", async () => {
     const source = `
       import string_copy from "string"
       export fn run(): i32 {
@@ -3510,7 +3539,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 1);
   });
 
-  maybeTest("built-in string metadata works without importing string", async () => {
+  test("built-in string metadata works without importing string", async () => {
     const source = `
       export fn run(): i32 {
         let value: string = "maple";
@@ -3520,7 +3549,7 @@ describe("stdlib execution through the merged pipeline", () => {
     assert.equal(await runMergedExport(source, "run"), 5);
   });
 
-  maybeTest("one program can import memory and math together", async () => {
+  test("one program can import memory and math together", async () => {
     const source = `
       import malloc from "memory"
       import sqrt from "math"
@@ -3534,7 +3563,7 @@ describe("stdlib execution through the merged pipeline", () => {
 });
 
 describe("compiler intrinsics", () => {
-  maybeTest("raw i32 store and load round-trip", () => {
+  test("raw i32 store and load round-trip", () => {
     const wat = compile(`
       export fn run(): i32 {
         __store_i32(65536, 42);
@@ -3544,7 +3573,7 @@ describe("compiler intrinsics", () => {
     assert.equal(runExport(wat, "run"), 42);
   });
 
-  maybeTest("memory size and grow share the user memory", () => {
+  test("memory size and grow share the user memory", () => {
     const wat = compile(`
       export fn run(): i32 {
         let before: i32 = __memory_size();
@@ -3556,7 +3585,7 @@ describe("compiler intrinsics", () => {
     assert.equal(runExport(wat, "run"), 223);
   });
 
-  maybeTest("memory copy preserves both stored i32 values", () => {
+  test("memory copy preserves both stored i32 values", () => {
     const wat = compile(`
       export fn run(): i32 {
         __store_i32(65536, 42);
@@ -3589,7 +3618,7 @@ describe("compiler intrinsics", () => {
       expected: -3,
     },
   ] as const) {
-    maybeTest(`${intrinsic.name} executes its wasm opcode`, () => {
+    test(`${intrinsic.name} executes its wasm opcode`, () => {
       const wat = compile(`
         export fn run(): ${intrinsic.type} {
           return ${intrinsic.name}(${intrinsic.args});
@@ -3599,7 +3628,7 @@ describe("compiler intrinsics", () => {
     });
   }
 
-  maybeTest("intrinsic calls support inferred lets", () => {
+  test("intrinsic calls support inferred lets", () => {
     const wat = compile(`
       export fn run(): f32 {
         let value = __sqrt_f32(16.0);
@@ -3609,21 +3638,21 @@ describe("compiler intrinsics", () => {
     assert.equal(runExport(wat, "run"), 4);
   });
 
-  maybeTest("intrinsic calls compose in arithmetic", () => {
+  test("intrinsic calls compose in arithmetic", () => {
     const wat = compile(`
       export fn run(): f32 { return __sqrt_f32(16.0) + 1.0; }
     `);
     assert.equal(runExport(wat, "run"), 5);
   });
 
-  maybeTest("intrinsic calls can be returned directly", () => {
+  test("intrinsic calls can be returned directly", () => {
     const wat = compile(`
       export fn run(): i32 { return __memory_size(); }
     `);
     assert.equal(runExport(wat, "run"), 2);
   });
 
-  maybeTest("intrinsic calls compose inside casts", () => {
+  test("intrinsic calls compose inside casts", () => {
     const wat = compile(`
       export fn run(): i32 { return __sqrt_f32(16.0) as i32; }
     `);

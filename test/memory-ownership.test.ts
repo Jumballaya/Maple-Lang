@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe } from "node:test";
+import { describe, test } from "node:test";
 import { compiler } from "../src/compiler/compiler";
-import { maybeTest } from "./helpers";
 
 // Deliberate private WAT parser: compileMode does not retain the lowered IrModule.
 function memoryMinimumFromWat(wat: string): number {
@@ -68,7 +67,7 @@ function assertStaticMarker(wat: string, memory: WebAssembly.Memory): void {
 }
 
 describe("memory ownership modes", () => {
-  maybeTest("programmatic default owns memory and import mode uses the same minimum", async () => {
+  test("programmatic default owns memory and import mode uses the same minimum", async () => {
     const owned = await compileMode(false);
     assert.match(owned.wat, /\(memory \(export "memory"\) \d+\)/);
     assert.doesNotMatch(owned.wat, /\(import "runtime" "memory"/);

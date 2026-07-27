@@ -21,7 +21,7 @@ import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest, runMergedExport } from "./helpers";
+import { runMergedExport } from "./helpers";
 
 function checked(source: string): { ast: ASTProgram; errors: MapleError[] } {
   const parser = new Parser(source, "test.maple");
@@ -551,7 +551,7 @@ describe("TypeChecker: annotation totality diagnostics", () => {
   });
 });
 
-maybeTest("fn-typed local and param calls compose as binary operands", async () => {
+test("fn-typed local and param calls compose as binary operands", async () => {
   const result = await runMergedExport(
     `
       fn add(a: i32, b: i32): i32 { return a + b; }

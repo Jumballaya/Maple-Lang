@@ -14,7 +14,7 @@ import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatemen
 import { ReturnStatement } from "../src/parser/ast/statements/ReturnStatement";
 import type { ASTExpression } from "../src/parser/ast/types/ast.type";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest, runExport } from "./helpers";
+import { runExport } from "./helpers";
 
 type CheckedProgram = { ast: ASTProgram; meta: ModuleMeta };
 
@@ -50,7 +50,7 @@ function differential(source: string, exportName: string, args: (number | bigint
 }
 
 describe("IR scalar lowering: integers and casts", () => {
-  maybeTest("preserves sub-word lane arithmetic and signedness", () => {
+  test("preserves sub-word lane arithmetic and signedness", () => {
     const source = `
       export fn widened(): i32 { let x: i8 = 100; return x + x; }
       export fn masked(): i32 { return 200 as u8; }
@@ -69,7 +69,7 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.equal(differential(source, "ordering"), 10);
   });
 
-  maybeTest("covers lane conversions, literal wrapping, and traps", () => {
+  test("covers lane conversions, literal wrapping, and traps", () => {
     const source = `
       export fn signedByte(): i32 { return 200 as i8; }
       export fn unsignedByte(): i32 { return -1 as u8; }
@@ -121,7 +121,7 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.throws(() => runExport(module, "trapUnsigned"), WebAssembly.RuntimeError);
   });
 
-  maybeTest("masks float-to-sub-word casts for signed and unsigned targets", () => {
+  test("masks float-to-sub-word casts for signed and unsigned targets", () => {
     const { module } = lowered(`
       export fn signed8(): i32 { return -1.5 as i8; }
       export fn signed16(): i32 { return -1.5 as i16; }
@@ -134,7 +134,7 @@ describe("IR scalar lowering: integers and casts", () => {
     assert.equal(runExport(module, "unsigned16"), 1);
   });
 
-  maybeTest("preserves lossless i64 literals and negative zero", () => {
+  test("preserves lossless i64 literals and negative zero", () => {
     const source = `
       export fn maximum(): i64 { return 9223372036854775807; }
       export fn negativeZero(): f64 { let z: f64 = -0.0; return 1.0 as f64 / z; }
@@ -189,7 +189,7 @@ describe("IR scalar lowering: integers and casts", () => {
 });
 
 describe("IR scalar lowering: expression evaluation", () => {
-  maybeTest("short-circuits both boolean operators", () => {
+  test("short-circuits both boolean operators", () => {
     const source = `
       let count: i32 = 0;
       fn yes(): bool { count += 1; return true; }
@@ -207,7 +207,7 @@ describe("IR scalar lowering: expression evaluation", () => {
     assert.equal(differential(source, "run"), 11);
   });
 
-  maybeTest("keeps value and statement postfix forms distinct on locals and globals", () => {
+  test("keeps value and statement postfix forms distinct on locals and globals", () => {
     const source = `
       let global: i32 = 5;
       export fn run(): i32 {
@@ -222,7 +222,7 @@ describe("IR scalar lowering: expression evaluation", () => {
     assert.equal(differential(source, "run"), 3365);
   });
 
-  maybeTest("evaluates float remainder operands once in left-to-right order", () => {
+  test("evaluates float remainder operands once in left-to-right order", () => {
     const { module } = lowered(`
       let order: i32 = 0;
       fn left(): f32 { order = order * 10 + 1; return -7.5; }
@@ -232,7 +232,7 @@ describe("IR scalar lowering: expression evaluation", () => {
     assert.equal(runExport(module, "run"), 12);
   });
 
-  maybeTest("matches numeric f32 and f64 remainder signs", () => {
+  test("matches numeric f32 and f64 remainder signs", () => {
     const source = `
       export fn rem32(): f32 { return -7.5 % 2.0; }
       export fn rem64(): f64 { return (-7.5 as f64) % (2.0 as f64); }
@@ -243,7 +243,7 @@ describe("IR scalar lowering: expression evaluation", () => {
 });
 
 describe("IR scalar lowering: control flow", () => {
-  maybeTest("targets nested while and for break/continue labels", () => {
+  test("targets nested while and for break/continue labels", () => {
     const source = `
       export fn run(): i32 {
         let total: i32 = 0;
@@ -264,7 +264,7 @@ describe("IR scalar lowering: control flow", () => {
     assert.equal(differential(source, "run"), 130);
   });
 
-  maybeTest("switch cases never fall through", () => {
+  test("switch cases never fall through", () => {
     const source = `
       export fn run(value: i32): i32 {
         let result: i32 = 1;
@@ -287,7 +287,7 @@ describe("IR scalar lowering: control flow", () => {
     }
   });
 
-  maybeTest("evaluates a switch selector once", () => {
+  test("evaluates a switch selector once", () => {
     const { module } = lowered(`
       let count: i32 = 0;
       fn selector(): i32 { count += 10; return 2; }
@@ -304,7 +304,7 @@ describe("IR scalar lowering: control flow", () => {
     assert.equal(runExport(module, "run"), 13);
   });
 
-  maybeTest("accepts a complete returning switch at a non-void tail", () => {
+  test("accepts a complete returning switch at a non-void tail", () => {
     const { module } = lowered(`
       export fn run(value: i32): i32 {
         switch (value) {
@@ -321,7 +321,7 @@ describe("IR scalar lowering: control flow", () => {
 });
 
 describe("IR scalar lowering: calls and globals", () => {
-  maybeTest("lowers direct multi-return consumption shapes", () => {
+  test("lowers direct multi-return consumption shapes", () => {
     const source = `
       let calls: i32 = 0;
       fn pair(value: i32): (i32, i64) { calls += 1; return value, value as i64; }
@@ -335,7 +335,7 @@ describe("IR scalar lowering: calls and globals", () => {
     assert.deepEqual(differential(source, "passthrough", [9]), [9, 9n]);
   });
 
-  maybeTest("drops a discarded single-result call after running its side effect", () => {
+  test("drops a discarded single-result call after running its side effect", () => {
     const source = `
       let count: i32 = 0;
       fn value(): i32 { count += 1; return 99; }
@@ -344,7 +344,7 @@ describe("IR scalar lowering: calls and globals", () => {
     assert.equal(differential(source, "run"), 1);
   });
 
-  maybeTest("reads and mutates a scalar global across direct calls", () => {
+  test("reads and mutates a scalar global across direct calls", () => {
     const source = `
       let value: i32 = 2;
       fn bump(): void { value = value * 3 + 1; }
@@ -393,7 +393,7 @@ describe("IR scalar lowering: calls and globals", () => {
 });
 
 describe("IR scalar lowering: intrinsics", () => {
-  maybeTest("executes load/store, memory size/grow, and memory copy", () => {
+  test("executes load/store, memory size/grow, and memory copy", () => {
     const source = `
       export fn memoryOps(): i32 {
         __store_i32(65536, 42);
@@ -431,7 +431,7 @@ describe("IR scalar lowering: intrinsics", () => {
       expected: -3,
     },
   ] as const) {
-    maybeTest(`${intrinsic.name} lowers to its opcode`, () => {
+    test(`${intrinsic.name} lowers to its opcode`, () => {
       const source = `export fn run(): ${intrinsic.type} { return ${intrinsic.name}(${intrinsic.args}); }`;
       assert.equal(differential(source, "run"), intrinsic.expected);
     });

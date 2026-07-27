@@ -13,7 +13,7 @@ import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLit
 import { LetStatement } from "../src/parser/ast/statements/LetStatement";
 import { StructStatement } from "../src/parser/ast/statements/StructStatement";
 import { Parser } from "../src/parser/Parser";
-import { maybeTest, runExport } from "./helpers";
+import { runExport } from "./helpers";
 
 type CheckedProgram = { ast: ASTProgram; meta: ModuleMeta };
 
@@ -98,7 +98,7 @@ describe("IR memory lowering: layout and frames", () => {
     );
   });
 
-  maybeTest("isolates recursive frames and restores on early return", () => {
+  test("isolates recursive frames and restores on early return", () => {
     const source = `
       struct Box { value: i32 }
       fn digits(n: i32): i32 {
@@ -123,7 +123,7 @@ describe("IR memory lowering: layout and frames", () => {
 });
 
 describe("IR memory lowering: arrays", () => {
-  maybeTest("evaluates dynamic elements left to right once per declaration execution", () => {
+  test("evaluates dynamic elements left to right once per declaration execution", () => {
     const source = `
       let trace: i32 = 0;
       fn mark(value: i32): i32 { trace = trace * 10 + value; return value; }
@@ -143,7 +143,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 12_121_212);
   });
 
-  maybeTest("reinitializes every slot of a mixed dynamic array", () => {
+  test("reinitializes every slot of a mixed dynamic array", () => {
     const source = `
       fn middle(): i32 { return 2; }
       fn build(): i32 {
@@ -159,7 +159,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 123_123);
   });
 
-  maybeTest("stores runtime u8 and i16 elements with their declared widths", () => {
+  test("stores runtime u8 and i16 elements with their declared widths", () => {
     const source = `
       fn byte(value: u8): u8 { return value; }
       fn half(value: i16): i16 { return value; }
@@ -172,7 +172,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 2_498_766);
   });
 
-  maybeTest("stores dynamic string and struct-reference elements", () => {
+  test("stores dynamic string and struct-reference elements", () => {
     const source = `
       struct Pair { value: i32 }
       export fn run(): i32 {
@@ -187,7 +187,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 147);
   });
 
-  maybeTest("runs dynamic array stores in return, argument, and inline-index positions", () => {
+  test("runs dynamic array stores in return, argument, and inline-index positions", () => {
     const source = `
       let trace: i32 = 0;
       fn mark(value: i32): i32 { trace = trace * 10 + value; return value; }
@@ -205,7 +205,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 2_467_827);
   });
 
-  maybeTest("keeps dynamic array stores inside short-circuited expressions", () => {
+  test("keeps dynamic array stores inside short-circuited expressions", () => {
     const source = `
       let trace: i32 = 0;
       fn mark(): i32 { trace++; return 1; }
@@ -219,7 +219,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(runExport(module, "run", [1]), 1);
   });
 
-  maybeTest("preserves shared local literal buffers across calls", () => {
+  test("preserves shared local literal buffers across calls", () => {
     const source = `
       fn touch(): i32 {
         let values: i32[] = [1];
@@ -232,7 +232,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(differential(source, "run"), 12);
   });
 
-  maybeTest("traps negative, length, and huge indices", () => {
+  test("traps negative, length, and huge indices", () => {
     const { module } = lowered(`
       export fn read(i: i32): i32 { let values: i32[] = [4, 5]; return values[i]; }
     `);
@@ -242,7 +242,7 @@ describe("IR memory lowering: arrays", () => {
     }
   });
 
-  maybeTest("round-trips every scalar element lane and sub-word width", () => {
+  test("round-trips every scalar element lane and sub-word width", () => {
     const source = `
       export fn i8v(): i32 { let a: i8[] = [0]; a[0] = -5; return a[0]; }
       export fn u8v(): i32 { let a: u8[] = [0]; a[0] = 250; return a[0]; }
@@ -274,7 +274,7 @@ describe("IR memory lowering: arrays", () => {
     }
   });
 
-  maybeTest("lowers arbitrary bases and every index mutation once", () => {
+  test("lowers arbitrary bases and every index mutation once", () => {
     const source = `
       struct Bag { values: i32[] }
       let calls: i32 = 0;
@@ -291,7 +291,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 347);
   });
 
-  maybeTest("captures an indexed address before evaluating the rhs", () => {
+  test("captures an indexed address before evaluating the rhs", () => {
     const source = `
       let trace: i32 = 0;
       fn index(): i32 { trace = trace * 10 + 1; return 0; }
@@ -305,7 +305,7 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(fixed(source, "run"), 123);
   });
 
-  maybeTest("handles inline, returned, member, and call-result array bases", () => {
+  test("handles inline, returned, member, and call-result array bases", () => {
     const source = `
       struct Bag { values: i32[] }
       fn values(): i32[] { return [7, 8]; }
@@ -321,7 +321,7 @@ describe("IR memory lowering: arrays", () => {
 });
 
 describe("IR memory lowering: strings", () => {
-  maybeTest("does not intern literals and compares their contents", () => {
+  test("does not intern literals and compares their contents", () => {
     const source = `
       export fn distinct(): i32 {
         let a: string = "same";
@@ -336,7 +336,7 @@ describe("IR memory lowering: strings", () => {
     assert.equal(fixed(source, "unequal"), 0);
   });
 
-  maybeTest("allocates literals in returns, nested calls, and infix expressions", () => {
+  test("allocates literals in returns, nested calls, and infix expressions", () => {
     const source = `
       fn text(): string { return "hello"; }
       fn same(value: string): i32 { return value == "hello"; }
@@ -345,7 +345,7 @@ describe("IR memory lowering: strings", () => {
     assert.equal(fixed(source, "run"), 11);
   });
 
-  maybeTest("reads string arrays and delegates element equality", () => {
+  test("reads string arrays and delegates element equality", () => {
     const source = `
       export fn run(): i32 {
         let values: string[] = ["x", "x"];
@@ -357,7 +357,7 @@ describe("IR memory lowering: strings", () => {
 });
 
 describe("IR memory lowering: structs", () => {
-  maybeTest("copies struct pointers on assignment", () => {
+  test("copies struct pointers on assignment", () => {
     const source = `
       struct Pair { x: i32, y: i32 }
       export fn run(): i32 {
@@ -370,7 +370,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(differential(source, "run"), 1);
   });
 
-  maybeTest("evaluates literal fields in declaration order", () => {
+  test("evaluates literal fields in declaration order", () => {
     const source = `
       struct Pair { first: i32, second: i32 }
       let order: i32 = 0;
@@ -383,7 +383,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(differential(source, "run"), 1212);
   });
 
-  maybeTest("supports array and string fields plus member mutations", () => {
+  test("supports array and string fields plus member mutations", () => {
     const source = `
       struct Record { small: i8, name: string, values: i32[] }
       export fn run(): i32 {
@@ -397,7 +397,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(fixed(source, "run"), 627);
   });
 
-  maybeTest("reads call-result members and mutates through a parameter alias", () => {
+  test("reads call-result members and mutates through a parameter alias", () => {
     const source = `
       struct Pair { left: i32, right: i32 }
       fn get(pair: Pair): Pair { return pair; }
@@ -415,7 +415,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(differential(source, "run"), 97);
   });
 
-  maybeTest("keeps plain indexed postfix differential", () => {
+  test("keeps plain indexed postfix differential", () => {
     const source = `
       export fn run(): i32 {
         let values: i32[] = [4];
@@ -427,7 +427,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(differential(source, "run"), 5);
   });
 
-  maybeTest("closes nested equality over string-bearing members", () => {
+  test("closes nested equality over string-bearing members", () => {
     const source = `
       struct Inner { name: string, value: i16 }
       struct Outer { inner: Inner, tag: u8 }
@@ -447,7 +447,7 @@ describe("IR memory lowering: structs", () => {
     assert(helperNames.has("__string_eq"));
   });
 
-  maybeTest("reads and writes all i32-backed field kinds", () => {
+  test("reads and writes all i32-backed field kinds", () => {
     const source = `
       struct Holder { callback: fn(i32): i32, value: i32 }
       export fn run(callback: fn(i32): i32): i32 {
@@ -460,7 +460,7 @@ describe("IR memory lowering: structs", () => {
     assert.equal(runExport(result.module, "run", [123]), 1);
   });
 
-  maybeTest("encodes aggregate fields of global structs directly", () => {
+  test("encodes aggregate fields of global structs directly", () => {
     const source = `
       struct Global { values: i32[], name: string }
       let global: Global = { values = [8, 9], name = "g" };
@@ -471,7 +471,7 @@ describe("IR memory lowering: structs", () => {
 });
 
 describe("IR memory lowering: startup initializers and helper demand", () => {
-  maybeTest("initializes module-scope dynamic arrays through start", () => {
+  test("initializes module-scope dynamic arrays through start", () => {
     const source = `
       let trace: i32 = 0;
       fn seed(): i32 { trace = trace + 1; return 4; }
