@@ -57,6 +57,7 @@ const intrinsicCases = [
     result: "void",
     args: ["65544", "65536", "8"],
   },
+  { name: "__trap", params: [], result: "void", args: [] },
   { name: "__sqrt_f32", params: ["f32"], result: "f32", args: ["16.0"] },
   { name: "__abs_f32", params: ["f32"], result: "f32", args: ["-3.0"] },
   { name: "__floor_f32", params: ["f32"], result: "f32", args: ["1.9"] },
@@ -876,7 +877,8 @@ describe("TypeChecker: inferred call return types", () => {
   test("inferred struct type from call allows member access", () => {
     const src = `
       struct P { x: i32, y: i32, }
-      fn origin(): P { let p: P = { x = 0, y = 0 }; return p; }
+      let zero: P = { x = 0, y = 0 };
+      fn origin(): P { return zero; }
       fn f(): void {
         let o = origin();
         let v: i32 = o.x;
@@ -1337,4 +1339,427 @@ describe("TypeChecker: compiler intrinsics", () => {
       );
     });
   }
+});
+
+// T58 — the cast matrix (ledger B26, decision O8). The rule is ASYMMETRIC:
+// `i32 as Struct` is the allocation idiom and survives; every other struct
+// direction reinterprets memory. Before this task NONE of these were rejected.
+describe("TypeChecker: cast matrix", () => {
+  const STRUCTS = "struct Cell { value: i32 } struct Other { value: i32 }";
+
+  function inRun(body: string): string {
+    return `${STRUCTS} fn make(): i32 { return 65536; } export fn run(): i32 { ${body} return 0; }`;
+  }
+
+  test("i32 as Struct stays legal — the allocation idiom", () => {
+    expectNoErrors(inRun("let c: Cell = make() as Cell; c.value = 1;"));
+  });
+
+  test("the null idiom 0 as Struct stays legal", () => {
+    expectNoErrors(inRun("let c: Cell = 0 as Cell;"));
+  });
+
+  // `as fn(...)` never reaches the checker: the parser rejects fn-type casts.
+  for (const target of ["i32", "string", "i32[]", "Other", "Cell"]) {
+    test(`Struct as ${target} is rejected (D8a)`, () => {
+      expectExactError(
+        inRun(`let c: Cell = make() as Cell; let x: ${target} = c as ${target};`),
+        "cannot cast a struct value",
+      );
+    });
+  }
+
+  for (const source of ["f64", "i64", "bool"]) {
+    test(`${source} as Struct is rejected (D8b)`, () => {
+      expectExactError(
+        inRun(`let v: ${source} = ${source === "bool" ? "true" : "1"}; let c: Cell = v as Cell;`),
+        `cannot cast '${source}' to a struct type`,
+      );
+    });
+  }
+
+  test("string as Struct is rejected (D8b)", () => {
+    expectExactError(
+      inRun('let s: string = "x"; let c: Cell = s as Cell;'),
+      "cannot cast 'string' to a struct type",
+    );
+  });
+
+  test("an array as Struct is rejected (D8b)", () => {
+    expectExactError(
+      inRun("let a: i32[] = [1, 2]; let c: Cell = a as Cell;"),
+      "cannot cast 'i32[]' to a struct type",
+    );
+  });
+
+  test("two-hop laundering fails at the second hop", () => {
+    expectExactError(
+      inRun("let raw: i32 = (make() as Cell) as i32;"),
+      "cannot cast a struct value",
+    );
+  });
+
+  // Reinterpretation one category over: same hole, no struct involved.
+  test("string as an array is rejected", () => {
+    expectExactError(
+      inRun('let s: string = "x"; let a: i32[] = s as i32[];'),
+      "cannot cast 'string' to 'i32[]'",
+    );
+  });
+
+  test("an array as string is rejected", () => {
+    expectExactError(
+      inRun("let a: i32[] = [1, 2]; let s: string = a as string;"),
+      "cannot cast 'i32[]' to 'string'",
+    );
+  });
+
+  // Regressions the repo asserted nowhere before this task.
+  test("i32 as string is rejected", () => {
+    expectExactError(inRun("let s: string = make() as string;"), "cannot cast 'i32' to 'string'");
+  });
+
+  test("i32 as an array is rejected", () => {
+    expectExactError(inRun("let a: i32[] = make() as i32[];"), "cannot cast 'i32' to 'i32[]'");
+  });
+
+  test("numeric casts are untouched", () => {
+    expectNoErrors(inRun("let f: f32 = 1.5; let i: i32 = f as i32; let back: f64 = i as f64;"));
+  });
+});
+
+// T59 — `.len`/`.data` are read-only (ledger B24). The bounds check reads
+// them, so `xs.len = 1000; xs[500]` returned 0 instead of trapping.
+describe("TypeChecker: header fields are read-only", () => {
+  const withArray = (body: string) =>
+    `export fn run(): i32 { let a: i32[] = [1, 2]; ${body} return 0; }`;
+  const withString = (body: string) =>
+    `export fn run(): i32 { let s: string = "hi"; ${body} return 0; }`;
+
+  for (const member of ["len", "data"]) {
+    test(`an array's .${member} rejects plain assignment`, () => {
+      expectExactError(withArray(`a.${member} = 9;`), `cannot assign to 'a.${member}'`);
+    });
+
+    test(`a string's .${member} rejects plain assignment`, () => {
+      expectExactError(withString(`s.${member} = 9;`), `cannot assign to 's.${member}'`);
+    });
+
+    test(`an array's .${member} rejects compound assignment`, () => {
+      expectExactError(withArray(`a.${member} += 1;`), `cannot assign to 'a.${member}'`);
+      expectExactError(withArray(`a.${member} <<= 1;`), `cannot assign to 'a.${member}'`);
+    });
+
+    // The arm a `=`-only fix leaves as a working exploit.
+    test(`an array's .${member} rejects increment and decrement`, () => {
+      expectExactError(withArray(`a.${member}++;`), `cannot assign to 'a.${member}'`);
+      expectExactError(withArray(`a.${member}--;`), `cannot assign to 'a.${member}'`);
+    });
+  }
+
+  test("reads still work", () => {
+    expectNoErrors(withArray("let n: i32 = a.len; let d: i32 = a.data; let m: i32 = n + d;"));
+    expectNoErrors(withString("let n: i32 = s.len + s.data;"));
+  });
+
+  test("a user struct with its own len member stays writable", () => {
+    expectNoErrors(
+      "struct Row { len: i32, data: i32 } export fn run(): i32 { let r: Row = { len = 1, data = 2 }; r.len = 3; r.data = 4; r.len++; return r.len; }",
+    );
+  });
+
+  test("a nested array member reports through its type", () => {
+    expectExactError(
+      "struct Holder { values: i32[] } export fn run(): i32 { let h: Holder = { values = [1, 2] }; h.values.len = 9; return 0; }",
+      "cannot assign to 'i32[].len'",
+    );
+  });
+});
+
+// T61 — ledger B28. This spelling parsed, type-checked, then ICEd in lowering
+// with `lowering: unsupported Identifier` — no line, no column, no message.
+describe("TypeChecker: array-of-fn-ref near miss", () => {
+  const ADD = "fn add(a: i32, b: i32): i32 { return a + b; }";
+
+  test("the near-miss spelling produces a diagnostic, not a crash", () => {
+    expectExactError(
+      `${ADD} export fn run(): i32 { let ops: fn(i32,i32): i32[] = [add]; return 1; }`,
+      "array of function references is not supported",
+    );
+  });
+
+  test("an ordinary fn-ref binding still works", () => {
+    expectNoErrors(
+      `${ADD} export fn run(): i32 { let op: fn(i32,i32): i32 = add; return op(1, 2); }`,
+    );
+  });
+
+  // The meaning the spelling actually has, and the regression a careless fix causes.
+  test("a function returning an array still works", () => {
+    expectNoErrors(
+      "fn vals(): i32[] { return [1, 2]; } export fn run(): i32 { let v: i32[] = vals(); return v.len; }",
+    );
+  });
+
+  test("a fn-typed binding initialized from another binding still works", () => {
+    expectNoErrors(
+      `${ADD} export fn run(): i32 { let first: fn(i32,i32): i32 = add; let second: fn(i32,i32): i32 = first; return second(1, 2); }`,
+    );
+  });
+});
+
+// T64 — the escape rule (ledger B25). Struct values ARE `$__sp`-relative
+// pointers and `lowerReturn` releases the frame BEFORE handing one out, so
+// every route below returned a sibling call's data.
+describe("TypeChecker: frame-backed escapes", () => {
+  const POINT = "struct Point { x: i32, y: i32 }";
+
+  // The one that proves the rule is not syntactic. Assignment ALIASES (O4),
+  // so `q` names `p`'s storage and a rule reading initializer syntax sees
+  // nothing wrong here.
+  test("an aliased frame struct is still rejected on return", () => {
+    expectExactError(
+      `${POINT} fn leak(): Point { let p: Point = { x = 1, y = 2 }; let q: Point = p; return q; }`,
+      "cannot return a frame-backed value",
+    );
+  });
+
+  test("mutually referential bindings converge and are rejected", () => {
+    expectExactError(
+      `${POINT} fn leak(): Point { let p: Point = { x = 1, y = 2 }; let q: Point = p; p = q; return q; }`,
+      "cannot return a frame-backed value",
+    );
+  });
+
+  test("returning a local struct literal is rejected (D5)", () => {
+    expectExactError(
+      `${POINT} fn make(a: i32): Point { let p: Point = { x = a, y = 0 }; return p; }`,
+      "cannot return a frame-backed value",
+    );
+  });
+
+  test("a multi-return slot is rejected (D5)", () => {
+    expectExactError(
+      `${POINT} fn make(): (i32, Point) { let p: Point = { x = 1, y = 2 }; return 1, p; }`,
+      "cannot return a frame-backed value",
+    );
+  });
+
+  test("storing into a global is rejected (D6)", () => {
+    expectExactError(
+      `${POINT} let g: Point = { x = 0, y = 0 }; fn stash(): void { let p: Point = { x = 7, y = 8 }; g = p; }`,
+      "cannot store a frame-backed value in a global",
+    );
+  });
+
+  test("storing into a struct field is rejected (D7)", () => {
+    expectExactError(
+      `${POINT} struct Holder { inner: Point } fn stash(h: Holder): void { let p: Point = { x = 7, y = 8 }; h.inner = p; }`,
+      "cannot store a frame-backed value",
+    );
+  });
+
+  test("storing into an array element is rejected (D7)", () => {
+    expectExactError(
+      `${POINT} fn stash(t: Point[]): void { let p: Point = { x = 7, y = 8 }; t[0] = p; }`,
+      "cannot store a frame-backed value",
+    );
+  });
+
+  // Ledger B27 closes here: the loop-slot miscompile is only observable
+  // through a store the rule now rejects, so the shape is uncompilable.
+  test("a loop-local struct stored into longer-lived storage is rejected", () => {
+    expectExactError(
+      `${POINT} fn fill(t: Point[]): void { for (let i: i32 = 0; i < 3; i = i + 1) { let p: Point = { x = i, y = 0 }; t[i] = p; } }`,
+      "cannot store a frame-backed value",
+    );
+  });
+
+  // The constructor idiom — not a literal, so not frame-backed.
+  test("returning a heap struct stays legal", () => {
+    expectNoErrors(
+      `${POINT} fn alloc(n: i32): i32 { return 65536; } fn make(a: i32): Point { let p: Point = alloc(8) as Point; p.x = a; p.y = 0; return p; }`,
+    );
+  });
+
+  test("aggregates are recorded but never rejected", () => {
+    expectNoErrors("fn values(): i32[] { let v: i32[] = [7, 8]; return v; }");
+    expectNoErrors('fn text(): string { let s: string = "hello"; return s; }');
+    expectNoErrors("fn values(): i32[] { return [7, 8]; }");
+  });
+
+  test("a frame struct used locally is untouched", () => {
+    expectNoErrors(
+      `${POINT} fn use(p: Point): i32 { return p.x; } fn run(): i32 { let p: Point = { x = 1, y = 2 }; p.x = 5; return use(p) + p.y; }`,
+    );
+  });
+
+  // The transitive case the analysis does NOT catch: covered by the borrow
+  // convention, not by summaries (decision O1). This test exists so nobody
+  // "fixes" it by marking parameters frame-backed — that would reject every
+  // legitimate `g = <heap pointer parameter>`.
+  test("a callee storing a PARAMETER into a global still compiles", () => {
+    expectNoErrors(`${POINT} let g: Point = { x = 0, y = 0 }; fn keep(p: Point): void { g = p; }`);
+  });
+});
+
+// T69 — `free` accepts structs (forced by decision O8: `free(p as i32)` is no
+// longer expressible), plus the compile-time guards D3/D4 in front of the
+// runtime region guard.
+describe("TypeChecker: free accepts struct pointers", () => {
+  const SETUP = 'import malloc, free, realloc from "memory"\nstruct Cell { value: i32 }\n';
+
+  test("freeing a heap struct type-checks", () => {
+    expectNoErrors(`${SETUP} fn run(): void { let c: Cell = malloc(8) as Cell; free(c); }`);
+  });
+
+  test("the null idiom is accepted", () => {
+    expectNoErrors(`${SETUP} fn run(): void { free(0 as Cell); }`);
+  });
+
+  test("realloc takes a struct too", () => {
+    expectNoErrors(
+      `${SETUP} fn run(): i32 { let c: Cell = malloc(8) as Cell; let g: Cell = realloc(c, 32) as Cell; return g.value; }`,
+    );
+  });
+
+  test("freeing a frame-backed struct is rejected (D3)", () => {
+    expectExactError(
+      `${SETUP} fn run(): void { let c: Cell = { value = 1 }; free(c); }`,
+      "cannot free a frame-backed value",
+    );
+  });
+
+  // The case a check reading only the operand's own declaration would miss.
+  test("D3 fires through an alias", () => {
+    expectExactError(
+      `${SETUP} fn run(): void { let c: Cell = { value = 1 }; let alias: Cell = c; free(alias); }`,
+      "cannot free a frame-backed value",
+    );
+  });
+
+  test("freeing a module-scope literal binding is rejected (D4)", () => {
+    expectExactError(
+      `${SETUP} let shared: Cell = { value = 1 }; fn run(): void { free(shared); }`,
+      "cannot free a static value",
+    );
+  });
+
+  test("D4 fires through an alias", () => {
+    expectExactError(
+      `${SETUP} let shared: Cell = { value = 1 }; fn run(): void { let alias: Cell = shared; free(alias); }`,
+      "cannot free a static value",
+    );
+  });
+
+  test("the rule does not widen to strings or arrays", () => {
+    expectError(
+      `${SETUP} fn run(): void { let s: string = "x"; free(s); }`,
+      "Type mismatch in argument 1",
+    );
+    expectError(
+      `${SETUP} fn run(): void { let a: i32[] = [1]; free(a); }`,
+      "Type mismatch in argument 1",
+    );
+  });
+
+  test("the rule is scoped to the allocator, not to i32 parameters generally", () => {
+    expectError(
+      `${SETUP} fn mine(p: i32): void {} fn run(): void { let c: Cell = malloc(8) as Cell; mine(c); }`,
+      "Type mismatch in argument 1",
+    );
+  });
+});
+
+// T66 — `defer` checker rules.
+describe("TypeChecker: defer", () => {
+  test("a module-scope defer is rejected (D2)", () => {
+    expectExactError("fn g(): void {} defer g();", "defer is only allowed inside a function body");
+  });
+
+  test("a deferred call is type-checked like any other call", () => {
+    expectError("fn g(a: i32): void {} fn f(): void { defer g(); }", "expects 1 arguments, got 0");
+    expectError(
+      "fn g(a: i32): void {} fn f(): void { defer g(1.5); }",
+      "Type mismatch in argument 1",
+    );
+  });
+
+  test("a deferred call to an unknown function is a normal error", () => {
+    expectError("fn f(): void { defer nope(); }", "nope");
+  });
+
+  // A defer is never a terminator: the function still owes a return.
+  test("a body ending in defer still requires a return", () => {
+    expectError("fn g(): void {} fn f(): i32 { defer g(); }", "must return");
+  });
+
+  test("a defer inside a function reached from a global initializer is legal", () => {
+    expectNoErrors(
+      "fn note(): void {} fn build(): i32 { defer note(); return 7; } let table: i32 = build();",
+    );
+  });
+});
+
+// T66 — D1's acceptance case. The parser catches every non-call operand, so
+// the message is pinned there; this asserts the text a user actually sees.
+describe("TypeChecker: defer requires a call", () => {
+  test("a non-call operand reports D1 verbatim", () => {
+    for (const bad of ["defer x;", "defer 1 + 2;", "defer p.field;"]) {
+      const parser = new Parser(`fn f(): void { let x: i32 = 1; ${bad} }`);
+      parser.parse("test");
+      assert(
+        parser.errors.some((error) => error.message === "defer requires a function call"),
+        `${bad} -> ${parser.errors.map((error) => error.message).join("; ")}`,
+      );
+    }
+  });
+
+  test("a deferred call is accepted", () => {
+    expectNoErrors("fn g(): void {} fn f(): void { defer g(); }");
+  });
+});
+
+// Review follow-ups: D3/D4 were reachable through `free` alone, so a deferred
+// free and every `realloc` slipped past them.
+describe("TypeChecker: D3/D4 coverage", () => {
+  const SETUP = 'import malloc, free, realloc from "memory"\nstruct Cell { value: i32 }\n';
+
+  test("a deferred free of a frame struct is rejected", () => {
+    expectExactError(
+      `${SETUP} fn run(): void { let c: Cell = { value = 1 }; defer free(c); }`,
+      "cannot free a frame-backed value",
+    );
+  });
+
+  test("a deferred free of a static binding is rejected", () => {
+    expectExactError(
+      `${SETUP} let shared: Cell = { value = 1 }; fn run(): void { defer free(shared); }`,
+      "cannot free a static value",
+    );
+  });
+
+  test("realloc of a frame struct is rejected, including under a cast", () => {
+    expectExactError(
+      `${SETUP} fn run(): void { let c: Cell = { value = 1 }; realloc(c, 16); }`,
+      "cannot free a frame-backed value",
+    );
+    expectExactError(
+      `${SETUP} fn run(): void { let c: Cell = { value = 1 }; let g: Cell = realloc(c, 16) as Cell; }`,
+      "cannot free a frame-backed value",
+    );
+  });
+
+  test("a nested allocator call is still seen", () => {
+    expectExactError(
+      `${SETUP} fn use(p: i32): i32 { return p; } fn run(): i32 { let c: Cell = { value = 1 }; return use(realloc(c, 8)); }`,
+      "cannot free a frame-backed value",
+    );
+  });
+
+  test("heap pointers remain freeable through every one of those shapes", () => {
+    expectNoErrors(
+      `${SETUP} fn run(): void { let c: Cell = malloc(8) as Cell; defer free(c); let g: Cell = realloc(c, 16) as Cell; }`,
+    );
+  });
 });

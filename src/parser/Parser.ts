@@ -31,6 +31,7 @@ import { StructLiteralExpression } from "./ast/expressions/StructLiteralExpressi
 import { BlockStatement } from "./ast/statements/BlockStatement";
 import { BreakStatement } from "./ast/statements/BreakStatement";
 import { ContinueStatement } from "./ast/statements/ContinueStatement";
+import { DeferStatement } from "./ast/statements/DeferStatement";
 import { ExpressionStatement } from "./ast/statements/ExpressionStatement";
 import { ForStatement } from "./ast/statements/ForStatement";
 import { FunctionStatement } from "./ast/statements/FunctionStatement";
@@ -162,6 +163,18 @@ export class Parser {
     }
   }
 
+  // The stdlib may DECLARE a `__` symbol for the compiler to find; user code
+  // may not import it.
+  private rejectIfInternalImport(name: string, token: Token): void {
+    this.rejectIfReserved(name, "import", token);
+    if (name.startsWith("__") && !this.isReservedName(name)) {
+      this.pushError(
+        `cannot import '${name}': names starting with '__' are compiler-internal`,
+        token,
+      );
+    }
+  }
+
   constructor(source: string, file = "") {
     this.file = file;
     this.tokenizer = new Tokenizer(source);
@@ -279,6 +292,9 @@ export class Parser {
         }
         this.tokenizer.nextToken(); // consume the semicolon
         return stmt;
+      }
+      case "Defer": {
+        return this.parseDeferStatement();
       }
       case "Import": {
         if (!topLevel) {
@@ -407,6 +423,37 @@ export class Parser {
     return new FunctionStatement(statementToken, expr, mangledName, exported, receiverType);
   }
 
+  /** Recover past a malformed statement so the outer parse loop advances. */
+  private skipToStatementEnd(): void {
+    while (
+      !this.tokenizer.curTokenIs("Semicolon") &&
+      !this.tokenizer.curTokenIs("RBrace") &&
+      this.tokenizer.curToken().type !== "EOF"
+    ) {
+      this.tokenizer.nextToken();
+    }
+    if (this.tokenizer.curTokenIs("Semicolon")) this.tokenizer.nextToken();
+  }
+
+  private parseDeferStatement(): ASTStatement | null {
+    const token = this.tokenizer.curToken();
+    this.tokenizer.nextToken();
+    const operand = this.parseExpression(LOWEST);
+    if (!(operand instanceof CallExpression)) {
+      this.pushError("defer requires a function call", token);
+      this.skipToStatementEnd();
+      return null;
+    }
+    if (!this.tokenizer.peekTokenIs("Semicolon")) {
+      this.pushError("Parser: semicolon expected after defer statement", token);
+      this.skipToStatementEnd();
+      return null;
+    }
+    this.tokenizer.nextToken(); // land on the semicolon
+    this.tokenizer.nextToken(); // consume it
+    return new DeferStatement(token, operand);
+  }
+
   private parseImportStatement(): ASTStatement | null {
     const tok = this.tokenizer.curToken();
     this.tokenizer.nextToken(); // consume the 'import' token
@@ -418,7 +465,7 @@ export class Parser {
     const imported: string[] = [];
     const identToken = this.tokenizer.curToken();
     const ident = identToken.literal.toString();
-    this.rejectIfReserved(ident, "import", identToken);
+    this.rejectIfInternalImport(ident, identToken);
     imported.push(ident);
 
     while (this.tokenizer.peekTokenIs("Comma")) {
@@ -426,7 +473,7 @@ export class Parser {
       this.tokenizer.nextToken(); // consume the comma
       const identToken = this.tokenizer.curToken();
       const ident = identToken.literal.toString();
-      this.rejectIfReserved(ident, "import", identToken);
+      this.rejectIfInternalImport(ident, identToken);
       imported.push(ident);
     }
 

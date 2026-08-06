@@ -1,4 +1,5 @@
 import { hasDynamicArrayElements } from "../compiler/data-extraction";
+import { analyzeEscapes } from "../compiler/escape";
 import { stmtDefinitelyReturns } from "../compiler/flow";
 import { getIntrinsic } from "../compiler/intrinsics";
 import type { ModuleMeta } from "../compiler/metadata";
@@ -30,6 +31,7 @@ import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteral
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
 import { BreakStatement } from "../parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../parser/ast/statements/ContinueStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -66,12 +68,11 @@ import type {
   StructLayoutMember,
 } from "./ir";
 import { structLayout } from "./layout";
-import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "./runtime";
+import { elemAddr, stringEq, structEqBatch, trampoline } from "./runtime";
 
 export type LoweringOptions = {
   importMemory: boolean;
   exportMap?: Map<string, string>;
-  allocator?: string;
 };
 
 export type PendingInitializer = {
@@ -99,11 +100,22 @@ type GlobalBinding = {
 type ControlTarget = {
   breakLabel: LabelId;
   continueLabel?: LabelId;
+  /** Depth of `deferScopes` when this target was entered. */
+  deferDepth: number;
 };
+
+// Callee and arguments are already spilled into locals, so re-emitting the
+// call at each exit edge re-runs nothing.
+type DeferRecord = {
+  argLocals: LocalId[];
+  results: number;
+} & ({ callee: MultiCallCallee } | { intrinsic: CallExpression });
 
 type FramePlan = {
   size: number;
   offsets: Map<LetStatement, number>;
+  /** Non-escaping array/string literals that got per-call frame storage (H1). */
+  aggregates: Map<LetStatement, { offset: number; payloadBytes: number; count: number }>;
 };
 
 type PendingMemorySite = {
@@ -127,7 +139,6 @@ type IrLvalue = {
 };
 
 type FnrefLowering = {
-  makeFnrefId?: FuncId;
   slots: Map<string, number>;
   signatures: Map<string, SigId>;
 };
@@ -311,13 +322,29 @@ function copyBytes(target: Uint8Array, offset: number, bytes: Uint8Array): void 
 class StaticDataPlanner {
   readonly addresses = new Map<ASTExpression, number>();
   readonly arrayPayloads = new Map<ArrayLiteralExpression, number>();
+  readonly stringPayloads = new Map<StringLiteralExpression, number>();
   readonly pendingSites: PendingMemorySite[] = [];
   readonly pendingArrays: PendingArraySite[] = [];
+  private readonly fnrefRecords = new Map<string, number>();
   private cursor = 65_536;
+
+  // `{slot, 0}` is two compile-time constants while closures do not exist, so
+  // it belongs in static data — one record per function, not a malloc apiece.
+  fnrefRecordOf(name: string, slot: number): number {
+    const existing = this.fnrefRecords.get(name);
+    if (existing !== undefined) return existing;
+    const record = new Uint8Array(8);
+    new DataView(record.buffer).setUint32(0, slot, true);
+    const address = this.allocate(record, 8);
+    this.fnrefRecords.set(name, address);
+    return address;
+  }
 
   constructor(
     private readonly builder: IrBuilder,
     private readonly layouts: Map<string, StructLayout>,
+    /** Literals that live in a frame (T71) and so need no static header. */
+    private readonly frameBacked: Set<ASTExpression> = new Set(),
   ) {}
 
   get dataEnd(): number {
@@ -371,6 +398,10 @@ class StaticDataPlanner {
     }
     if (statement instanceof ReturnStatement) {
       for (const value of statement.returnValues) this.visitExpression(value);
+      return;
+    }
+    if (statement instanceof DeferStatement) {
+      this.visitExpression(statement.call);
       return;
     }
     if (statement instanceof ExpressionStatement) {
@@ -456,6 +487,10 @@ class StaticDataPlanner {
     resolvedType(expression);
     const payload = new TextEncoder().encode(expression.value);
     const dataAddress = this.allocate(payload, 4);
+    this.stringPayloads.set(expression, dataAddress);
+    // A frame-backed literal builds its header in the frame; the static bytes
+    // survive only as the copy template.
+    if (this.frameBacked.has(expression)) return dataAddress;
     const header = new Uint8Array(8);
     const view = new DataView(header.buffer);
     view.setUint32(0, payload.byteLength, true);
@@ -485,8 +520,12 @@ class StaticDataPlanner {
           : encodeConstant(element, elementType);
       copyBytes(data, index * elementSize, encoded);
     }
+    // A dynamic frame array writes every element at the declaration, so it
+    // needs neither a template nor a static header.
+    if (dynamic && this.frameBacked.has(expression)) return 0;
     const dataAddress = this.allocate(data, Math.min(8, Math.max(1, elementSize)));
     this.arrayPayloads.set(expression, dataAddress);
+    if (this.frameBacked.has(expression)) return dataAddress;
     const header = new Uint8Array(8);
     const view = new DataView(header.buffer);
     view.setUint32(0, expression.elements.length, true);
@@ -576,6 +615,12 @@ class StaticDataPlanner {
     return address;
   }
 
+  stringPayloadOf(expression: StringLiteralExpression): number {
+    const address = this.stringPayloads.get(expression);
+    if (address === undefined) throw new Error("lowering: missing string payload");
+    return address;
+  }
+
   arrayPayloadOf(expression: ArrayLiteralExpression): number {
     const address = this.arrayPayloads.get(expression);
     if (address === undefined) {
@@ -602,6 +647,7 @@ class RuntimeHelpers {
   constructor(
     private readonly builder: IrBuilder,
     private readonly layouts: Map<string, StructLayout>,
+    readonly _frameBacked: Set<ASTExpression> = new Set(),
   ) {}
 
   elemAddr(): FuncId {
@@ -645,8 +691,18 @@ class RuntimeHelpers {
   }
 }
 
-function planFrame(block: BlockStatement, layouts: Map<string, StructLayout>): FramePlan {
+// A `defer` declares no bindings, so it needs no frame slot: the walk below
+// deliberately does not mention it.
+function planFrame(
+  block: BlockStatement,
+  layouts: Map<string, StructLayout>,
+  frameAggregates: Set<ASTExpression>,
+): FramePlan {
   const offsets = new Map<LetStatement, number>();
+  const aggregates = new Map<
+    LetStatement,
+    { offset: number; payloadBytes: number; count: number }
+  >();
   let size = 0;
   const walk = (statement: ASTStatement): void => {
     if (statement instanceof LetStatement) {
@@ -656,6 +712,21 @@ function planFrame(block: BlockStatement, layouts: Map<string, StructLayout>): F
           throw new Error(`lowering: unknown struct layout '${statement.expression.name}'`);
         offsets.set(statement, size);
         size += layout.size;
+        return;
+      }
+      const initializer = statement.expression;
+      if (initializer && frameAggregates.has(initializer)) {
+        const payloadBytes =
+          initializer instanceof StringLiteralExpression
+            ? new TextEncoder().encode(initializer.value).byteLength
+            : (initializer as ArrayLiteralExpression).elements.length *
+              sizeofType((initializer as ArrayLiteralExpression).memberType);
+        const count =
+          initializer instanceof StringLiteralExpression
+            ? payloadBytes
+            : (initializer as ArrayLiteralExpression).elements.length;
+        aggregates.set(statement, { offset: size, payloadBytes, count });
+        size += 8 + payloadBytes;
       }
       return;
     }
@@ -683,12 +754,14 @@ function planFrame(block: BlockStatement, layouts: Map<string, StructLayout>): F
     }
   };
   walk(block);
-  return { size, offsets };
+  return { size, offsets, aggregates };
 }
 
 class FunctionLowerer {
   private readonly scopes: Array<Map<string, Binding>> = [];
+  private readonly deferScopes: DeferRecord[][] = [];
   private readonly controls: ControlTarget[] = [];
+  private hasDefers = false;
 
   constructor(
     private readonly fn: FuncBuilder,
@@ -698,7 +771,7 @@ class FunctionLowerer {
     private readonly layouts: Map<string, StructLayout>,
     private readonly staticData: StaticDataPlanner,
     private readonly runtime: RuntimeHelpers,
-    private readonly frame: FramePlan = { size: 0, offsets: new Map() },
+    private readonly frame: FramePlan = { size: 0, offsets: new Map(), aggregates: new Map() },
     private readonly stackPointer?: GlobalId,
     private readonly fragmentLocals?: IrType[],
     private readonly fnrefs?: FnrefLowering,
@@ -771,11 +844,88 @@ class FunctionLowerer {
 
   private lowerBlock(block: BlockStatement): void {
     this.scopes.push(new Map());
+    this.deferScopes.push([]);
     try {
       for (const statement of block.statements) this.lowerStatement(statement);
+      // Only the fall-through edge emits here; a terminator already did.
+      if (!block.statements.some(stmtDefinitelyReturns)) {
+        this.emitDefersDownTo(this.deferScopes.length - 1);
+      }
     } finally {
       this.scopes.pop();
+      this.deferScopes.pop();
     }
+  }
+
+  /** Emit registered defers from the innermost scope down to `depth`, LIFO. */
+  private emitDefersDownTo(depth: number): void {
+    for (let index = this.deferScopes.length - 1; index >= depth; index -= 1) {
+      const records = this.deferScopes[index]!;
+      for (let position = records.length - 1; position >= 0; position -= 1) {
+        this.emitDefer(records[position]!);
+      }
+    }
+  }
+
+  private emitDefer(record: DeferRecord): void {
+    const args = record.argLocals.map((local) => this.fn.localGet(local));
+    if ("intrinsic" in record) {
+      if (record.results === 0) this.lowerVoidIntrinsic(record.intrinsic, args);
+      else this.fn.drop(this.lowerIntrinsic(record.intrinsic, args));
+      return;
+    }
+    if (record.results === 0) {
+      if (record.callee.kind === "func") this.fn.callVoid(record.callee.fn, args);
+      else this.fn.callIndirectVoid(record.callee.sig, record.callee.index, args);
+      return;
+    }
+    if (record.results === 1) {
+      const value =
+        record.callee.kind === "func"
+          ? this.fn.call(record.callee.fn, args)
+          : this.fn.callIndirect(record.callee.sig, record.callee.index, args);
+      this.fn.drop(value);
+      return;
+    }
+    this.fn.multiCall(record.callee, args, null);
+  }
+
+  private lowerDefer(statement: DeferStatement): void {
+    const call = this.callAnnotations(statement.call);
+    // Register-time capture: the callee value and every argument are evaluated
+    // HERE, in source order, so reassigning a variable later changes nothing.
+    if (call.decl?.kind === "intrinsic") {
+      const argLocals = statement.call.args.map((argument, index) => {
+        const local = this.local(lane(resolvedType(argument)), `__defer_arg${index}`);
+        this.fn.localSet(local, this.lowerExpression(argument));
+        return local;
+      });
+      this.deferScopes
+        .at(-1)
+        ?.push({ intrinsic: statement.call, argLocals, results: call.results.length });
+      this.hasDefers = true;
+      return;
+    }
+    const lowered = this.lowerCall(statement.call, call);
+    let callee = lowered.callee;
+    if (callee.kind === "indirect") {
+      const calleeLocal = this.local("i32", "__defer_callee");
+      this.fn.localSet(calleeLocal, callee.index);
+      callee = { kind: "indirect", sig: callee.sig, index: this.fn.localGet(calleeLocal) };
+    }
+    // A method call desugars with the receiver prepended, so the lowered
+    // argument list can be one longer than the source list.
+    const sourceArgs = statement.call.args;
+    const receiverOffset = lowered.args.length - sourceArgs.length;
+    const argLocals = lowered.args.map((arg, index) => {
+      const type =
+        index < receiverOffset ? "i32" : lane(resolvedType(sourceArgs[index - receiverOffset]!));
+      const local = this.local(type, `__defer_arg${index}`);
+      this.fn.localSet(local, arg);
+      return local;
+    });
+    this.deferScopes.at(-1)?.push({ callee, argLocals, results: call.results.length });
+    this.hasDefers = true;
   }
 
   private lowerStatement(statement: ASTStatement): void {
@@ -817,16 +967,26 @@ class FunctionLowerer {
       if (stmtDefinitelyReturns(statement)) this.fn.unreachable();
       return;
     }
+    if (statement instanceof DeferStatement) {
+      this.lowerDefer(statement);
+      return;
+    }
     if (statement instanceof BreakStatement) {
       const target = this.controls.at(-1);
       if (!target) unsupported(statement);
+      // `break` leaves the switch or loop it is in, so only the scopes inside
+      // that construct unwind.
+      this.emitDefersDownTo(target.deferDepth);
       this.fn.br(target.breakLabel);
       return;
     }
     if (statement instanceof ContinueStatement) {
       const target = this.findContinueTarget();
       if (target === undefined) unsupported(statement);
-      this.fn.br(target);
+      // `continue` leaves the LOOP, crossing any switch frames between here
+      // and it — both the case's and the loop body's defers run.
+      this.emitDefersDownTo(target.deferDepth);
+      this.fn.br(target.label);
       return;
     }
     unsupported(statement);
@@ -842,12 +1002,75 @@ class FunctionLowerer {
       this.lowerStructLet(statement, name, statement.expression);
       return;
     }
+    const aggregate = this.frame.aggregates.get(statement);
+    if (aggregate && statement.expression) {
+      this.lowerFrameAggregateLet(statement, name, statement.expression, aggregate);
+      return;
+    }
     const localType = lane(statement.typeAnnotation);
     const id = this.local(localType, statement.resolvedName ?? name);
     const value = statement.expression
       ? this.lowerExpression(statement.expression)
       : this.fn.constant(localType, zero(localType));
     this.fn.localSet(id, value);
+    this.scopes.at(-1)!.set(name, {
+      id,
+      mapleType: statement.typeAnnotation,
+      kind: "local",
+    });
+  }
+
+  // Header then payload, both in the frame. The header's `data` must point at
+  // the FRAME payload; copying the static header would re-share one buffer.
+  private lowerFrameAggregateLet(
+    statement: LetStatement,
+    name: string,
+    expression: ASTExpression,
+    slot: { offset: number; payloadBytes: number; count: number },
+  ): void {
+    resolvedType(expression);
+    if (this.stackPointer === undefined) unsupported(expression);
+    const id = this.local("i32", statement.resolvedName ?? name);
+    const base = this.fn.binop(
+      "add",
+      "i32",
+      false,
+      this.fn.globalGet(this.stackPointer),
+      this.fn.constant("i32", slot.offset),
+    );
+    this.fn.localSet(id, base);
+    const payload = this.fn.binop(
+      "add",
+      "i32",
+      false,
+      this.fn.localGet(id),
+      this.fn.constant("i32", 8),
+    );
+    this.fn.store("i32", this.fn.localGet(id), this.fn.constant("i32", slot.count), 0);
+    this.fn.store("i32", this.fn.localGet(id), payload, 4);
+    if (expression instanceof ArrayLiteralExpression && hasDynamicArrayElements(expression)) {
+      const elementType = expression.memberType;
+      const elementSize = sizeofType(elementType);
+      for (let index = 0; index < expression.elements.length; index += 1) {
+        this.fn.store(
+          lane(elementType),
+          this.fn.load("i32", this.fn.localGet(id), 4),
+          this.lowerExpression(expression.elements[index]!),
+          index * elementSize,
+          widthOf(elementType),
+        );
+      }
+    } else if (slot.payloadBytes > 0) {
+      const template =
+        expression instanceof ArrayLiteralExpression
+          ? this.staticData.arrayPayloadOf(expression)
+          : this.staticData.stringPayloadOf(expression as StringLiteralExpression);
+      this.fn.memoryCopy(
+        this.fn.load("i32", this.fn.localGet(id), 4),
+        this.fn.constant("i32", template),
+        this.fn.constant("i32", slot.payloadBytes),
+      );
+    }
     this.scopes.at(-1)!.set(name, {
       id,
       mapleType: statement.typeAnnotation,
@@ -942,12 +1165,15 @@ class FunctionLowerer {
         );
         const lowered = this.lowerCall(callExpression, call);
         this.fn.multiCall(lowered.callee, lowered.args, targets);
+        this.emitDefersDownTo(0);
         this.restoreFrame();
         this.fn.ret(targets.map((target) => this.fn.localGet(target)));
         return;
       }
     }
-    if (this.frame.size === 0) {
+    // The spill is unconditional once defers exist: a deferred call cannot run
+    // with a half-built operand stack, and this IR cannot express that shape.
+    if (this.frame.size === 0 && !this.hasDefers) {
       this.fn.ret(statement.returnValues.map((value) => this.lowerExpression(value)));
       return;
     }
@@ -957,6 +1183,7 @@ class FunctionLowerer {
     for (let index = 0; index < statement.returnValues.length; index += 1) {
       this.fn.localSet(targets[index]!, this.lowerExpression(statement.returnValues[index]!));
     }
+    this.emitDefersDownTo(0);
     this.restoreFrame();
     this.fn.ret(targets.map((target) => this.fn.localGet(target)));
   }
@@ -1030,8 +1257,9 @@ class FunctionLowerer {
     this.fn.block((breakLabel, block) => {
       block.loop((loopLabel, loop) => {
         loop.brIf(breakLabel, loop.unop("eqz", "i32", this.truthy(statement.condExpr)));
-        this.withControl({ breakLabel, continueLabel: loopLabel }, () =>
-          this.lowerBlock(statement.loopBody),
+        this.withControl(
+          { breakLabel, continueLabel: loopLabel, deferDepth: this.deferScopes.length },
+          () => this.lowerBlock(statement.loopBody),
         );
         loop.br(loopLabel);
       });
@@ -1048,8 +1276,9 @@ class FunctionLowerer {
           if (!condition) unsupported(statement.conditionExpr);
           loop.brIf(breakLabel, loop.unop("eqz", "i32", this.truthy(condition)));
           loop.block((continueLabel) => {
-            this.withControl({ breakLabel, continueLabel }, () =>
-              this.lowerBlock(statement.loopBody),
+            this.withControl(
+              { breakLabel, continueLabel, deferDepth: this.deferScopes.length },
+              () => this.lowerBlock(statement.loopBody),
             );
           });
           if (statement.updateExpr.expression) this.lowerEffect(statement.updateExpr.expression);
@@ -1068,7 +1297,7 @@ class FunctionLowerer {
     const selector = this.local("i32", "__switch");
     this.fn.localSet(selector, this.lowerExpression(statement.switchExpr));
     this.fn.block((breakLabel) => {
-      this.withControl({ breakLabel }, () => {
+      this.withControl({ breakLabel, deferDepth: this.deferScopes.length }, () => {
         this.fn.block((defaultLabel, defaultBlock) => {
           const labels: LabelId[] = [];
           const nestCases = (index: number, body: FuncBuilder): void => {
@@ -1200,9 +1429,8 @@ class FunctionLowerer {
     }
     if (declaration.kind === "function") {
       const slot = this.fnrefs?.slots.get(declaration.name);
-      const makeFnrefId = this.fnrefs?.makeFnrefId;
-      if (slot === undefined || makeFnrefId === undefined) return unsupported(expression);
-      return this.fn.call(makeFnrefId, [this.fn.constant("i32", slot)]);
+      if (slot === undefined) return unsupported(expression);
+      return this.fn.constant("i32", this.staticData.fnrefRecordOf(declaration.name, slot));
     }
     return unsupported(expression);
   }
@@ -1476,10 +1704,12 @@ class FunctionLowerer {
     return this.fn.binop("ne", type, false, value, this.fn.constant(type, zero(type)));
   }
 
-  private lowerIntrinsic(expression: CallExpression): Expr {
+  private lowerIntrinsic(
+    expression: CallExpression,
+    args: Expr[] = expression.args.map((argument) => this.lowerExpression(argument)),
+  ): Expr {
     const intrinsic = getIntrinsic(expression.func);
     if (!intrinsic || intrinsic.result === "void") return unsupported(expression);
-    const args = expression.args.map((argument) => this.lowerExpression(argument));
     if (expression.func === "__load_i32") return this.fn.load("i32", args[0]!);
     if (expression.func === "__memory_size") return this.fn.memorySize();
     if (expression.func === "__memory_grow") return this.fn.memoryGrow(args[0]!);
@@ -1501,14 +1731,20 @@ class FunctionLowerer {
     return unsupported(expression);
   }
 
-  private lowerVoidIntrinsic(expression: CallExpression): void {
-    const args = expression.args.map((argument) => this.lowerExpression(argument));
+  private lowerVoidIntrinsic(
+    expression: CallExpression,
+    args: Expr[] = expression.args.map((argument) => this.lowerExpression(argument)),
+  ): void {
     if (expression.func === "__store_i32") {
       this.fn.store("i32", args[0]!, args[1]!);
       return;
     }
     if (expression.func === "__memory_copy") {
       this.fn.memoryCopy(args[0]!, args[1]!, args[2]!);
+      return;
+    }
+    if (expression.func === "__trap") {
+      this.fn.unreachable();
       return;
     }
     unsupported(expression);
@@ -1724,10 +1960,12 @@ class FunctionLowerer {
     }
   }
 
-  private findContinueTarget(): LabelId | undefined {
+  private findContinueTarget(): { label: LabelId; deferDepth: number } | undefined {
     for (let index = this.controls.length - 1; index >= 0; index -= 1) {
-      const label = this.controls[index]!.continueLabel;
-      if (label !== undefined) return label;
+      const target = this.controls[index]!;
+      if (target.continueLabel !== undefined) {
+        return { label: target.continueLabel, deferDepth: target.deferDepth };
+      }
     }
     return undefined;
   }
@@ -1892,7 +2130,33 @@ export function lowerModule(
   }
   for (const [identity, layout] of layouts) builder.structLayout(identity, layout);
 
-  const staticData = new StaticDataPlanner(builder, layouts);
+  const globalNames = new Set(Object.keys(meta.globals));
+  const frameAggregates = new Map<FunctionStatement, Set<ASTExpression>>();
+  for (const statement of ast.statements) {
+    if (!(statement instanceof FunctionStatement)) continue;
+    // H1 / O10: per-call frame storage unless the reference escapes, in which
+    // case it stays static so returning it still works.
+    const escapes = analyzeEscapes(
+      statement.fnExpr.body,
+      (name) => globalNames.has(name),
+      (expr) => {
+        const type = (expr as ASTExpression).resolvedType;
+        return type !== undefined && (type === "string" || type.endsWith("[]"));
+      },
+    );
+    frameAggregates.set(
+      statement,
+      new Set(
+        escapes.sites
+          .filter((site) => site.kind !== "struct" && !escapes.escaping.has(site.expr))
+          .map((site) => site.expr),
+      ),
+    );
+  }
+  const allFrameAggregates = new Set<ASTExpression>();
+  for (const set of frameAggregates.values()) for (const expr of set) allFrameAggregates.add(expr);
+
+  const staticData = new StaticDataPlanner(builder, layouts, allFrameAggregates);
   staticData.scan(ast);
 
   const functions = new Map<string, FuncId>();
@@ -1923,7 +2187,10 @@ export function lowerModule(
   const framePlans = new Map<FunctionStatement, FramePlan>();
   for (const statement of ast.statements) {
     if (statement instanceof FunctionStatement) {
-      framePlans.set(statement, planFrame(statement.fnExpr.body, layouts));
+      framePlans.set(
+        statement,
+        planFrame(statement.fnExpr.body, layouts, frameAggregates.get(statement) ?? new Set()),
+      );
     }
   }
   const needsStack = [...framePlans.values()].some((frame) => frame.size > 0);
@@ -2001,21 +2268,7 @@ export function lowerModule(
     slots.set(entry.originalName, slot);
   }
 
-  let makeFnrefId: FuncId | undefined;
-  if (meta.needsFnrefCreation) {
-    const allocator =
-      options.allocator === undefined
-        ? meta.imports.alloc?.synthesized
-          ? functions.get("alloc")
-          : undefined
-        : functions.get(options.allocator);
-    if (allocator === undefined) {
-      throw new Error("function references require the merged memory allocator");
-    }
-    makeFnrefId = makeFnref(builder, allocator);
-  }
   const fnrefs: FnrefLowering = { slots, signatures: indirectSignatures };
-  if (makeFnrefId !== undefined) fnrefs.makeFnrefId = makeFnrefId;
 
   for (const statement of ast.statements) {
     if (

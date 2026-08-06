@@ -13,6 +13,7 @@ import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -35,6 +36,13 @@ import type {
 import type { ModuleGraph, ModuleRecord } from "./module-graph";
 import { analyzeReachability, type ReachableSet } from "./reachability";
 import { canonicalFnType, isFnType, parseFnType, valueTypeToWasm } from "./types";
+
+const ALLOCATOR_MODULES = new Set(["memory", "memory_debug"]);
+
+/** A bundled module providing `__heap_init`, `malloc`, `free`, `realloc`. */
+export function isAllocatorModule(bundledStdlib: string | undefined): boolean {
+  return bundledStdlib !== undefined && ALLOCATOR_MODULES.has(bundledStdlib);
+}
 
 export type DeclarationEdges = {
   calls: string[];
@@ -370,17 +378,10 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
       if (mode === "read") {
         const fn = functionTarget(module, name);
         if (fn) {
+          // A named fn-ref is a static `{slot, 0}` record (T62), so it needs
+          // no creation helper and therefore no allocator.
           pushUnique(owner.edges.fnRefs, fn);
           owner.hasFnTypedSurface = true;
-          owner.needsFnrefCreation = true;
-          addHelperEdge(owner, "__make_fnref");
-          const alloc = importedTarget(module, "alloc", "func");
-          ensureHelper({
-            name: "__make_fnref",
-            kind: "fn-ref",
-            calls: alloc ? [alloc] : [],
-            requirements: [],
-          });
         }
       }
     }
@@ -534,6 +535,10 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
         if (statement.elseBlock) walkBlock(statement.elseBlock, currentScopes);
         return;
       }
+      if (statement instanceof DeferStatement) {
+        walkExpression(statement.call, currentScopes);
+        return;
+      }
       if (statement instanceof WhileStatement) {
         walkExpression(statement.condExpr, currentScopes);
         walkBlock(statement.loopBody, currentScopes);
@@ -640,13 +645,19 @@ export function buildMergedProgram(graph: ModuleGraph): MergedProgram {
   }
 
   const startupInitializers: MergedStartupInitializer[] = [];
+  const allocators = orderedModules.filter((module) => isAllocatorModule(module.bundledStdlib));
+  if (allocators.length > 1) {
+    const names = allocators.map((module) => module.bundledStdlib).join(", ");
+    throw new Error(`only one allocator module may be reachable, found: ${names}`);
+  }
   const memoryModule = orderedModules.find(
-    (module) => module.bundledStdlib === "memory" && module.data.exports.heap_init?.kind === "func",
+    (module) =>
+      isAllocatorModule(module.bundledStdlib) && module.data.exports.__heap_init?.kind === "func",
   );
   const heapInitializer: MergedStartupInitializer | undefined = memoryModule
     ? (() => {
         const id = `${memoryModule.manglePrefix}$$heap-init`;
-        const owner = mangledName(memoryModule, "heap_init");
+        const owner = mangledName(memoryModule, "__heap_init");
         return {
           id,
           moduleKey: memoryModule.key,

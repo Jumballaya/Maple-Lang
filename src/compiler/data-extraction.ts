@@ -16,6 +16,7 @@ import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StringLiteralExpression } from "../parser/ast/expressions/StringLiteral";
 import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -127,6 +128,10 @@ export function extractGlobalData(
     if (statement.elseBlock) {
       extractGlobalData(statement.elseBlock, meta, insideFunction, deferArrayElementErrors);
     }
+    return;
+  }
+  if (statement instanceof DeferStatement) {
+    scanExpression(statement.call, deferArrayElementErrors);
     return;
   }
   if (statement instanceof WhileStatement) {

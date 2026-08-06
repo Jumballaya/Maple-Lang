@@ -18,6 +18,7 @@ import { StringLiteralExpression } from "../src/parser/ast/expressions/StringLit
 import { StructLiteralExpression } from "../src/parser/ast/expressions/StructLiteralExpression";
 import { BreakStatement } from "../src/parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../src/parser/ast/statements/ContinueStatement";
+import { DeferStatement } from "../src/parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../src/parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../src/parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../src/parser/ast/statements/FunctionStatement";
@@ -3714,3 +3715,55 @@ function assertFunctionParams(
     assert(type === expectedType);
   }
 }
+
+// T65 — `defer` grammar. One call, nothing else.
+describe("Parser: defer", () => {
+  function parsed(source: string) {
+    const parser = new Parser(source);
+    const ast = parser.parse("test");
+    return { parser, ast };
+  }
+
+  test("defer wraps a call expression", () => {
+    const { parser, ast } = parsed("fn f(): void { defer g(); }");
+    assert.deepEqual(
+      parser.errors.map((e) => e.message),
+      [],
+    );
+    const body = (ast.statements[0] as FunctionStatement).fnExpr.body.statements;
+    assert(body[0] instanceof DeferStatement);
+    assert(body[0].call instanceof CallExpression);
+  });
+
+  test("a deferred method call parses", () => {
+    const { parser } = parsed("fn f(): void { defer p.release(); }");
+    assert.deepEqual(
+      parser.errors.map((e) => e.message),
+      [],
+    );
+  });
+
+  test("a deferred call with arguments parses", () => {
+    const { parser } = parsed("fn f(): void { defer free(p, 1 + 2); }");
+    assert.deepEqual(
+      parser.errors.map((e) => e.message),
+      [],
+    );
+  });
+
+  for (const bad of ["defer x;", "defer let y = 1;", "defer { }", "defer;"]) {
+    test(`rejects '${bad}'`, () => {
+      const { parser } = parsed(`fn f(): void { ${bad} }`);
+      assert(parser.errors.length > 0, `expected an error for ${bad}`);
+    });
+  }
+
+  // A keyword is being freed, so this is a positive test.
+  test("null is now a usable identifier", () => {
+    const { parser } = parsed("fn f(): i32 { let null: i32 = 7; return null; }");
+    assert.deepEqual(
+      parser.errors.map((e) => e.message),
+      [],
+    );
+  });
+});

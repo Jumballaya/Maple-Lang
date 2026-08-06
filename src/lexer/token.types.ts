@@ -102,7 +102,7 @@ export type Token =
   | DecrementToken
 
   //
-  | NullToken
+  | DeferToken
   | EOFToken;
 
 export type IntegerToken = {
@@ -229,9 +229,9 @@ export type ExportToken = {
   literal: "export";
 } & Pos;
 
-export type NullToken = {
-  type: "Null";
-  literal: "null";
+export type DeferToken = {
+  type: "Defer";
+  literal: "defer";
 } & Pos;
 
 export type I8TypeToken = {

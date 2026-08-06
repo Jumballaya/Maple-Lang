@@ -515,6 +515,96 @@ String mutability is not settled. The current representation uses writable bytes
 
 ---
 
+## Memory
+
+**Storage classes.** Every value created in a Maple program has one of three
+storage classes.
+
+- **Static** values live for the whole program: module-scope struct, array, and
+  string literals, and any local array or string literal whose reference
+  *escapes* the function (see *Escaping*, below).
+- **Frame** values live until the enclosing function returns: struct literals
+  bound by a `let` inside a function, and local array and string literals that
+  do not escape. A frame value is created fresh on every call, so writes made by
+  one call are not visible to the next.
+- **Heap** values live until they are freed: anything from `malloc` or
+  `realloc`.
+
+**Aggregates are references.** A struct, array, or string value is a reference
+to storage, not a copy of it. `let q = p;` makes `q` and `p` name the same
+object, so a write through one is visible through the other, and only one of
+them may be freed. Equality (`==`) compares contents, not identity.
+
+**Escaping.** A frame-backed *struct* may not be returned, assigned into a
+module-scope global, or stored into a field or element — the frame is released
+before the caller sees the pointer, so the value would dangle. Allocate it on
+the heap instead:
+
+```maple
+fn make(a: i32): Point {
+  let p: Point = malloc(8) as Point;   // heap, not a literal
+  p.x = a;
+  return p;                             // ownership transfers to the caller
+}
+```
+
+Arrays and strings have no heap constructor, so instead of rejecting an
+escaping literal the compiler gives it static storage — `return [7, 8];` and
+`return "hello";` compile and behave as before. The analysis is per-function
+and follows aliases; it does not cross call boundaries.
+
+**Ownership.** A function that returns a heap pointer transfers ownership to
+its caller: the callee allocates, the caller frees. Function parameters are
+borrowed — a callee must not free, store, or retain a parameter beyond the
+call. A function that consumes an argument says so in its name (a `consume_` or
+`take_` prefix) and in its first documentation line. Module-scope globals never
+own; assigning a heap pointer into a global is the documented way to leak.
+
+**`defer`.** `defer f(args);` runs `f` when the innermost enclosing block is
+left, by any edge — falling off the end, `break`, `continue`, or `return`.
+Deferred calls in the same block run in reverse registration order, and inner
+blocks run before outer ones. The arguments and the function value are
+evaluated at the `defer` statement, not at the call, so reassigning a variable
+afterwards does not change what runs. A `defer` may only be a function call,
+and only inside a function body. A program that uses no `defer` compiles to
+byte-identical output.
+
+```maple
+fn work(): i32 {
+  let p: i32 = malloc(64);
+  defer free(p);        // runs on every exit edge below
+  if (bad(p)) { return -1; }
+  return use(p);
+}
+```
+
+**Freeing.** `free(p)` releases a heap block and accepts either an `i32` or a
+struct-typed value. `free(0)` does nothing. Passing a pointer that is not a
+live heap allocation — a literal, a frame-backed value, an interior pointer, or
+an already-freed block — traps. Freeing the same pointer twice, or using a
+pointer after freeing it, is undefined behavior; where the compiler can see it,
+it is a compile error instead.
+
+`realloc(p, new_size)` derives the old size from the allocation itself. It
+returns 0 on failure and leaves `p` valid; on success `p` is freed, so a
+`defer free(p)` registered earlier now names a stale pointer — defer after the
+last `realloc`, or re-defer.
+
+**Debugging allocations.** Importing from `"memory_debug"` instead of
+`"memory"` swaps in an instrumented allocator with the same public surface plus
+`heap_stats()` and `heap_errors()`. It poisons freed payloads and records
+invalid frees rather than trapping, so a run can report how many it saw.
+
+**Traps.** A trap ends the current call and leaves the module's memory, heap,
+and stack in an unspecified state. Deferred calls do not run. The host must
+discard the instance; Maple makes no guarantee about any later call into it.
+
+**Null.** There is no null literal. `0` is the null pointer and `0 as T` is how
+it is written. Dereferencing it does not trap — address 0 is ordinary memory —
+so code that may hold a null pointer must test it.
+
+---
+
 ## Imports
 
 Names from other modules are imported at the top of a file:
@@ -556,9 +646,9 @@ Tier 2 functions use range reduction and short polynomials; expect roughly **1e-
 
 ### Memory standard library (`"memory"`)
 
-The bundled `"memory"` module exports `malloc`, `free`, `realloc`, and `heap_init` to other Maple modules. When the allocator is included, the compiler places `heap_init(align8(finalDataEnd))` first in the WebAssembly `start` function. It runs during module instantiation, before other deferred initializers and before any export can be called.
+The bundled `"memory"` module exports `malloc`, `free`, and `realloc` to other Maple modules. When the allocator is included, the compiler places `__heap_init(align8(finalDataEnd))` first in the WebAssembly `start` function. It runs during module instantiation, before other deferred initializers and before any export can be called.
 
-`heap_init` is a Maple export for cross-module use, but the standard-library function is not itself a WebAssembly host export because only entry-module exports are host-visible. Calling `heap_init(data_end)` explicitly resets the allocator to `align8(data_end)`, discards the free list, and invalidates all previously returned allocations.
+`__heap_init` is exported so the compiler can discover it, but it is **not importable by user code**: the import checker rejects `__`-prefixed stdlib names, because resetting the allocator invalidates every pointer a program is holding. `"memory_debug"` provides the same surface plus `heap_stats()` and `heap_errors()`.
 
 ### String standard library (`"string"`)
 

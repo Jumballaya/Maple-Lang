@@ -13,7 +13,7 @@ import { encodeWasm } from "../src/ir/encode-wasm";
 import type { IrModule } from "../src/ir/ir";
 import { printWat } from "../src/ir/print-wat";
 import { Parser } from "../src/parser/Parser";
-import { compile, runExport, runMergedExport } from "./helpers";
+import { compile, mergedInstance, runExport, runMergedExport } from "./helpers";
 import { moduleWith } from "./ir-fixtures";
 
 function encodedModule(module: IrModule): WebAssembly.Module {
@@ -1896,7 +1896,8 @@ describe("structs", () => {
   test("empty struct can be instantiated and used as a marker type", () => {
     const wat = compile(`
       struct Marker {}
-      fn make(): Marker { let m: Marker = {}; return m; }
+      let shared: Marker = {};
+      fn make(): Marker { return shared; }
       export fn run(): i32 {
         let m: Marker = make();
         return 7;
@@ -1969,7 +1970,8 @@ describe("structs", () => {
   test("member access chained after a function call works", () => {
     const wat = compile(`
       struct P { x: i32 }
-      fn make(): P { let p: P = { x = 42 }; return p; }
+      let shared: P = { x = 42 };
+      fn make(): P { return shared; }
       export fn run(): i32 { return make().x; }
     `);
     assert.equal(runExport(wat, "run"), 42);
@@ -3240,13 +3242,13 @@ describe("stress", () => {
 });
 
 describe("standalone allocator fallback", () => {
-  test("lazy initialization stays above the default two-page boundary", () => {
+  // T57 replaced the guessed 131072 base with a trap: an unwired build has no
+  // way to know where its static data ends, so any guess can sit on top of it.
+  test("an unwired allocator traps instead of guessing a heap base", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(dir, "../src/compiler/stdlib/memory.maple"), "utf8");
-    const wat = compile(source);
-    const pointer = runExport(wat, "malloc", [8]) as number;
-    assert(pointer >= 131080);
-    assert.equal(pointer % 8, 0);
+    const module = compile(source);
+    assert.throws(() => runExport(module, "malloc", [8]), WebAssembly.RuntimeError);
   });
 });
 
@@ -3340,11 +3342,12 @@ describe("stdlib execution through the merged pipeline", () => {
       import malloc, realloc from "memory"
       struct Triple { a: i32, b: i32, c: i32 }
       export fn run(): i32 {
-        let values: Triple = malloc(12) as Triple;
+        let raw: i32 = malloc(12);
+        let values: Triple = raw as Triple;
         values.a = 1;
         values.b = 2;
         values.c = 3;
-        let grown: Triple = realloc(values as i32, 12, 40) as Triple;
+        let grown: Triple = realloc(raw, 40) as Triple;
         return grown.a * 10000 + grown.b * 100 + grown.c;
       }
     `;
@@ -3435,6 +3438,271 @@ describe("stdlib execution through the merged pipeline", () => {
       }
     `;
     assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  // T57 — ledger B23. `free` used to accept any pointer whose `ptr - 4` word
+  // happened to be odd, which corrupted foreign memory about half the time.
+  test("free of a null pointer stays a defined no-op", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        free(0);
+        let p: i32 = malloc(8);
+        free(p);
+        return 1;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("free of a static-data address traps", async () => {
+    const source = `
+      import free from "memory"
+      let label: string = "static";
+      export fn run(): i32 {
+        free(label.data);
+        return 1;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  test("free of a shadow-stack address traps", async () => {
+    const source = `
+      import free from "memory"
+      export fn run(): i32 {
+        free(1024);
+        return 1;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  test("free of a misaligned interior pointer traps", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(32);
+        free(p + 4);
+        return 1;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  // The one that proves the magic word earns its place: `p + 8` is inside the
+  // heap and 8-byte aligned, so every range and alignment clause accepts it.
+  test("free of an ALIGNED interior pointer traps via the identity word", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(64);
+        __store_i32(p, 0);
+        __store_i32(p + 4, 25);
+        free(p + 8);
+        return 1;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  test("an adjacent double free traps", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(16);
+        free(p);
+        free(p);
+        return 1;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  test("a valid free still releases the block for reuse", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let first: i32 = malloc(16);
+        free(first);
+        let second: i32 = malloc(16);
+        return first == second;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("realloc of a foreign pointer traps through the guard", async () => {
+    const source = `
+      import realloc from "memory"
+      let label: string = "static";
+      export fn run(): i32 {
+        return realloc(label.data, 32);
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  // T56 — ledger B21: the header owns the size, so a caller cannot over-report
+  // it and copy a neighbouring allocation's bytes into the new block.
+  test("realloc copies only the block it was given", async () => {
+    const source = `
+      import malloc, realloc from "memory"
+      export fn run(): i32 {
+        let first: i32 = malloc(8);
+        let neighbour: i32 = malloc(8);
+        __store_i32(first, 11);
+        __store_i32(first + 4, 22);
+        __store_i32(neighbour, 1515870810);
+        __store_i32(neighbour + 4, 1515870810);
+        let grown: i32 = realloc(first, 64);
+        if (__load_i32(grown) != 11) { return 0; }
+        if (__load_i32(grown + 4) != 22) { return 0; }
+        let i: i32 = 8;
+        while (i < 64) {
+          if (__load_i32(grown + i) == 1515870810) { return 0; }
+          i = i + 4;
+        }
+        return 1;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("realloc shrinks while preserving the surviving prefix", async () => {
+    const source = `
+      import malloc, realloc from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(32);
+        __store_i32(p, 7);
+        __store_i32(p + 4, 8);
+        let small: i32 = realloc(p, 8);
+        if (small == 0) { return 0; }
+        if (__load_i32(small) != 7) { return 0; }
+        return __load_i32(small + 4) == 8;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("realloc from a null pointer behaves as malloc", async () => {
+    const source = `
+      import realloc from "memory"
+      export fn run(): i32 {
+        let p: i32 = realloc(0, 16);
+        if (p == 0) { return 0; }
+        __store_i32(p, 99);
+        return __load_i32(p);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 99);
+  });
+
+  test("realloc to zero returns a usable block and releases the old one", async () => {
+    const source = `
+      import malloc, realloc from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(16);
+        let shrunk: i32 = realloc(p, 0);
+        if (shrunk == 0) { return 0; }
+        __store_i32(shrunk, 5);
+        return __load_i32(shrunk);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 5);
+  });
+
+  test("a failed realloc returns zero and leaves the original allocated", async () => {
+    const source = `
+      import malloc, realloc from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(16);
+        __store_i32(p, 1234);
+        let failed: i32 = realloc(p, -1);
+        if (failed != 0) { return 0; }
+        return __load_i32(p);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1234);
+  });
+
+  // T55 — ledger B18: non-splitting reuse must keep the chunk's recorded size.
+  test("non-splitting reuse does not orphan bytes into the next allocation", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let a: i32 = malloc(16);
+        let guard: i32 = malloc(8);
+        __store_i32(a, 1);
+        __store_i32(a + 4, 2);
+        __store_i32(a + 8, 3);
+        __store_i32(a + 12, 64);
+        __store_i32(guard, 1515870810);
+        __store_i32(guard + 4, 1515870810);
+        free(a);
+        let b: i32 = malloc(8);
+        free(b);
+        let c: i32 = malloc(64);
+        let i: i32 = 0;
+        while (i < 64) {
+          __store_i32(c + i, -1);
+          i = i + 4;
+        }
+        if (__load_i32(guard) != 1515870810) { return 0; }
+        return __load_i32(guard + 4) == 1515870810;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  // T55 — ledger B20: negative sizes skip the unsigned clamp and wrap.
+  test("malloc rejects negative sizes without corrupting the heap", async () => {
+    const source = `
+      import malloc from "memory"
+      export fn run(): i32 {
+        let bad: i32 = malloc(-8);
+        let worse: i32 = malloc(-16);
+        let good: i32 = malloc(8);
+        let after: i32 = malloc(8);
+        if (bad != 0) { return 0; }
+        if (worse != 0) { return 0; }
+        if (good == 0) { return 0; }
+        return after > good;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  // T55 — ledger B19/B20: oversized requests must report OOM, not wrap.
+  test("malloc returns zero for sizes that would overflow the header math", async () => {
+    const source = `
+      import malloc from "memory"
+      export fn run(): i32 {
+        let first: i32 = malloc(2147483632);
+        let second: i32 = malloc(2147483632);
+        let third: i32 = malloc(2147483632);
+        let fourth: i32 = malloc(2147483632);
+        if (first != 0) { return 0; }
+        if (second != 0) { return 0; }
+        if (third != 0) { return 0; }
+        return fourth == 0;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  // T55 — malloc(0) stays a usable block; T56's realloc(p, 0) depends on it.
+  test("malloc zero returns a usable minimum block", async () => {
+    const source = `
+      import malloc from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(0);
+        if (p == 0) { return 0; }
+        __store_i32(p, 4242);
+        return __load_i32(p);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 4242);
   });
 
   test("math sqrt executes through the merged module", async () => {
@@ -3657,5 +3925,701 @@ describe("compiler intrinsics", () => {
       export fn run(): i32 { return __sqrt_f32(16.0) as i32; }
     `);
     assert.equal(runExport(wat, "run"), 4);
+  });
+});
+
+// T60 — ledger B29. Address 0 sits in the shadow-stack page, so dereferencing
+// it does not trap: `__struct_eq_T` read 0 and recursed on it forever.
+describe("generated struct equality: null guard", () => {
+  const NODE = "struct Node { v: i32, next: Node }";
+
+  test("self-referential chains with null terminators compare equal", async () => {
+    const source = `
+      import malloc from "memory"
+      ${NODE}
+      export fn run(): i32 {
+        let a: Node = malloc(8) as Node;
+        a.v = 7;
+        a.next = 0 as Node;
+        let b: Node = malloc(8) as Node;
+        b.v = 7;
+        b.next = 0 as Node;
+        return a == b;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("chains differing in value compare unequal", async () => {
+    const source = `
+      import malloc from "memory"
+      ${NODE}
+      export fn run(): i32 {
+        let a: Node = malloc(8) as Node;
+        a.v = 7;
+        a.next = 0 as Node;
+        let b: Node = malloc(8) as Node;
+        b.v = 8;
+        b.next = 0 as Node;
+        return a == b;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 0);
+  });
+
+  test("chains of different length compare unequal", async () => {
+    const source = `
+      import malloc from "memory"
+      ${NODE}
+      export fn run(): i32 {
+        let tail: Node = malloc(8) as Node;
+        tail.v = 7;
+        tail.next = 0 as Node;
+        let longer: Node = malloc(8) as Node;
+        longer.v = 7;
+        longer.next = tail;
+        let shorter: Node = malloc(8) as Node;
+        shorter.v = 7;
+        shorter.next = 0 as Node;
+        return longer == shorter;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 0);
+  });
+
+  test("a zeroed struct is not equal to the null pointer", async () => {
+    const source = `
+      import malloc from "memory"
+      ${NODE}
+      export fn run(): i32 {
+        let a: Node = malloc(8) as Node;
+        a.v = 0;
+        a.next = 0 as Node;
+        let nothing: Node = 0 as Node;
+        return a == nothing;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 0);
+  });
+
+  test("two null pointers compare equal", async () => {
+    const source = `
+      ${NODE}
+      export fn run(): i32 {
+        let a: Node = 0 as Node;
+        let b: Node = 0 as Node;
+        return a == b;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+});
+
+// T62 — ledger B22. `lowerIdentifier` emitted a `malloc(8)` per SYNTACTIC
+// evaluation of a function name: 100 loop iterations leaked 1616 bytes, and
+// the user could not free them (`fn(...) → i32` casts are blocked).
+describe("named fn-references are static records", () => {
+  const OPS =
+    "fn add(a: i32, b: i32): i32 { return a + b; } fn sub(a: i32, b: i32): i32 { return a - b; }";
+
+  test("taking a fn-reference in a loop allocates zero heap bytes", async () => {
+    const source = `
+      import malloc from "memory"
+      ${OPS}
+      export fn run(): i32 {
+        let before: i32 = malloc(8);
+        let i: i32 = 0;
+        let total: i32 = 0;
+        while (i < 100) {
+          let op: fn(i32,i32): i32 = add;
+          total = total + op(1, 1);
+          i = i + 1;
+        }
+        let after: i32 = malloc(8);
+        if (total != 200) { return -1; }
+        return after - before;
+      }
+    `;
+    // Two adjacent 8-byte allocations: 16 bytes of chunk, and nothing between.
+    assert.equal(await runMergedExport(source, "run"), 16);
+  });
+
+  test("the same function yields one shared address below the heap", async () => {
+    const source = `
+      import malloc from "memory"
+      ${OPS}
+      export fn run(): i32 {
+        let first: fn(i32,i32): i32 = add;
+        let second: fn(i32,i32): i32 = add;
+        let other: fn(i32,i32): i32 = sub;
+        let heap: i32 = malloc(8);
+        if (first != second) { return 0; }
+        if (first == other) { return 0; }
+        return first < heap;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("indirect dispatch still selects the captured target", async () => {
+    const source = `
+      ${OPS}
+      export fn run(): i32 {
+        let op: fn(i32,i32): i32 = add;
+        let result: i32 = op(10, 3);
+        op = sub;
+        return result * 100 + op(10, 3);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1307);
+  });
+});
+
+// T69 — freeing a heap struct end to end. Lowering is unchanged: struct
+// values already occupy the i32 lane, so the emitted call is the i32 call.
+describe("free accepts struct pointers", () => {
+  test("a heap struct round-trips through free and reuse", async () => {
+    const source = `
+      import malloc, free from "memory"
+      struct Cell { value: i32 }
+      export fn run(): i32 {
+        let first: Cell = malloc(8) as Cell;
+        first.value = 41;
+        let observed: i32 = first.value;
+        free(first);
+        let second: Cell = malloc(8) as Cell;
+        second.value = observed + 1;
+        return second.value;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 42);
+  });
+
+  test("realloc through the struct form preserves the payload", async () => {
+    const source = `
+      import malloc, realloc from "memory"
+      struct Pair { a: i32, b: i32 }
+      export fn run(): i32 {
+        let p: Pair = malloc(8) as Pair;
+        p.a = 3;
+        p.b = 4;
+        let grown: Pair = realloc(p, 64) as Pair;
+        return grown.a * 10 + grown.b;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 34);
+  });
+});
+
+// T67 — `defer` lowering (Design S: static inline expansion, no new IR nodes).
+// These seven prove the feature works end to end; T68 adds the full matrix.
+describe("defer: core semantics", () => {
+  const LOG = "let log: i32 = 0;\nfn note(v: i32): void { log = log * 10 + v; }\n";
+
+  test("one defer runs at fall-through", async () => {
+    const source = `${LOG}
+      fn body(): void { defer note(7); }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 7);
+  });
+
+  test("two defers in one scope run LIFO", async () => {
+    const source = `${LOG}
+      fn body(): void { defer note(1); defer note(2); }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 21);
+  });
+
+  test("an inner block's defer runs at the inner block's end", async () => {
+    const source = `${LOG}
+      fn body(): void { if (1 == 1) { defer note(1); } note(2); }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 12);
+  });
+
+  test("a defer runs on return", async () => {
+    const source = `${LOG}
+      fn body(): i32 { defer note(3); return 0; }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 3);
+  });
+
+  test("a defer runs on break and on continue", async () => {
+    const source = `${LOG}
+      fn body(): void {
+        for (let i: i32 = 0; i < 3; i = i + 1) {
+          defer note(1);
+          if (i == 1) { continue; }
+          if (i == 2) { break; }
+        }
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 111);
+  });
+
+  // The rule that decided scope-exit over function-exit.
+  test("a defer in a loop body runs once per iteration", async () => {
+    const source = `${LOG}
+      fn body(): void { for (let i: i32 = 0; i < 3; i = i + 1) { defer note(1); } }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 111);
+  });
+
+  // Proves defers precede the $__sp restore: the frame must still be live.
+  test("a defer reads a shadow-stack struct member", async () => {
+    const source = `
+      import malloc, free from "memory"
+      struct Buf { data: i32, len: i32 }
+      export fn run(): i32 {
+        let b: Buf = { data = malloc(64), len = 64 };
+        __store_i32(b.data, 99);
+        defer free(b.data);
+        return b.len;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 64);
+  });
+
+  // Register-time capture: reassigning after the defer changes nothing.
+  test("arguments are captured at the defer statement", async () => {
+    const source = `${LOG}
+      fn body(): void { let v: i32 = 5; defer note(v); v = 9; }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 5);
+  });
+});
+
+// T68 — the exhaustive `defer` matrix over the feature T67 landed.
+describe("defer: full matrix", () => {
+  const LOG = "let log: i32 = 0;\nfn note(v: i32): void { log = log * 10 + v; }\n";
+
+  test("per-iteration release in a while loop", async () => {
+    const source = `${LOG}
+      fn body(): void {
+        let i: i32 = 0;
+        while (i < 3) { defer note(1); i = i + 1; }
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 111);
+  });
+
+  test("a defer in an if-arm does not run after the if", async () => {
+    const source = `${LOG}
+      fn body(): void { if (1 == 1) { defer note(1); note(2); } note(3); }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 213);
+  });
+
+  test("a case defer runs when the case falls off its end", async () => {
+    const source = `${LOG}
+      fn body(k: i32): void { switch (k) { case 0: { defer note(1); note(2); } } note(3); }
+      export fn run(): i32 { body(0); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 213);
+  });
+
+  // `break` leaves the SWITCH, so the loop body's defer must NOT run yet.
+  test("break inside a switch runs only the case's defers", async () => {
+    const source = `${LOG}
+      fn body(): void {
+        for (let i: i32 = 0; i < 1; i = i + 1) {
+          defer note(9);
+          switch (i) { case 0: { defer note(1); break; } }
+          note(2);
+        }
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 129);
+  });
+
+  test("continue from inside a switch runs the case's and the loop's defers", async () => {
+    const source = `${LOG}
+      fn body(): void {
+        for (let i: i32 = 0; i < 1; i = i + 1) {
+          defer note(9);
+          switch (i) { case 0: { defer note(1); continue; } }
+          note(2);
+        }
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 19);
+  });
+
+  test("body defers run before the loop update", async () => {
+    const source = `${LOG}
+      fn body(): void { for (let i: i32 = 0; i < 3; i = i + 1) { defer note(i); } }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 12);
+  });
+
+  test("a deep return runs innermost scopes first", async () => {
+    const source = `${LOG}
+      fn body(): i32 {
+        defer note(3);
+        if (1 == 1) {
+          defer note(2);
+          if (1 == 1) { defer note(1); return 0; }
+        }
+        return 0;
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 123);
+  });
+
+  test("a defer after an early return never runs", async () => {
+    const source = `${LOG}
+      fn body(p: i32): i32 { if (p == 0) { return -1; } defer note(1); return 0; }
+      export fn run(): i32 { body(0); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 0);
+  });
+
+  // §10.2: the spill becomes unconditional, including with no struct locals.
+  test("the return-value spill works with an empty frame", async () => {
+    const source = `${LOG}
+      fn body(): i32 { defer note(1); return 42; }
+      export fn run(): i32 { return body() * 10 + log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 421);
+  });
+
+  test("an indirect deferred call uses the captured target", async () => {
+    const source = `${LOG}
+      fn one(): void { note(1); }
+      fn two(): void { note(2); }
+      fn body(): void { let op: fn(): void = one; defer op(); op = two; op(); }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 21);
+  });
+
+  test("a deferred call may allocate", async () => {
+    const source = `
+      import malloc, free from "memory"
+      export fn run(): i32 {
+        let a: i32 = malloc(16);
+        defer free(a);
+        let b: i32 = malloc(16);
+        free(b);
+        return a;
+      }
+    `;
+    assert(Number(await runMergedExport(source, "run")) > 0);
+  });
+
+  test("recursion runs each activation's defers", async () => {
+    const source = `${LOG}
+      fn down(n: i32): i32 { defer note(n); if (n == 0) { return 0; } return down(n - 1); }
+      export fn run(): i32 { down(3); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 123);
+  });
+
+  // §6's measured reality: a trap does not run defers and does not unwind.
+  test("a deferred method call captures its receiver", async () => {
+    const source = `${LOG}
+      struct Cell { value: i32 }
+      fn Cell.release(self)(bias: i32): void { note(self.value + bias); }
+      fn body(): void {
+        let a: Cell = { value = 1 };
+        let b: Cell = { value = 2 };
+        defer a.release(0);
+        defer b.release(0);
+      }
+      export fn run(): i32 { body(); return log; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 21);
+  });
+
+  // Exact pointer capture, not merely "something was captured".
+  test("the captured pointer is the one live at the defer statement", async () => {
+    const source = `
+      import malloc from "memory"
+      let observed: i32 = 0;
+      fn observe(p: i32): void { observed = p; }
+      fn body(): i32 {
+        let p: i32 = malloc(16);
+        let first: i32 = p;
+        defer observe(p);
+        p = malloc(32);
+        return first;
+      }
+      export fn run(): i32 { let first: i32 = body(); return observed == first; }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  // W7, the dangerous footgun: realloc already freed the old block, so the
+  // defer now names a stale pointer. T57's guard turns that into a trap.
+  test("a defer registered before realloc frees a stale pointer and traps", async () => {
+    const source = `
+      import malloc, realloc, free from "memory"
+      export fn run(): i32 {
+        let p: i32 = malloc(16);
+        defer free(p);
+        p = realloc(p, 32);
+        return 0;
+      }
+    `;
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  // §6's measured reality. The function holds a STRUCT local, so it has a real
+  // frame — without one there is no `$__sp` displacement to observe.
+  test("a trap mid-scope leaves the allocation live and $__sp displaced", async () => {
+    const source = `
+      import malloc, free from "memory"
+      struct Anchor { slot: i32 }
+      let leaked: i32 = 0;
+      export fn boom(): i32 {
+        let anchor: Anchor = { slot = 1 };
+        let p: i32 = malloc(16);
+        leaked = p;
+        defer free(p);
+        anchor.slot = 2;
+        __trap();
+        return 0;
+      }
+      export fn probeHeap(): i32 {
+        let after: i32 = malloc(16);
+        return after == leaked;
+      }
+      export fn probeStack(): i32 { let probe: Anchor = { slot = 3 }; return probe.slot; }
+    `;
+    const instance = await mergedInstance(source);
+    assert.throws(() => (instance.exports.boom as () => number)(), WebAssembly.RuntimeError);
+    // The deferred free never ran: the block is still live, so the next malloc
+    // cannot hand back the same address.
+    assert.equal((instance.exports.probeHeap as () => number)(), 0);
+    // `$__sp` was never restored either, so a later framed call allocates its
+    // struct BELOW the abandoned frame rather than reusing it — the instance is
+    // usable only because nothing here depends on the stack pointer's value.
+    assert.equal((instance.exports.probeStack as () => number)(), 3);
+  });
+});
+
+// T71 — H1 / decision O10 (option A1). Escape analysis picks storage: a
+// non-escaping `let`-bound literal becomes per-call, an escaping one keeps the
+// shared static buffer so returning it still compiles.
+describe("local literal storage", () => {
+  test("a local string literal is fresh on every call", async () => {
+    const source = `
+      fn touch(): i32 {
+        let s: string = "abcd";
+        let first: i32 = __load_i32(s.data);
+        __store_i32(s.data, 0);
+        return first;
+      }
+      export fn run(): i32 { return touch() == touch(); }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("recursion gives each activation its own buffer", async () => {
+    const source = `
+      fn down(n: i32): i32 {
+        let values: i32[] = [0];
+        values[0] = n;
+        if (n > 0) { down(n - 1); }
+        return values[0];
+      }
+      export fn run(): i32 { return down(3); }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 3);
+  });
+
+  test("a loop re-initializes the literal each iteration", async () => {
+    const source = `
+      export fn run(): i32 {
+        let total: i32 = 0;
+        for (let i: i32 = 0; i < 3; i = i + 1) {
+          let values: i32[] = [5];
+          total = total + values[0];
+          values[0] = 100;
+        }
+        return total;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 15);
+  });
+
+  test("bounds checks still trap on a frame-backed array", async () => {
+    const source = `
+      export fn run(i: i32): i32 { let values: i32[] = [4, 5]; return values[i]; }
+    `;
+    await assert.rejects(runMergedExport(source, "run", [2]), WebAssembly.RuntimeError);
+  });
+
+  test("len and data read correctly from a frame-backed aggregate", async () => {
+    const source = `
+      export fn run(): i32 {
+        let values: i32[] = [7, 8, 9];
+        let s: string = "abcd";
+        return values.len * 10 + s.len;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 34);
+  });
+
+  // The shadow stack is neither aligned nor size-rounded, so a preceding
+  // single-byte struct leaves the array payload unaligned. Wasm permits that.
+  test("an unaligned frame array reads and writes correctly", async () => {
+    const source = `
+      struct Tiny { flag: i8 }
+      export fn run(): i32 {
+        let t: Tiny = { flag = 1 };
+        let values: i32[] = [11, 22];
+        values[1] = values[0] + values[1];
+        return values[1] + t.flag;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 34);
+  });
+
+  test("a dynamic-element local array is per-call too", async () => {
+    const source = `
+      fn seed(): i32 { return 3; }
+      fn touch(): i32 {
+        let values: i32[] = [seed()];
+        let old: i32 = values[0];
+        values[0] = 99;
+        return old;
+      }
+      export fn run(): i32 { return touch() * 100 + touch(); }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 303);
+  });
+});
+
+// T72 — the "memory_debug" drop-in allocator. Same public surface as "memory",
+// swapped by import path; for a CORRECT program the two are identical.
+describe("memory_debug allocator", () => {
+  const PROGRAM = (module: string) => `
+    import malloc, free, realloc from "${module}"
+    export fn run(): i32 {
+      let a: i32 = malloc(16);
+      __store_i32(a, 11);
+      let grown: i32 = realloc(a, 64);
+      let b: i32 = malloc(8);
+      __store_i32(b, 31);
+      let total: i32 = __load_i32(grown) + __load_i32(b);
+      free(grown);
+      free(b);
+      return total;
+    }
+  `;
+
+  test("a correct program behaves identically under both modules", async () => {
+    const plain = await runMergedExport(PROGRAM("memory"), "run");
+    const debug = await runMergedExport(PROGRAM("memory_debug"), "run");
+    assert.equal(plain, 42);
+    assert.equal(debug, plain);
+  });
+
+  test("heap_stats counts live allocations and payload bytes", async () => {
+    const source = `
+      import malloc, free, heap_stats from "memory_debug"
+      export fn run(): i32 {
+        let a: i32 = malloc(16);
+        let b: i32 = malloc(16);
+        let (count, bytes) = heap_stats();
+        free(a);
+        free(b);
+        let (after, restBytes) = heap_stats();
+        return count * 10000 + bytes * 100 + after * 10 + restBytes;
+      }
+    `;
+    // 2 live, 32 payload bytes (headers excluded), then 0 and 0.
+    assert.equal(await runMergedExport(source, "run"), 23200);
+  });
+
+  // The deliberate divergence: "memory" traps here, this records and continues.
+  test("an adjacent double free is recorded instead of trapping", async () => {
+    const source = `
+      import malloc, free, heap_errors from "memory_debug"
+      export fn run(): i32 {
+        let p: i32 = malloc(16);
+        free(p);
+        free(p);
+        return heap_errors();
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 1);
+  });
+
+  test("a foreign-pointer free is recorded instead of trapping", async () => {
+    const source = `
+      import free, heap_errors from "memory_debug"
+      export fn run(): i32 {
+        free(1024);
+        free(65536);
+        return heap_errors();
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 2);
+  });
+
+  test("a use-after-free read returns poison", async () => {
+    const source = `
+      import malloc, free from "memory_debug"
+      export fn run(): i32 {
+        let p: i32 = malloc(32);
+        __store_i32(p + 8, 7);
+        free(p);
+        return __load_i32(p + 8);
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), -559038737);
+  });
+
+  test("the module is tree-shaken when unimported", async () => {
+    const source = `
+      import malloc from "memory"
+      export fn run(): i32 { return malloc(8); }
+    `;
+    assert(Number(await runMergedExport(source, "run")) > 0);
+  });
+});
+
+// Review follow-ups: three shapes that were valid source but mishandled.
+describe("defer and free: review regressions", () => {
+  test("a deferred intrinsic lowers instead of crashing the compiler", async () => {
+    const source = `
+      export fn run(): i32 {
+        let scratch: i32 = 65536;
+        defer __store_i32(scratch, 7);
+        return __load_i32(scratch);
+      }
+    `;
+    // The store runs at fall-through, after the return value is spilled.
+    assert.equal(await runMergedExport(source, "run"), 0);
+  });
+
+  test("a deferred trap intrinsic runs at scope exit", async () => {
+    const source = "export fn run(): i32 { defer __trap(); return 1; }";
+    await assert.rejects(runMergedExport(source, "run"), WebAssembly.RuntimeError);
+  });
+
+  test("a deferred value-producing intrinsic discards its result", async () => {
+    const source = `
+      export fn run(): i32 {
+        defer __memory_size();
+        return 5;
+      }
+    `;
+    assert.equal(await runMergedExport(source, "run"), 5);
   });
 });

@@ -85,7 +85,6 @@ function mergedLowered(files: Record<string, string>) {
     const result = lowerModule(input.ast, input.meta, {
       importMemory: false,
       exportMap: input.exportMap,
-      ...(input.allocator === undefined ? {} : { allocator: input.allocator }),
     });
     return { model, input, ...result, wat: printWat(result.module) };
   } finally {
@@ -166,16 +165,16 @@ describe("IR module lowering: function references", () => {
     instantiate(module);
   });
 
-  test("requires the exact allocator handoff only for creation sites", () => {
+  // T62 removed the dependency this used to pin: a named fn-ref is a static
+  // `{slot, 0}` record, so taking one no longer drags in an allocator.
+  test("named fn-references lower without any allocator", () => {
     const { ast, meta } = checked(`
       fn target(value: i32): i32 { return value; }
       export fn run(): i32 { let ref: fn(i32):i32 = target; return ref(1); }
     `);
     delete meta.imports.alloc;
-    assert.throws(
-      () => lowerModule(ast, meta),
-      /function references require the merged memory allocator/,
-    );
+    const { module } = lowerModule(ast, meta);
+    assert.equal(call(instantiate(module), "run"), 1);
   });
 });
 
@@ -321,7 +320,6 @@ describe("IR module lowering: merged bridge and reachability", () => {
       `,
     });
     assert.equal(creation.model.fnTable.needsFnrefCreation, false);
-    assert.equal(creation.input.allocator, undefined);
     assert.equal(creation.model.reachable.functions.has("main$$target"), false);
     assert.equal(
       [...creation.model.reachable.functions].some((name) => name.endsWith("$$malloc")),
@@ -366,8 +364,9 @@ describe("IR module lowering: merged bridge and reachability", () => {
       `,
       "ops.maple": "export fn add(a: i32, b: i32): i32 { return a + b; }",
     });
-    assert.equal(result.model.fnTable.needsFnrefCreation, true);
-    assert.notEqual(result.input.allocator, undefined);
+    // T62: named refs are static records, so nothing requests fn-ref creation
+    // and the allocator handoff that existed only to serve it is gone.
+    assert.equal(result.model.fnTable.needsFnrefCreation, false);
     assert(result.model.startupInitializers[0]?.id.endsWith("heap-init"));
     const startIndex = result.module.start! - result.module.funcImports.length;
     const first = result.module.funcs[startIndex]?.body[0];
@@ -415,7 +414,7 @@ describe("IR module lowering: merged bridge and reachability", () => {
         export fn value(): i32 { return values[0]; }
       `,
     });
-    assert(result.input.meta.deferredGlobalInits[0]?.owner?.endsWith("$$heap_init"));
+    assert(result.input.meta.deferredGlobalInits[0]?.owner?.endsWith("$$__heap_init"));
     assert.deepEqual(
       result.input.meta.deferredGlobalInits.map((entry) => [entry.kind, entry.owner]),
       [

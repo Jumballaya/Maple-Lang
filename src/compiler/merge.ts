@@ -13,6 +13,7 @@ import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -234,6 +235,10 @@ function rewriteStatement(
     if (statement.elseBlock) rewriteBlock(statement.elseBlock, model, module, scopes);
     return;
   }
+  if (statement instanceof DeferStatement) {
+    rewriteExpression(statement.call, model, module, scopes);
+    return;
+  }
   if (statement instanceof WhileStatement) {
     rewriteExpression(statement.condExpr, model, module, scopes);
     rewriteBlock(statement.loopBody, model, module, scopes);
@@ -399,18 +404,10 @@ function buildLoweringMeta(model: MergedProgram): ModuleMeta {
   return meta;
 }
 
-function resolvedAllocator(model: MergedProgram): string | undefined {
-  const allocator = [...model.imports].find(
-    ([local, target]) => local.endsWith("$$alloc") && target.endsWith("$$malloc"),
-  )?.[1];
-  return allocator && model.reachable.functions.has(allocator) ? allocator : undefined;
-}
-
 export type MergedLoweringInput = {
   ast: ASTProgram;
   meta: ModuleMeta;
   exportMap: Map<string, string>;
-  allocator?: string;
 };
 
 export function buildMergedLoweringInput(model: MergedProgram): MergedLoweringInput {
@@ -419,7 +416,5 @@ export function buildMergedLoweringInput(model: MergedProgram): MergedLoweringIn
     meta: buildLoweringMeta(model),
     exportMap: new Map(model.exports),
   };
-  const allocator = resolvedAllocator(model);
-  if (allocator !== undefined) input.allocator = allocator;
   return input;
 }

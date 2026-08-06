@@ -19,7 +19,7 @@ export const KEYWORDS = new Map<string, Token["type"]>([
   ["false", "False"],
   ["import", "Import"],
   ["export", "Export"],
-  ["null", "Null"],
+  ["defer", "Defer"],
   ["as", "As"],
   ["void", "Void"],
 ]);

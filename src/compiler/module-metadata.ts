@@ -10,6 +10,7 @@ import { PostfixExpression } from "../parser/ast/expressions/PostfixExpression";
 import { PrefixExpression } from "../parser/ast/expressions/PrefixExpression";
 import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteralExpression";
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -275,6 +276,10 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
       if (stmt.elseBlock) walkBlock(stmt.elseBlock, scope);
       return;
     }
+    if (stmt instanceof DeferStatement) {
+      walkExpr(stmt.call, scope);
+      return;
+    }
     if (stmt instanceof WhileStatement) {
       walkExpr(stmt.condExpr, scope);
       walkBlock(stmt.loopBody, scope);
@@ -316,15 +321,5 @@ export function collectFnReferences(ast: ASTProgram, mod: ModuleMeta): void {
   const topScope = new Set<string>();
   for (const stmt of ast.statements) {
     walkStmt(stmt, topScope);
-  }
-
-  if (mod.needsFnrefCreation && !mod.imports.alloc) {
-    mod.imports.alloc = {
-      module: "memory",
-      name: "malloc",
-      resolved: true,
-      synthesized: true,
-      info: { kind: "func", signature: "i_i" },
-    };
   }
 }

@@ -207,7 +207,7 @@ describe("Merged program model", () => {
     const first = model.startupInitializers[0]?.initializer;
     assert.equal(first?.kind, "call");
     if (first?.kind !== "call") return;
-    assert(first.name.endsWith("$$heap_init"));
+    assert(first.name.endsWith("$$__heap_init"));
     assert.deepEqual(first.args, [{ type: "i32", value: 0 }]);
     assert.equal(model.startupInitializers[1]?.owner, "main$$answer");
   });
@@ -260,7 +260,7 @@ describe("Merged program model", () => {
     assert.deepEqual(root.edges.fnRefs, ["main$$target"]);
     assert.deepEqual(root.edges.globalReads, ["main$$total", "main$$items"]);
     assert.deepEqual(root.edges.globalWrites, ["main$$total"]);
-    assert.deepEqual(root.edges.runtimeHelpers, ["__make_fnref", "__elem_addr"]);
+    assert.deepEqual(root.edges.runtimeHelpers, ["__elem_addr"]);
 
     const leaf = model.declarations.get("main$$leaf")!;
     assert.deepEqual(leaf.edges, {
@@ -312,13 +312,12 @@ describe("Merged program model", () => {
     });
 
     assert(model.reachable.functions.has("main$$target"));
-    assert(model.reachable.runtimeHelpers.has("__make_fnref"));
+    // T62: a named fn-ref is a static record, so it reaches neither the
+    // creation helper nor — through it — the allocator.
+    assert(!model.reachable.runtimeHelpers.has("__make_fnref"));
     assert(
-      [...model.reachable.functions].some((name) => name.endsWith("$$malloc")),
-      JSON.stringify({
-        functions: [...model.reachable.functions],
-        helper: model.runtimeHelpers.get("__make_fnref"),
-      }),
+      ![...model.reachable.functions].some((name) => name.endsWith("$$malloc")),
+      JSON.stringify({ functions: [...model.reachable.functions] }),
     );
     assert.deepEqual(
       model.fnTable.entries.map(({ functionName, slot }) => ({ functionName, slot })),

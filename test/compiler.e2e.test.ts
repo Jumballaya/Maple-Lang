@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ function instantiate(bytes: Uint8Array): {
 
 async function compileEntry(entry: string): Promise<{
   wat: string;
+  bytes: Uint8Array;
   instance: WebAssembly.Instance;
   module: WebAssembly.Module;
 }> {
@@ -38,7 +40,7 @@ async function compileEntry(entry: string): Promise<{
       emitWat: watPath,
     });
     const [wat, bytes] = await Promise.all([readFile(watPath, "utf8"), readFile(output)]);
-    return { wat, ...instantiate(bytes) };
+    return { wat, bytes, ...instantiate(bytes) };
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }
@@ -650,21 +652,41 @@ describe("Compiler: merged whole-program emission", () => {
     assert(pointer + 8 <= pages * 65_536);
   });
 
-  test("resets the heap when heap_init is called explicitly", async () => {
-    const { instance } = await compileProject({
+  // T62's central claim: `needsFnrefCreation` no longer forces malloc into
+  // the program, so a module using only named fn-refs links no allocator.
+  test("a program using only named fn-references links no allocator", async () => {
+    const { wat } = await compileProject({
       "main.maple": `
-        import malloc, heap_init from "memory"
-        export fn run(base: i32): i32 {
-          heap_init(base);
-          let first: i32 = malloc(8);
-          heap_init(base);
-          let second: i32 = malloc(8);
-          return first == second;
-        }
+        fn add(a: i32, b: i32): i32 { return a + b; }
+        export fn run(): i32 { let op: fn(i32,i32): i32 = add; return op(1, 2); }
       `,
     });
 
-    assert.equal(call(instance, "run", 131_072), 1);
+    assert.doesNotMatch(wat, /__make_fnref|\$malloc|\$free|__heap_init/);
+  });
+
+  test("the region guard costs nothing when free is unreachable", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        import malloc from "memory"
+        export fn run(): i32 { return malloc(8); }
+      `,
+    });
+
+    assert.doesNotMatch(wat, /is_live_heap/);
+  });
+
+  // T57 removed the capability this replaces: resetting the heap invalidates
+  // every live pointer, so `__heap_init` is compiler-internal and unimportable.
+  test("rejects importing the compiler-internal heap initializer", async () => {
+    const errors = await projectErrors({
+      "main.maple": `
+        import malloc, __heap_init from "memory"
+        export fn run(): i32 { return malloc(8); }
+      `,
+    });
+
+    assert(errors.some((error) => /compiler-internal/.test(error)));
   });
 
   test("runs deferred global initializers in dependency post-order", async () => {
@@ -927,7 +949,7 @@ describe("Compiler: merged-program acceptance", () => {
       `,
       "stdlib/memory.maple": `
         let calls: i32 = 0;
-        export fn heap_init(data_end: i32): void { calls = calls + 1; }
+        export fn __heap_init(data_end: i32): void { calls = calls + 1; }
         export fn spoof_calls(): i32 { return calls; }
       `,
     });
@@ -1030,5 +1052,143 @@ describe("Compiler: merged-program acceptance", () => {
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("defer: reachability", () => {
+  // L4: without a call edge from inside the defer, this `free` is tree-shaken,
+  // the allocator disappears, and the program links but leaks.
+  test("a free reachable only through a defer still links the allocator", async () => {
+    const { wat, instance } = await compileProject({
+      "main.maple": `
+        import malloc, free from "memory"
+        export fn run(): i32 {
+          let p: i32 = malloc(16);
+          defer free(p);
+          return p;
+        }
+      `,
+    });
+
+    assert.match(wat, /\(func \$[^\s()]*\$\$free(?:_\d+)?[\s(]/);
+    assert(Number(call(instance, "run")) > 0);
+  });
+
+  test("a defer inside a start-reached initializer runs at instantiation", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        let trace: i32 = 0;
+        fn note(): void { trace = trace + 5; }
+        fn build(): i32 { defer note(); return 7; }
+        let table: i32 = build();
+        export fn run(): i32 { return table * 100 + trace; }
+      `,
+    });
+
+    assert.equal(call(instance, "run"), 705);
+  });
+});
+
+// T68 — the zero-cost proof. Design S was chosen over the flag and
+// runtime-stack alternatives precisely because a program with no `defer` pays
+// NOTHING. This asserts that instead of claiming it.
+//
+// The golden was first generated against a build with the defer hooks stubbed
+// out, and matched the real build byte for byte on all 15 demos — that is the
+// measurement behind the claim. It was then regenerated once, by T71, which
+// legitimately moved 4 of the 15 (non-escaping local literals gained frame
+// storage, and their now-dead static headers stopped being emitted).
+// Regenerate ONLY with the reason in the commit message.
+describe("defer: zero cost when unused", () => {
+  test("the defer-free demo corpus compiles to unchanged bytes", async () => {
+    const goldenPath = path.join(repoRoot, "test", "fixtures", "defer-zero-cost.json");
+    const golden = JSON.parse(await readFile(goldenPath, "utf8")) as Record<string, string>;
+    const demoRoot = path.join(repoRoot, "demo");
+    const directories = (await readdir(demoRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+
+    assert.deepEqual(directories, Object.keys(golden).sort(), "demo corpus changed");
+    for (const directory of directories) {
+      const { bytes } = await compileEntry(path.join(demoRoot, directory, "main.maple"));
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      assert.equal(digest, golden[directory], `${directory} bytes changed`);
+    }
+  });
+});
+
+describe("allocator modules", () => {
+  test("two reachable allocator modules is a compile error", async () => {
+    await assert.rejects(
+      compileProject({
+        "main.maple": `
+          import malloc from "memory"
+          import free from "memory_debug"
+          export fn run(): i32 { let p: i32 = malloc(8); free(p); return p; }
+        `,
+      }),
+      /only one allocator module may be reachable/,
+    );
+  });
+
+  test("memory_debug wires startup like memory does", async () => {
+    const { instance } = await compileProject({
+      "main.maple": `
+        import malloc from "memory_debug"
+        let label: string = "static data pushes the heap base up";
+        export fn run(): i32 { return malloc(8); }
+      `,
+    });
+
+    assert(Number(call(instance, "run")) > 65_536);
+  });
+});
+
+// §47: every statement walker dispatches on `instanceof` and falls off the end
+// silently for a shape it does not know, so a new statement form goes missing
+// rather than failing a build. `defer` hit that twice during phase 5 (the
+// static-data planner, then the escape analysis). This makes the enumeration
+// executable: `while` reaches every walker, so any file that handles `while`
+// must handle `defer` too.
+describe("statement walkers", () => {
+  test("every walker that handles while also handles defer", async () => {
+    const srcRoot = path.join(repoRoot, "src");
+    const files: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) await walk(full);
+        else if (entry.name.endsWith(".ts")) files.push(full);
+      }
+    };
+    await walk(srcRoot);
+
+    const missing: string[] = [];
+    for (const file of files) {
+      const text = await readFile(file, "utf8");
+      if (!text.includes("instanceof WhileStatement")) continue;
+      if (text.includes("instanceof DeferStatement")) continue;
+      // flow.ts is the one deliberate exception: falling through to
+      // `return false` is already correct, since a defer never terminates.
+      if (path.basename(file) === "flow.ts") continue;
+      missing.push(path.relative(repoRoot, file));
+    }
+
+    assert.deepEqual(missing, [], `statement walkers missing DeferStatement: ${missing}`);
+  });
+});
+
+describe("memory_debug is opt-in", () => {
+  test("importing memory does not drag in memory_debug", async () => {
+    const { wat } = await compileProject({
+      "main.maple": `
+        import malloc, free from "memory"
+        export fn run(): i32 { let p: i32 = malloc(8); free(p); return 1; }
+      `,
+    });
+
+    assert.doesNotMatch(wat, /memory_debug/);
+    assert.doesNotMatch(wat, /heap_stats|heap_errors|\$poison/);
   });
 });

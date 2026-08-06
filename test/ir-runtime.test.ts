@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import { type FuncBuilder, IrBuilder } from "../src/ir/build";
 import { encodeWasm } from "../src/ir/encode-wasm";
 import type { IrModule, Stmt, StructLayout } from "../src/ir/ir";
-import { elemAddr, makeFnref, stringEq, structEqBatch, trampoline } from "../src/ir/runtime";
+import { elemAddr, stringEq, structEqBatch, trampoline } from "../src/ir/runtime";
 import { runExport } from "./helpers";
 
 function instantiate(module: IrModule, imports: WebAssembly.Imports = {}): WebAssembly.Instance {
@@ -321,33 +321,6 @@ describe("IR runtime: structEqBatch", () => {
     const ids = structEqBatch(builder, new Map([["FloatBox", layout]]));
     exportedBinaryWrapper(builder, ids.get("FloatBox")!);
     assert.equal(runExport(builder.finish(), "equal", [address, address]), 0);
-  });
-});
-
-describe("IR runtime: makeFnref", () => {
-  test("stores the slot and a zero environment in allocator memory", () => {
-    const builder = new IrBuilder();
-    builder.memory("owned", 2);
-    const heap = builder.global("heap", "i32", true, 65_536);
-    const allocSig = builder.signature(["i32"], ["i32"]);
-    const alloc = builder.func("alloc", allocSig);
-    const pointer = alloc.local("i32");
-    alloc.localSet(pointer, alloc.globalGet(heap));
-    alloc.globalSet(
-      heap,
-      alloc.binop("add", "i32", false, alloc.globalGet(heap), alloc.localGet(0)),
-    );
-    alloc.ret([alloc.localGet(pointer)]);
-
-    const helper = makeFnref(builder, alloc.id);
-    const make = builder.func("make", allocSig, { export: "make" });
-    make.ret([make.call(helper, [make.localGet(0)])]);
-    const instance = instantiate(builder.finish());
-    const result = (instance.exports.make as (slot: number) => number)(17);
-    const memory = instance.exports.memory as WebAssembly.Memory;
-    const view = new DataView(memory.buffer);
-    assert.equal(view.getUint32(result, true), 17);
-    assert.equal(view.getUint32(result + 4, true), 0);
   });
 });
 

@@ -617,7 +617,8 @@ describe("Emission: Member Access", () => {
   test("member access reads from a function-call base", () => {
     const { mod } = checkedCompile(`
       struct P { x: i32 }
-      fn make(): P { let p: P = { x = 42 }; return p; }
+      let shared: P = { x = 42 };
+      fn make(): P { return shared; }
       export fn run(): i32 { return make().x; }
     `);
     assert.equal(runExport(mod, "run"), 42);
@@ -1028,19 +1029,19 @@ describe("Compiler: stdlib source resolution", () => {
     assert.equal(resolved.kind, "maple");
     assert.equal(path.basename(resolved.path), "memory.maple");
     assert.deepEqual(Object.keys(resolved.data.exports).sort(), [
+      "__heap_init",
       "free",
-      "heap_init",
       "malloc",
       "realloc",
     ]);
-    assert.equal(resolved.data.exports.heap_init?.kind, "func");
-    assert.equal(resolved.data.exports.heap_init?.signature, "i_v");
+    assert.equal(resolved.data.exports.__heap_init?.kind, "func");
+    assert.equal(resolved.data.exports.__heap_init?.signature, "i_v");
     assert.equal(resolved.data.exports.malloc?.kind, "func");
     assert.equal(resolved.data.exports.malloc?.signature, "i_i");
     assert.equal(resolved.data.exports.free?.kind, "func");
     assert.equal(resolved.data.exports.free?.signature, "i_v");
     assert.equal(resolved.data.exports.realloc?.kind, "func");
-    assert.equal(resolved.data.exports.realloc?.signature, "iii_i");
+    assert.equal(resolved.data.exports.realloc?.signature, "ii_i");
   });
 
   test("unknown bare imports keep the existing file error", () => {
@@ -2329,7 +2330,8 @@ describe("host surface (WAT-structural)", () => {
       wat,
       /\(\s*type\s+\$[^\s()]+\s+\(\s*func\s+(?:(?:\(\s*param\s+i32\s*\)\s*){3}|\(\s*param\s+i32\s+i32\s+i32\s*\)\s*)\(\s*result\s+i32\s*\)\s*\)\s*\)/,
     );
-    assert.match(wat, /\(\s*import\s+"memory"\s+"malloc"\s+\(\s*func\b/);
+    // T62: the record is static data, so no allocator import comes with it.
+    assert.doesNotMatch(wat, /\(\s*import\s+"memory"\s+"malloc"\s+\(\s*func\b/);
     assert.doesNotMatch(wat, /\(\s*export\s+"[^"]*"\s+\(\s*func\s+\$__indirect_/);
     assert.doesNotMatch(wat, /\b__fn_table_inited\b/);
     assert.doesNotMatch(wat, /\btable\.set\b/);

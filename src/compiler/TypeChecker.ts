@@ -19,6 +19,7 @@ import { StructLiteralExpression } from "../parser/ast/expressions/StructLiteral
 import { BlockStatement } from "../parser/ast/statements/BlockStatement";
 import { BreakStatement } from "../parser/ast/statements/BreakStatement";
 import { ContinueStatement } from "../parser/ast/statements/ContinueStatement";
+import { DeferStatement } from "../parser/ast/statements/DeferStatement";
 import { ExpressionStatement } from "../parser/ast/statements/ExpressionStatement";
 import { ForStatement } from "../parser/ast/statements/ForStatement";
 import { FunctionStatement } from "../parser/ast/statements/FunctionStatement";
@@ -36,6 +37,7 @@ import type {
   ResolvedDecl,
 } from "../parser/ast/types/ast.type";
 import { MapleError } from "./errors";
+import { analyzeEscapes, type EscapeViolation } from "./escape";
 import { stmtDefinitelyReturns } from "./flow";
 import { getIntrinsic } from "./intrinsics";
 import type { ModuleMeta, StructData } from "./metadata";
@@ -82,6 +84,13 @@ function resolveTypeIdentity(type: string, meta: ModuleMeta): string {
     );
   }
   return meta.imports[type]?.typeIdentity ?? type;
+}
+
+// `string` gets a SYNTHESIZED struct entry so `s.len` resolves, so "has a
+// struct definition" is not the same question as "is a struct type".
+function isStructType(type: string, meta: ModuleMeta): boolean {
+  if (type === "string" || type.endsWith("[]") || isFnType(type)) return false;
+  return structDefinition(type, meta) !== undefined;
 }
 
 function structDefinition(type: string, meta: ModuleMeta): StructData | undefined {
@@ -628,6 +637,24 @@ function stampExpression(
   }
 }
 
+// The bounds check reads these fields, so a program that writes them defeats
+// it. Keyed on the PARENT's type: a user struct with its own `len` is fine.
+function rejectHeaderWrite(
+  target: ASTExpression | null,
+  token: ASTExpression["token"],
+  scope: Scope,
+  meta: ModuleMeta,
+  errors: MapleError[],
+): void {
+  if (!(target instanceof MemberExpression || target instanceof PointerMemberExpression)) return;
+  if (target.member !== "len" && target.member !== "data") return;
+  const parentType = resolveExprType(target.parent, scope, meta, errors);
+  if (parentType === null) return;
+  if (parentType !== "string" && !parentType.endsWith("[]")) return;
+  const name = target.parent instanceof Identifier ? target.parent.tokenLiteral() : parentType;
+  errors.push(new MapleError(`cannot assign to '${name}.${target.member}'`, token.line, token.col));
+}
+
 function isLvalue(expr: ASTExpression): boolean {
   return (
     expr instanceof Identifier ||
@@ -840,6 +867,14 @@ function walkExpression(
           const argument = expr.args[index + resolution.argumentOffset]!;
           const argumentType = resolveExprType(argument, scope, meta, errors);
           const parameterType = resolution.params[index]!;
+          if (
+            index === 0 &&
+            argumentType !== null &&
+            isAllocatorPointerArgument(expr.func, meta) &&
+            isStructType(argumentType, meta)
+          ) {
+            continue;
+          }
           if (argumentType !== null && !typesCompatible(parameterType, argumentType, meta)) {
             errors.push(
               new MapleError(
@@ -906,6 +941,7 @@ function walkExpression(
         errors.push(new MapleError("invalid assignment target", expr.token.line, expr.token.col));
       }
       checkMutationBinding(expr.left, expr.token, scope, meta, errors);
+      rejectHeaderWrite(expr.left, expr.token, scope, meta, errors);
       walkExpression(expr.left, scope, meta, errors);
       const targetType = resolveExprType(expr.left, scope, meta, errors);
       const assignedValue = expr.value;
@@ -1055,6 +1091,7 @@ function walkExpression(
         );
       }
       checkMutationBinding(expr.left, expr.token, scope, meta, errors);
+      rejectHeaderWrite(expr.left, expr.token, scope, meta, errors);
       const operandType = resolveExprType(expr.left, scope, meta, errors);
       requireOperatorDomain(expr.operator, [operandType], expr.token, errors);
       return;
@@ -1079,10 +1116,23 @@ function walkExpression(
         (sourceType === "string" || sourceType.endsWith("[]") || isFnType(sourceType));
       const targetAggregate =
         targetType === "string" || targetType.endsWith("[]") || isFnType(targetType);
-      if (
+      // Struct casts are ASYMMETRIC: `i32 as Struct` is the allocation idiom
+      // and stays; every other direction reinterprets memory (decision O8).
+      if (sourceType !== null && isStructType(sourceType, meta)) {
+        errors.push(new MapleError("cannot cast a struct value", expr.token.line, expr.token.col));
+      } else if (isStructType(targetType, meta) && sourceType !== null && sourceType !== "i32") {
+        errors.push(
+          new MapleError(
+            `cannot cast '${sourceType}' to a struct type`,
+            expr.token.line,
+            expr.token.col,
+          ),
+        );
+      } else if (
         sourceType !== null &&
         ((sourceAggregate && NUMERIC_TYPES.has(targetType)) ||
-          (NUMERIC_TYPES.has(sourceType) && targetAggregate))
+          (NUMERIC_TYPES.has(sourceType) && targetAggregate) ||
+          (sourceAggregate && targetAggregate && sourceType !== targetType))
       ) {
         errors.push(
           new MapleError(
@@ -1154,6 +1204,18 @@ function checkLetInitializer(
 ): void {
   checkKnownType(stmt.typeAnnotation, stmt.token, meta, errors);
   if (stmt.expression === null) return;
+  // `fn(A,B): R[]` reads as both "returns R[]" and "array of fn returning R",
+  // so annotation and literal agreed and lowering ICEd on the element.
+  if (stmt.expression instanceof ArrayLiteralExpression && isFnType(stmt.typeAnnotation)) {
+    errors.push(
+      new MapleError(
+        "array of function references is not supported",
+        stmt.token.line,
+        stmt.token.col,
+      ),
+    );
+    return;
+  }
   walkExpression(stmt.expression, scope, meta, errors, stmt.typeAnnotation, "value", true);
   const actualType = resolveExprType(stmt.expression, scope, meta, errors);
   if (actualType !== null && !typesCompatible(stmt.typeAnnotation, actualType, meta)) {
@@ -1370,6 +1432,11 @@ function walkStatement(
     return;
   }
 
+  if (stmt instanceof DeferStatement) {
+    walkExpression(stmt.call, scope, meta, errors, undefined, "effect");
+    return;
+  }
+
   if (stmt instanceof BreakStatement) {
     if (ctx.loopDepth === 0 && ctx.switchDepth === 0) {
       const t = stmt.token;
@@ -1502,6 +1569,54 @@ function walkStatement(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+const ALLOCATOR_POINTER_FUNCTIONS = new Set(["free", "realloc"]);
+
+// One compiler-known rule over two imported names: Maple has no overloads, and
+// without this decision O8 would leave heap structs unfreeable.
+function isAllocatorPointerArgument(callee: string, meta: ModuleMeta): boolean {
+  if (!ALLOCATOR_POINTER_FUNCTIONS.has(callee)) return false;
+  const imported = meta.imports[callee];
+  return imported?.module === "memory" || imported?.module === "memory_debug";
+}
+
+const ESCAPE_MESSAGES: Record<EscapeViolation["site"], string> = {
+  return: "cannot return a frame-backed value",
+  global: "cannot store a frame-backed value in a global",
+  store: "cannot store a frame-backed value",
+  "free-frame": "cannot free a frame-backed value",
+  "free-static": "cannot free a static value",
+};
+
+// The frame is released before a return hands the pointer out, so an escaping
+// struct literal is a live miscompile (B25). Heap structs are unaffected.
+function reportEscapes(
+  body: BlockStatement,
+  globals: Scope,
+  staticGlobals: Set<string>,
+  meta: ModuleMeta,
+  errors: MapleError[],
+): void {
+  const analysis = analyzeEscapes(
+    body,
+    (name) => globals.get(name)?.kind === "global",
+    (expr) => {
+      const type = expr.resolvedType;
+      if (type === undefined) return false;
+      return type === "string" || type.endsWith("[]") || isStructType(type, meta);
+    },
+    (name) => staticGlobals.has(name),
+    (expr) =>
+      expr instanceof CallExpression && isAllocatorPointerArgument(expr.func, meta)
+        ? expr.args[0]
+        : undefined,
+  );
+  for (const violation of analysis.violations) {
+    errors.push(
+      new MapleError(ESCAPE_MESSAGES[violation.site], violation.token.line, violation.token.col),
+    );
+  }
+}
+
 export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
   const errors: MapleError[] = [];
 
@@ -1513,6 +1628,16 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
     }
   }
   for (const stmt of program.statements) {
+    if (stmt instanceof DeferStatement) {
+      errors.push(
+        new MapleError(
+          "defer is only allowed inside a function body",
+          stmt.token.line,
+          stmt.token.col,
+        ),
+      );
+      continue;
+    }
     if (stmt instanceof LetStatement) {
       if (stmt.pattern instanceof TuplePattern) {
         errors.push(
@@ -1554,6 +1679,21 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
     }
   }
 
+  // Module-scope literal bindings have static storage duration: freeing one
+  // is never valid, however many names it has picked up (D4).
+  const staticGlobals = new Set<string>();
+  for (const stmt of program.statements) {
+    if (!(stmt instanceof LetStatement) || stmt.pattern instanceof TuplePattern) continue;
+    const initializer = stmt.expression;
+    if (
+      initializer instanceof StructLiteralExpression ||
+      initializer instanceof ArrayLiteralExpression ||
+      initializer instanceof StringLiteralExpression
+    ) {
+      staticGlobals.add(stmt.identifier.tokenLiteral());
+    }
+  }
+
   // Check each function body
   for (const stmt of program.statements) {
     if (!(stmt instanceof FunctionStatement)) continue;
@@ -1585,6 +1725,7 @@ export function typeCheck(program: ASTProgram, meta: ModuleMeta): MapleError[] {
 
     const fnReturnTypes = stmt.fnExpr.returnTypes;
     walkBlock(stmt.fnExpr.body, scope, meta, fnReturnTypes, errors);
+    reportEscapes(stmt.fnExpr.body, globals, staticGlobals, meta, errors);
     if (fnReturnTypes.length > 0 && !stmtDefinitelyReturns(stmt.fnExpr.body)) {
       const returnType =
         fnReturnTypes.length === 1 ? fnReturnTypes[0]! : `(${fnReturnTypes.join(", ")})`;

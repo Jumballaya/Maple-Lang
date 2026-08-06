@@ -238,7 +238,6 @@ export async function compiler(
   const result = lowerModule(loweringInput.ast, loweringInput.meta, {
     importMemory: options.importMemory,
     exportMap: loweringInput.exportMap,
-    ...(loweringInput.allocator === undefined ? {} : { allocator: loweringInput.allocator }),
   });
   if (result.pendingInits.length > 0) {
     throw new Error(`lowering left ${result.pendingInits.length} pending initializer(s)`);

@@ -107,6 +107,20 @@ export function structEqBatch(
 
   for (const [identity, layout] of layouts) {
     const fn = builders.get(identity)!;
+    // Address 0 does not trap (it is in the shadow-stack page), so without
+    // this a self-referential struct recurses forever even with `0 as T` ends.
+    fn.if(
+      fn.binop(
+        "or",
+        "i32",
+        false,
+        fn.unop("eqz", "i32", fn.localGet(0)),
+        fn.unop("eqz", "i32", fn.localGet(1)),
+      ),
+      (body) => {
+        body.ret([body.binop("eq", "i32", false, body.localGet(0), body.localGet(1))]);
+      },
+    );
     for (const member of layout.members) {
       const left = memberLoad(fn, member, fn.localGet(0));
       const right = memberLoad(fn, member, fn.localGet(1));
@@ -130,18 +144,6 @@ export function structEqBatch(
     fn.ret([fn.constant("i32", 1)]);
   }
   return ids;
-}
-
-export function makeFnref(builder: IrBuilder, allocFuncId: FuncId): FuncId {
-  const sig = builder.signature(["i32"], ["i32"]);
-  const fn = builder.func("__make_fnref", sig);
-  fn.nameLocal(0, "slot");
-  const pointer = fn.local("i32", "pointer");
-  fn.localSet(pointer, fn.call(allocFuncId, [fn.constant("i32", 8)]));
-  fn.store("i32", fn.localGet(pointer), fn.localGet(0));
-  fn.store("i32", fn.localGet(pointer), fn.constant("i32", 0), 4);
-  fn.ret([fn.localGet(pointer)]);
-  return fn.id;
 }
 
 export function trampoline(

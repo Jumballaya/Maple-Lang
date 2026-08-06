@@ -60,6 +60,20 @@ function callExport(
   return (fn as (...fnArgs: (number | bigint)[]) => unknown)(...args);
 }
 
+/** A live instance of a merged program, for tests that call it more than once. */
+export async function mergedInstance(source: string): Promise<WebAssembly.Instance> {
+  const dir = mkdtempSync(join(tmpdir(), "maple-merged-instance-"));
+  const entry = join(dir, "main.maple");
+  const output = join(dir, "out.wasm");
+  writeFileSync(entry, source);
+  try {
+    await compiler(entry, "main", dir, output);
+    return new WebAssembly.Instance(new WebAssembly.Module(readFileSync(output)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export async function runMergedExport(
   source: string,
   fnName: string,

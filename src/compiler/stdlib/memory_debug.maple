@@ -1,6 +1,15 @@
+// Drop-in instrumented allocator: same public surface as "memory", swapped by
+// import path. For a CORRECT program the two are semantically identical. For an
+// incorrect one they diverge on purpose — "memory" traps (decision O7) while
+// this module records the violation and continues, so a test can observe how
+// many a run produced instead of losing the instance at the first one.
+
 let HEAP_BASE: i32 = 0;
 let heap_end: i32 = 0;
 let free_head: i32 = 0;
+let live_count: i32 = 0;
+let live_bytes: i32 = 0;
+let error_count: i32 = 0;
 
 fn align8(x: i32): i32 {
   return (x + 7) & -8;
@@ -29,8 +38,6 @@ fn hdr_is_alloc(hdr: i32): i32 {
   return 0;
 }
 
-// "MAPL" in the `next` field, which is dead space on a live chunk. Without it
-// an aligned interior pointer (`p + 8`) is indistinguishable from a real one.
 fn hdr_write(hdr: i32, size: i32, alloc: i32): void {
   __store_i32(hdr + 4, (size & -8) | (alloc & 1));
   if ((alloc & 1) != 0) {
@@ -38,7 +45,6 @@ fn hdr_write(hdr: i32, size: i32, alloc: i32): void {
   }
 }
 
-// Classifier only: never traps, so `memory_debug` can report instead of dying.
 fn is_live_heap(ptr: i32): i32 {
   if (ptr == 0) {
     return 0;
@@ -61,8 +67,15 @@ fn is_live_heap(ptr: i32): i32 {
   return hdr_is_alloc(ptr - 8);
 }
 
-// Page arithmetic only: `pages << 16` overflows i32 at 32768 pages and is
-// exactly 0 at 65536, which would report spare capacity we do not own.
+// Make a use-after-free READ obviously wrong rather than plausibly stale.
+fn poison(from: i32, to: i32): void {
+  let cursor: i32 = from;
+  while ((cursor as u32) < (to as u32)) {
+    __store_i32(cursor, -559038737);
+    cursor = cursor + 4;
+  }
+}
+
 fn ensure_capacity(need_end: i32): i32 {
   let cur_pages: i32 = __memory_size();
   let need_pages: i32 = ((need_end as u32) >> 16) as i32;
@@ -91,12 +104,13 @@ fn split_if_big(hdr: i32, want: i32): i32 {
   return 0;
 }
 
-// Compiler-internal: called only from __start. The `__` prefix is what keeps
-// it off the import surface — resetting the heap invalidates every live pointer.
 export fn __heap_init(data_end: i32): void {
   HEAP_BASE = align8(data_end);
   heap_end = HEAP_BASE;
   free_head = 0;
+  live_count = 0;
+  live_bytes = 0;
+  error_count = 0;
 }
 
 fn freelist_push(hdr: i32): void {
@@ -122,13 +136,9 @@ fn freelist_unlink(hdr: i32): void {
 }
 
 export fn malloc(n_bytes: i32): i32 {
-  // A guessed heap base can sit on top of live static data, so an unwired
-  // build traps rather than handing out addresses it does not own.
   if (HEAP_BASE == 0) {
     __trap();
   }
-  // One unsigned bound rejects negatives (huge as u32) and every size whose
-  // align8(n) + 8 would overflow i32.
   if ((n_bytes as u32) > (2147483624 as u32)) {
     return 0;
   }
@@ -137,7 +147,6 @@ export fn malloc(n_bytes: i32): i32 {
     n = 1;
   }
   let needed: i32 = align8(n) + 8;
-  let prev: i32 = 0;
   let cur: i32 = free_head;
   let size: i32 = 0;
   while (cur != 0) {
@@ -145,12 +154,11 @@ export fn malloc(n_bytes: i32): i32 {
     if ((size as u32) >= (needed as u32)) {
       split_if_big(cur, needed);
       freelist_unlink(cur);
-      // Read the size back: a declined split leaves the chunk larger than
-      // `needed`, and recording `needed` would orphan the difference.
       hdr_write(cur, hdr_size(cur), 1);
+      live_count = live_count + 1;
+      live_bytes = live_bytes + (hdr_size(cur) - 8);
       return cur + 8;
     }
-    prev = cur;
     cur = hdr_next(cur);
   }
 
@@ -164,6 +172,8 @@ export fn malloc(n_bytes: i32): i32 {
   }
   heap_end = need_end;
   hdr_write(hdr, needed, 1);
+  live_count = live_count + 1;
+  live_bytes = live_bytes + (needed - 8);
   return hdr + 8;
 }
 
@@ -171,11 +181,15 @@ export fn free(ptr: i32): void {
   if (ptr == 0) {
     return;
   }
+  // The divergence from "memory": record and return instead of trapping.
   if (is_live_heap(ptr) == 0) {
-    __trap();
+    error_count = error_count + 1;
+    return;
   }
   let hdr: i32 = ptr - 8;
   let size: i32 = hdr_size(hdr);
+  live_count = live_count - 1;
+  live_bytes = live_bytes - (size - 8);
   let next: i32 = hdr + size;
   if ((next as u32) < (heap_end as u32)) {
     if (hdr_is_alloc(next) == 0) {
@@ -183,6 +197,8 @@ export fn free(ptr: i32): void {
       size = size + hdr_size(next);
     }
   }
+  // Poison before the header and free-list writes, which reuse these words.
+  poison(hdr + 8, hdr + size);
   hdr_write(hdr, size, 0);
   freelist_push(hdr);
   if (hdr + size == heap_end) {
@@ -199,7 +215,6 @@ export fn realloc(old: i32, new_size: i32): i32 {
   if (old == 0) {
     return next;
   }
-  // The header owns the true size; a caller-supplied one copied past the block.
   let copy_size: i32 = hdr_size(old - 8) - 8;
   if ((new_size as u32) < (copy_size as u32)) {
     copy_size = new_size;
@@ -207,4 +222,13 @@ export fn realloc(old: i32, new_size: i32): i32 {
   __memory_copy(next, old, copy_size);
   free(old);
   return next;
+}
+
+// Payload bytes only: header overhead is `live_count * 8` if anyone wants it.
+export fn heap_stats(): (i32, i32) {
+  return live_count, live_bytes;
+}
+
+export fn heap_errors(): i32 {
+  return error_count;
 }

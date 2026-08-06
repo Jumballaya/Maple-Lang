@@ -219,7 +219,10 @@ describe("IR memory lowering: arrays", () => {
     assert.equal(runExport(module, "run", [1]), 1);
   });
 
-  test("preserves shared local literal buffers across calls", () => {
+  // T71 / decision O10: a non-escaping local literal is per-call now, so the
+  // second call sees the initializer again instead of the first call's writes.
+  // This test previously pinned the shared-buffer quirk (12).
+  test("gives a non-escaping local literal fresh storage per call", () => {
     const source = `
       fn touch(): i32 {
         let values: i32[] = [1];
@@ -228,6 +231,19 @@ describe("IR memory lowering: arrays", () => {
         return old;
       }
       export fn run(): i32 { return touch() * 10 + touch(); }
+    `;
+    assert.equal(differential(source, "run"), 11);
+  });
+
+  // An ESCAPING literal keeps static storage, which is what makes returning
+  // one legal at all — the gap that blocked plain option A.
+  test("an escaping local literal keeps static storage and is still returnable", () => {
+    const source = `
+      fn build(): i32[] {
+        let values: i32[] = [1, 2];
+        return values;
+      }
+      export fn run(): i32 { let v: i32[] = build(); return v[0] * 10 + v[1]; }
     `;
     assert.equal(differential(source, "run"), 12);
   });

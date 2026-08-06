@@ -16,6 +16,7 @@ export const INTRINSICS = {
     result: "void",
     instruction: "memory.copy",
   },
+  __trap: { params: [], result: "void", instruction: "unreachable" },
   __sqrt_f32: { params: ["f32"], result: "f32", instruction: "f32.sqrt" },
   __abs_f32: { params: ["f32"], result: "f32", instruction: "f32.abs" },
   __floor_f32: { params: ["f32"], result: "f32", instruction: "f32.floor" },

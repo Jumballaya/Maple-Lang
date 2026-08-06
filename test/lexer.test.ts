@@ -333,7 +333,7 @@ describe("Lexer Tokens", () => {
   });
   test("Other", () => {
     const tests: Array<[string, string]> = [
-      ["null", "Null"],
+      ["defer", "Defer"],
       ["", "EOF"],
     ];
     for (const [source, expected] of tests) {
